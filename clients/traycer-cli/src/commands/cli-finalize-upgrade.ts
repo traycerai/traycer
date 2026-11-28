@@ -1,13 +1,13 @@
 import { readCliManifest } from "../manifest/cli-manifest";
 import {
   incumbentMayBeAlive,
+  readWindowsRestartSlot,
   sameIncarnation,
   windowsRestartIncumbentSchema,
   type WindowsRestartIncumbent,
 } from "../host/windows-restart-incumbent";
 import {
   defaultSupervisorRelaunchWaitDeps,
-  findLiveServiceSupervisor,
   waitForSupervisorRelaunch,
 } from "../host/service-supervisor-relaunch";
 import {
@@ -19,7 +19,7 @@ import {
   formatCredentialProvisionNote,
   maybeProvisionCredential,
 } from "../host/install-auth";
-import { link, mkdir, open, rm, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, open, rm, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
@@ -45,24 +45,27 @@ import {
 import { startHostServiceWithAttempt } from "../host/update-mutation";
 import type { UpdateMutationCapability } from "@traycer-clients/shared/host-update";
 import type { WithCliUpdateContenderOptions } from "../host/update-contender";
-import type {
-  PostFinalizeMarker,
-  WindowsServiceObservation,
+import {
+  claimWindowsRestartSidecar,
+  type PostFinalizeMarker,
+  type WindowsServiceObservation,
 } from "../upgrade/finalize-helper";
 import { publicWindowsCliDiagnostic } from "../upgrade/windows-cli-publication";
 import { getPublishedProcessIdentityVerdict } from "../store/process-identity";
 import {
   WINDOWS_RESTORE_RECEIPT_WRITE_FAILED,
   WINDOWS_RESTORE_RECEIPT_WRITE_WARNING,
-  WINDOWS_RESTORE_STAGE_PREFIX,
   WINDOWS_RESTORE_UNCONFIRMED,
 } from "../service/windows-task-restoration";
 
 interface FinalizeStartObservation {
   started: boolean;
+  recoveryClaimed: boolean;
+  incumbentNotProvenGone: boolean;
   readonly confirmWindowsStart: boolean;
+  readonly abandonedPath: string | null;
+  readonly incumbentDeadlineMs: number | null;
   readonly admissionDeadlineMs: number | null;
-  readonly reportStage: ((stage: "start" | "receipt") => void) | null;
 }
 
 interface DetachedFinalizeOptions {
@@ -109,17 +112,15 @@ export function buildCliFinalizeUpgradeCommand(
       process.platform === "win32" && detached.expectedStagedPath !== undefined;
     const start: FinalizeStartObservation = {
       started: false,
+      recoveryClaimed: false,
+      incumbentNotProvenGone: false,
+      incumbentDeadlineMs:
+        workerMode?.kind === "start" ? workerMode.incumbentDeadlineMs : null,
       confirmWindowsStart: windowsHandoff,
+      abandonedPath:
+        workerMode?.kind === "start" ? workerMode.abandonedPath : null,
       admissionDeadlineMs:
         workerMode?.kind === "start" ? workerMode.admissionDeadlineMs : null,
-      reportStage:
-        detached.windowsWorkerReceiptId === undefined
-          ? null
-          : (stage) => {
-              process.stdout.write(
-                `${WINDOWS_RESTORE_STAGE_PREFIX} ${stage}\n`,
-              );
-            },
     };
     if (workerMode?.kind === "swap") {
       const result = await withCliUpdateContender(contenderOptions, () =>
@@ -175,7 +176,6 @@ export function buildCliFinalizeUpgradeCommand(
             environment,
             ...detached,
             receiptPath,
-            reportReceipt: () => start.reportStage?.("receipt"),
           },
           capability,
           contenderOptions,
@@ -209,7 +209,6 @@ export function buildCliFinalizeUpgradeCommand(
       if (start.started) {
         serviceRestore = { status: "started" };
       } else {
-        start.reportStage?.("receipt");
         serviceRestore = await recordWindowsRestoreFailure(
           environment,
           receiptPath,
@@ -315,12 +314,13 @@ function windowsReceiptPath(
 }
 
 type WindowsWorkerAdmission =
-  | { readonly kind: "restore" | "swap" }
+  | { readonly kind: "swap" }
   | {
       readonly kind: "start";
       readonly admissionDeadlineMs: number;
       readonly incumbent: WindowsRestartIncumbent;
       readonly incumbentDeadlineMs: number;
+      readonly abandonedPath: string;
       readonly stop: "not-issued" | "effect-unknown" | "stopped";
     };
 
@@ -335,9 +335,9 @@ async function readWindowsWorkerAdmission(
   const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
   try {
     for await (const line of input) {
-      if (line === "restore" || line === "swap") return { kind: line };
+      if (line === "swap") return { kind: line };
       const start =
-        /^start ([0-9]+) ([0-9]+) (stopped|not-issued|effect-unknown) ([A-Za-z0-9_-]+)$/u.exec(
+        /^start ([0-9]+) ([0-9]+) (stopped|not-issued|effect-unknown) ([A-Za-z0-9_-]+) ([A-Za-z0-9_-]+)$/u.exec(
           line,
         );
       if (start === null) return null;
@@ -360,6 +360,7 @@ async function readWindowsWorkerAdmission(
         kind: "start",
         admissionDeadlineMs,
         incumbentDeadlineMs,
+        abandonedPath: Buffer.from(start[5], "base64url").toString("utf8"),
         stop,
         incumbent,
       };
@@ -476,7 +477,6 @@ async function runFinalizeUpgradeSwapWithAttempt(
   opts: {
     readonly environment: Environment;
     readonly receiptPath: string;
-    readonly reportReceipt: () => void;
   } & DetachedFinalizeOptions,
   capability: UpdateMutationCapability,
   contenderOptions: WithCliUpdateContenderOptions,
@@ -501,12 +501,40 @@ async function startHostWithAttempt(
   const label = serviceLabelFor(environment);
   if (start.admissionDeadlineMs !== null && recoveryAdmissionWait(start) === 0)
     throw new Error(WINDOWS_RESTORE_UNCONFIRMED);
-  start.reportStage?.("start");
+  const controller = createServiceController();
+  const abandonedPath = start.abandonedPath;
   const outcome = await startHostServiceWithAttempt(
     capability,
     contenderOptions,
     "maintenance",
-    createServiceController(),
+    abandonedPath === null
+      ? controller
+      : {
+          ...controller,
+          beforeWindowsRecoveryRun: async () => {
+            const incumbentDeadline = start.incumbentDeadlineMs ?? 0;
+            const fresh = await waitForSupervisorRelaunch(environment, {
+              ...defaultSupervisorRelaunchWaitDeps,
+              now: windowsRecoveryClock,
+              waitMs: Math.max(0, incumbentDeadline - windowsRecoveryClock()),
+              observe: async () => {
+                const slot = await readWindowsRestartSlot(environment);
+                if (slot === "runtime-current") return "host-ready";
+                return slot === "empty" ? "supervisor-gone" : null;
+              },
+            });
+            start.incumbentNotProvenGone = fresh.kind === "timed-out";
+            if (
+              fresh.kind !== "supervisor-gone" ||
+              recoveryAdmissionWait(start) === 0
+            )
+              throw new Error(WINDOWS_RESTORE_UNCONFIRMED);
+            start.recoveryClaimed =
+              await claimWindowsRestartSidecar(abandonedPath);
+            if (!start.recoveryClaimed)
+              throw new Error(WINDOWS_RESTORE_UNCONFIRMED);
+          },
+        },
     label,
     start.confirmWindowsStart ? () => undefined : undefined,
   );
@@ -517,7 +545,10 @@ async function observeWindowsReadyRuntime(
   environment: Environment,
   incumbent: WindowsRestartIncumbent["runtime"],
   remainingMs: number,
-): Promise<{ status: "ready"; runtimeVersion: string } | null> {
+): Promise<Extract<
+  WindowsServiceObservation,
+  { status: "endpoint-ready" }
+> | null> {
   const before = await readHostPidMetadata(environment);
   if (
     before === null ||
@@ -541,8 +572,26 @@ async function observeWindowsReadyRuntime(
       after.pid,
       after.processStartIdentity,
     )) === "current"
-    ? { status: "ready", runtimeVersion: after.version }
+    ? {
+        status: "endpoint-ready",
+        metadataRuntimeVersion: after.version,
+        pidRecordCurrentBeforeAndAfter: true,
+      }
     : null;
+}
+
+function windowsRecoveryClock(): number {
+  return Math.floor(uptime() * 1000);
+}
+
+async function restartWithdrawn(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch (error) {
+    if (isErrnoException(error) && error.code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 async function recoverWindowsService(
@@ -550,32 +599,39 @@ async function recoverWindowsService(
   start: FinalizeStartObservation,
   mode: Extract<WindowsWorkerAdmission, { kind: "start" }>,
 ): Promise<WindowsServiceObservation> {
-  const now = (): number => Math.floor(uptime() * 1000);
+  const now = windowsRecoveryClock;
+  const notChecked = { status: "not-checked", stop: mode.stop } as const;
+  if (await restartWithdrawn(mode.abandonedPath)) return notChecked;
+  const observe = (remaining: number) =>
+    observeWindowsReadyRuntime(environment, mode.incumbent.runtime, remaining);
+  let ready: WindowsServiceObservation | null = null;
   const incumbentWait = await waitForSupervisorRelaunch(environment, {
     ...defaultSupervisorRelaunchWaitDeps,
     now,
     waitMs: Math.max(0, mode.incumbentDeadlineMs - now()),
-    observe: async () =>
-      (await incumbentMayBeAlive(mode.incumbent)) ? null : "supervisor-gone",
+    observe: async () => {
+      if (await incumbentMayBeAlive(mode.incumbent, mode.stop === "stopped"))
+        return null;
+      const slot = await readWindowsRestartSlot(environment);
+      if (slot === "runtime-current") return "host-ready";
+      return slot === "empty" ? "supervisor-gone" : null;
+    },
   });
   if (incumbentWait.kind === "timed-out")
-    return { status: "incumbent-live", stop: mode.stop };
+    return { status: "incumbent-not-proven-gone", stop: mode.stop };
 
-  const observe = (remaining: number) =>
-    observeWindowsReadyRuntime(environment, mode.incumbent.runtime, remaining);
-  let ready = await observe(Math.max(0, mode.admissionDeadlineMs - now()));
-  if (ready !== null) return ready;
-  if (mode.stop === "not-issued")
-    return { status: "not-checked", stop: mode.stop };
-
-  await startBesideUpdateAttempt(environment, start).catch(() => undefined);
-  if (!start.started && (await findLiveServiceSupervisor(environment)) === null)
-    return (
-      (await observe(Math.max(0, mode.admissionDeadlineMs - now()))) ?? {
-        status: "not-ready",
-      }
-    );
-
+  if (incumbentWait.kind === "supervisor-gone" && mode.stop !== "not-issued") {
+    await startBesideUpdateAttempt(environment, start).catch(() => undefined);
+    if (!start.recoveryClaimed && (await restartWithdrawn(mode.abandonedPath)))
+      return notChecked;
+    if (start.incumbentNotProvenGone)
+      return { status: "incumbent-not-proven-gone", stop: mode.stop };
+    if (
+      !start.started &&
+      (await readWindowsRestartSlot(environment)) === "empty"
+    )
+      return { status: "not-ready" };
+  }
   const readyUntil = mode.admissionDeadlineMs + HOST_START_ADOPTION_MAX_AGE_MS;
   await waitForSupervisorRelaunch(environment, {
     ...defaultSupervisorRelaunchWaitDeps,
@@ -771,7 +827,6 @@ async function runFinalizeUpgradeSwapWithStart(
   opts: {
     readonly environment: Environment;
     readonly receiptPath?: string;
-    readonly reportReceipt?: () => void;
     readonly coordinatorOwnsReceipt?: boolean;
   } & DetachedFinalizeOptions,
   startService: (() => Promise<void>) | null,
@@ -781,7 +836,6 @@ async function runFinalizeUpgradeSwapWithStart(
     opts.receiptPath ?? newCliPostFinalizeReceiptPath(opts.environment);
   const writeReceipt = async (marker: PostFinalizeMarker): Promise<void> => {
     if (opts.coordinatorOwnsReceipt === true) return;
-    opts.reportReceipt?.();
     await writePostFinalizeMarkerFile(markerPath, marker);
   };
   const handBack = (): Promise<string | null> =>
@@ -994,7 +1048,7 @@ export async function writePostFinalizeMarkerFile(
     } catch (error) {
       if (isErrnoException(error) && error.code === "EEXIST") {
         throw new FinalizeReceiptAlreadyWritten(
-          "The finalization receipt already exists.",
+          WINDOWS_RESTORE_RECEIPT_WRITE_WARNING,
         );
       }
       throw error;

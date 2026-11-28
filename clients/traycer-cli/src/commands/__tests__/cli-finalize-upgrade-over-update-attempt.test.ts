@@ -500,7 +500,7 @@ describe("cliFinalizeUpgradeCommand - the finalize helper's start, over a standi
         expectedStagedPath: "/tmp/traycer-cli.staged",
       })(fakeCtx());
 
-      expect(start).toHaveBeenCalledExactlyOnceWith(SERVICE_LABEL);
+      expect(start).toHaveBeenCalledExactlyOnceWith(SERVICE_LABEL, undefined);
       expect(result.data).toMatchObject({
         status: "lock-timeout",
         serviceRestore: "restore-failed",

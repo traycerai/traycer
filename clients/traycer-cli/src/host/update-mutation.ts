@@ -295,7 +295,9 @@ export async function startHostServiceWithAttempt(
     ServiceController,
     "start" | "status" | "hostStartAdoptionLabel"
   > &
-    Partial<Pick<WindowsServiceController, "startForWindowsRecovery">>,
+    Partial<Pick<WindowsServiceController, "startForWindowsRecovery">> & {
+      readonly beforeWindowsRecoveryRun?: () => Promise<void>;
+    },
   label: ServiceLabel,
   onAcknowledged: ((supervisorPid: number) => void) | undefined,
 ): Promise<ServiceStartOutcome> {
@@ -326,7 +328,10 @@ export async function startHostServiceWithAttempt(
           if (onAcknowledged === undefined) {
             await controller.start(label);
           } else if (controller.startForWindowsRecovery !== undefined) {
-            await controller.startForWindowsRecovery(label);
+            await controller.startForWindowsRecovery(
+              label,
+              controller.beforeWindowsRecoveryRun,
+            );
           } else {
             throw new Error(WINDOWS_RESTORE_UNCONFIRMED);
           }

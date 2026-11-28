@@ -289,7 +289,7 @@ describe("scheduleFinalizationHelper", () => {
       powershellSingleQuoted(harness.writeCalls[0]?.path ?? ""),
     );
 
-    expect(harness.writeCalls).toHaveLength(2);
+    expect(harness.writeCalls).toHaveLength(1);
     const body = harness.writeCalls[0]?.body ?? "";
     expect(body).toMatch(/\$ParentPid\s*=\s*4242/);
     expect(body).toContain("C:/Users/dev/AppData/.traycer/cli/traycer.exe");
@@ -305,18 +305,21 @@ describe("scheduleFinalizationHelper", () => {
     expect(body).toContain(
       `if ($digest -ine '${BASE_OPTIONS.currentWindowsRunner.sha256}')`,
     );
-    expect(body).toContain("$info.FileName = $invokeBinary");
+    expect(body).toMatch(
+      /\[Diagnostics.ProcessStartInfo\]::new\(\s*\$invokeBinary,/u,
+    );
     expect(body).toContain("--windows-worker-receipt-id=");
     expect(body).toContain("$launcher.BeginInvoke()");
-    expect(body).toContain("$launch.AsyncWaitHandle.WaitOne($left)");
-    expect(body).toContain("$child.StandardInput.WriteLine('restore')");
-    expect(body).toContain("$child.WaitForExit($left)");
+    expect(body).toContain(
+      "$launch.AsyncWaitHandle.WaitOne((Read-Remaining $LaunchUntil))",
+    );
+    expect(body).toContain("$child.StandardInput.WriteLine($Mode)");
+    expect(body).toContain("$child.WaitForExit((Read-Remaining $ExitUntil))");
     expect(body).not.toContain("$task.Run($null)");
     expect(body).not.toContain("Test-Path -LiteralPath $MarkerPath");
     expect(body).toContain(
       "Publish-ExclusiveFile $MarkerPath ($encoding.GetBytes($json)) -IgnoreDestinationCollision",
     );
-    expect(body).toContain('if ($null -ne $Payload["serviceStartError"])');
     expect(body).toContain("E_WINDOWS_RESTORE_RECEIPT_WRITE_FAILED");
     expect(body).toContain("[IO.File]::AppendAllText(");
     expect(body).not.toContain("Restore-RegisteredTask");
@@ -862,11 +865,10 @@ describe("scheduleFinalizationHelper", () => {
     });
     expect(result.status).toBe("armed");
     expect(result.helperPid).toBe(4321);
-    expect(harness.writeCalls).toHaveLength(2);
-    expect(harness.writeCalls[1]).toEqual({
-      path: result.armedPath?.replace(/\.armed$/u, ".committed"),
-      body: "4321",
-    });
+    expect(harness.writeCalls).toHaveLength(1);
+    expect(result.restartHandoff?.commitPath).toBe(
+      result.armedPath?.replace(/\.armed$/u, ".committed"),
+    );
   });
 
   it("reports failed without waiting for the deadline when the launcher exits non-zero", async () => {

@@ -22,7 +22,6 @@ import {
   queryScheduledTaskXml,
   parseWindowsTaskExecAction,
   buildWindowsTaskActionForLauncher,
-  buildWindowsHiddenHostLauncher,
   windowsHiddenHostLauncherPath,
 } from "../../../src/service/platforms/windows";
 import { serviceLabelFor, windowsTaskName } from "../../../src/service/label";
@@ -34,7 +33,11 @@ import {
   hostHomeDir,
   hostInstallDir,
 } from "../../../src/store/paths";
-import { writeHostInstallRecord } from "../../../src/manifest/host-install";
+import {
+  writeAndCheckProofInstall,
+  proofLauncher,
+  proofHostVersion,
+} from "./first-start-fixture";
 import { writeCliManifest } from "../../../src/manifest/cli-manifest";
 import { trustedKeysOverlayPath } from "../../../src/registry/trusted-keys";
 import { readHostPidMetadata } from "../../../src/host/pid-metadata";
@@ -121,7 +124,7 @@ const label = serviceLabelFor("dev");
 const task = windowsTaskName(label);
 if (!task.endsWith(id) || task !== flag("--task"))
   throw new Error("Task does not match fixture");
-const version = "1.5.0";
+const version = proofHostVersion;
 const installedExe = join(hostInstallDir("dev"), "traycer-host.exe");
 const hostPath = join(hostHomeDir("dev"), "pid.json");
 const proofHost = join(
@@ -175,12 +178,11 @@ function changeFixtureTask(action: "register" | "disable" | "remove"): void {
   ]);
 }
 
-const installId = "t18-disposable";
 const stagedVersion = "1.5.0";
 const initialVersion = "1.4.0";
 const initialCli = join(dirname(cli), "traycer-live.exe");
-const armedProgress = "CLI upgrade helper armed";
-const inJobProgress = "CLI upgrade helper refused: in-job";
+const armedProgress = "windows-restart-helper-armed";
+const inJobProgress = "windows-restart-helper-refused-in-job";
 const sha256 = (path: string): string =>
   createHash("sha256").update(readFileSync(path)).digest("hex");
 
@@ -233,10 +235,10 @@ function fixtureProcess(
           );
         } else if (
           event?.type === "progress" &&
-          typeof event.message === "string" &&
-          event.message.startsWith("CLI upgrade helper ")
+          typeof event.stage === "string" &&
+          event.stage.startsWith("windows-restart-helper-")
         ) {
-          console.log(`CLI progress: ${event.message}`);
+          console.log(`CLI decision: ${event.stage}`);
         }
       } catch {}
     }
@@ -414,23 +416,7 @@ async function prepareTask(): Promise<void> {
         proofCase === "parent-exit" ? hostStopIntentPath(hostHome) : null,
     }),
   );
-  await writeHostInstallRecord("dev", {
-    version,
-    runtimeVersion: null,
-    platform: "win32",
-    arch: "x64",
-    installId,
-    installedAt: new Date().toISOString(),
-    source: { kind: "local-file", value: installedExe },
-    archiveSha256: null,
-    executableSha256: createHash("sha256")
-      .update(readFileSync(installedExe))
-      .digest("hex"),
-    signatureVerifiedAt: null,
-    signatureKeyId: "local-file:unsigned",
-    sizeBytes: statSync(installedExe).size,
-    executablePath: installedExe,
-  });
+  await writeAndCheckProofInstall(installedExe);
   const user = command(whoami, ["/user", "/fo", "csv", "/nh"]).match(
     /S-1(?:-\d+){3,}/,
   )?.[0];
@@ -440,38 +426,24 @@ async function prepareTask(): Promise<void> {
     command: liveCli,
     args: commands.supervisor,
   };
+  const launcherPath = windowsHiddenHostLauncherPath(label);
   const fixtureVariables = [
     ["HOME", root],
     ["USERPROFILE", root],
     ["DEV_DESKTOP_SLOT", slot],
     ["TEMP", scratch],
     ["TMP", scratch],
-  ]
-    .map(
-      ([name, value]) =>
-        `shell.Environment("Process").Item("${name}") = "${value?.replaceAll('"', '""')}"`,
-    )
-    .join("\r\n");
-  const launcher = buildWindowsHiddenHostLauncher(
-    argumentsForCli,
-    label,
-  ).replace(
-    'Set shell = CreateObject("WScript.Shell")',
-    `Set shell = CreateObject("WScript.Shell")\r\n${fixtureVariables}`,
+  ] as const;
+  writeFileSync(
+    launcherPath,
+    proofLauncher({
+      cli: argumentsForCli,
+      label,
+      fixtureVariables,
+      supervisorStderr,
+      cmdPath: join(windows, "System32", "cmd.exe"),
+    }),
   );
-  const vbsString = (value: string): string =>
-    `"${value.replaceAll('"', '""')}"`;
-  const run = "  exitCode = shell.Run(commandLine, 0, True)";
-  if (!launcher.includes(run))
-    throw new Error("The launcher no longer has the expected runtime call");
-  const redirect = vbsString(` 2>"${supervisorStderr}"`);
-  const cmd = vbsString(`"${join(windows, "System32", "cmd.exe")}" /d /s /c `);
-  const captured = launcher.replace(
-    run,
-    `  exitCode = shell.Run(${cmd} & Chr(34) & commandLine & ${redirect} & Chr(34), 0, True)`,
-  );
-  const launcherPath = windowsHiddenHostLauncherPath(label);
-  writeFileSync(launcherPath, `\uFEFF${captured}`, "utf16le");
   const taskXmlPath = join(root, "task.xml");
   const taskXml = buildScheduledTaskXml(
     {
@@ -537,10 +509,10 @@ async function run(): Promise<void> {
       const event = JSON.parse(line);
       if (
         event.type === "progress" &&
-        typeof event.message === "string" &&
-        event.message.startsWith("CLI upgrade helper ")
+        typeof event.stage === "string" &&
+        event.stage.startsWith("windows-restart-helper-")
       )
-        helperPath = event.message;
+        helperPath = event.stage;
     } catch {}
   });
   parent = restart.child;
@@ -685,7 +657,7 @@ async function run(): Promise<void> {
       if (
         receipt.status !== "start-only" ||
         receipt.serviceStartError !== null ||
-        receipt.serviceObservation?.status !== "incumbent-live" ||
+        receipt.serviceObservation?.status !== "incumbent-not-proven-gone" ||
         receipt.serviceObservation.stop !== "effect-unknown" ||
         runtimePids().length !== 1 ||
         (await serving(null)) !== incumbent
@@ -706,8 +678,10 @@ async function run(): Promise<void> {
       receipt.serviceStartError !==
         (failedStart ? WINDOWS_RESTORE_UNCONFIRMED : null) ||
       receipt.serviceObservation?.status !==
-        (failedStart ? "not-ready" : "ready") ||
-      (!failedStart && receipt.serviceObservation.runtimeVersion !== version)
+        (failedStart ? "not-ready" : "endpoint-ready") ||
+      (!failedStart &&
+        (receipt.serviceObservation.metadataRuntimeVersion !== version ||
+          receipt.serviceObservation.pidRecordCurrentBeforeAndAfter !== true))
     )
       throw new Error(
         `Unexpected terminal receipt for ${proofCase}: ${receipt.status}, ${JSON.stringify(receipt.serviceObservation)}`,

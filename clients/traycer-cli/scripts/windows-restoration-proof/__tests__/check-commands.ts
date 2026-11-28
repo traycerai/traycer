@@ -1,3 +1,11 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { serviceLabelFor } from "../../../src/service/label";
+import {
+  proofLauncher,
+  writeAndCheckProofInstall,
+} from "./first-start-fixture";
 import { buildProgram } from "../../../src/index";
 import commands from "../commands.cjs";
 
@@ -47,3 +55,24 @@ for (const [argv, path] of [
     throw new Error(`The proof CLI arguments did not parse: ${path.join(" ")}`);
 }
 console.log("Proof CLI commands parse");
+
+const fixture = await mkdtemp(
+  join(tmpdir(), "traycer-restoration-first-start-"),
+);
+try {
+  const executablePath = join(fixture, "traycer-host.exe");
+  await writeFile(executablePath, "disposable fixture bytes");
+  await writeAndCheckProofInstall(executablePath);
+  proofLauncher({
+    cli: { command: join(fixture, "traycer.exe"), args: commands.supervisor },
+    label: serviceLabelFor("dev"),
+    fixtureVariables: [["HOME", fixture]],
+    supervisorStderr: join(fixture, "supervisor.stderr"),
+    cmdPath: "C:\\Windows\\System32\\cmd.exe",
+  });
+  console.log(
+    "Proof install record round-trips and launcher matches production bytes outside fixture instrumentation",
+  );
+} finally {
+  await rm(fixture, { recursive: true, force: true });
+}

@@ -35,6 +35,7 @@ const mocks = vi.hoisted(() => ({
   afterAdmission: null as (() => Promise<void>) | null,
   // Runs once the stub's stop has completed, before the relaunch.
   afterStop: null as (() => Promise<void>) | null,
+  issuingStop: null as (() => Promise<void>) | null,
   // When set, the stub's relaunch issues a launch through the same edges a
   // platform controller does (spawn edge, authority check, the stop-target's
   // launch wrapper) and runs this inside the launching call.
@@ -217,6 +218,7 @@ vi.mock("../../upgrade/finalize-helper", async (importOriginal) => {
       },
       issuingStop: async () => {
         expect(mocks.controllerCalls).toEqual([]);
+        await mocks.issuingStop?.();
       },
       stopped: () => {
         expect(mocks.controllerCalls).toEqual(["stopForRestart"]);
@@ -338,6 +340,7 @@ describe("buildHostRestartCommand", () => {
     mocks.beforeCliLock = null;
     mocks.afterAdmission = null;
     mocks.afterStop = null;
+    mocks.issuingStop = null;
     mocks.busyOverride = null;
     mocks.busyCalls = [];
     mocks.lockCalls = [];
@@ -545,6 +548,7 @@ describe("buildHostRestartCommand", () => {
       restartHandoff: {
         pipe: "fixture-helper",
         commitPath: join(workHome, "helper.committed"),
+        abandonedPath: join(workHome, "helper.abandoned"),
         helperPid: 99001,
       },
     };
@@ -604,8 +608,6 @@ describe("buildHostRestartCommand", () => {
         expectedHost: null,
         lifecycleOrigin: "terminal",
       });
-      const { WINDOWS_RESTORE_UNCONFIRMED } =
-        await import("../../service/windows-task-restoration");
       if (state === "replaced-entry" || state === "arm-failed") {
         await expect(command(fakeCtx())).rejects.toThrow(
           "The CLI upgrade helper did not arm.",
@@ -648,18 +650,19 @@ describe("buildHostRestartCommand", () => {
 
       const result = await command(fakeCtx());
       expect(result.data).toMatchObject({
-        restarted: state === "armed",
+        restarted: true,
         cliUpgrade: { status: "still-locked" },
         helper: { status: "armed", helperPid: 99001 },
-        serviceRestore: state === "armed" ? null : "restore-failed",
+        serviceRestore: null,
+        swapCommitted: state === "armed",
       });
       expect(JSON.stringify(result.data)).not.toMatch(
         /stagedBinaryPath|markerPath|sha256/u,
       );
       expect(JSON.stringify(result)).not.toContain(workHome);
-      expect(result.exitCode).toBe(state === "armed" ? 0 : 1);
+      expect(result.exitCode).toBe(0);
       if (state === "commit-failed")
-        expect(result.human).toContain(WINDOWS_RESTORE_UNCONFIRMED);
+        expect(result.human).toContain("The CLI upgrade is still pending.");
       expect(mocks.credentialProvisionMock).not.toHaveBeenCalled();
       expect(mocks.controllerCalls).toEqual(["stopForRestart"]);
       expect(mocks.helperEvents).toEqual(["owned", "stopped", "commit"]);
@@ -675,6 +678,56 @@ describe("buildHostRestartCommand", () => {
           livePath: liveBinaryPath,
         }),
       ]);
+    },
+  );
+
+  it.each(["parent", "helper"] as const)(
+    "honours the %s's exclusive recovery election after a lost Windows stop ACK",
+    async (winner) => {
+      mocks.platform = "win32";
+      const binary = join(workHome, "traycer.exe");
+      writeFileSync(binary, "Windows packaged entry image fixture");
+      const { captureWindowsCliFixture } =
+        await import("../../__tests__/support/windows-cli-entry-image");
+      captureWindowsCliFixture(binary);
+      const { stagedBinaryPath } = writePriorSwapFailedMarker({
+        serviceStartError: null,
+      });
+      rmSync(join(workHome, ".traycer", "cli", "post-finalize.json"));
+      rmSync(stagedBinaryPath);
+      setArmedWindowsHelper();
+      const { claimWindowsRestartSidecar, WINDOWS_HELPER_DID_NOT_ARM } =
+        await import("../../upgrade/finalize-helper");
+      const sidecar = join(workHome, "helper.abandoned");
+      mocks.issuingStop = async () => {
+        if (winner === "helper")
+          expect(await claimWindowsRestartSidecar(sidecar)).toBe(true);
+        throw new Error("lost stop ACK");
+      };
+      const { buildHostRestartCommand } = await import("../host-restart");
+      const result = buildHostRestartCommand({
+        ifIdle: false,
+        force: false,
+        deferIfParked: false,
+        expectedHost: null,
+        lifecycleOrigin: "terminal",
+      })(fakeCtx());
+      if (winner === "parent") {
+        await expect(result).rejects.toThrow(WINDOWS_HELPER_DID_NOT_ARM);
+        expect(await claimWindowsRestartSidecar(sidecar)).toBe(false);
+      } else {
+        await expect(result).resolves.toMatchObject({
+          data: {
+            restarted: true,
+            helper: { status: "armed" },
+            swapCommitted: false,
+            serviceRestore: null,
+          },
+          exitCode: 0,
+        });
+      }
+      expect(mocks.controllerCalls).toEqual([]);
+      expect(mocks.helperEvents).toEqual(["owned", "closed"]);
     },
   );
 

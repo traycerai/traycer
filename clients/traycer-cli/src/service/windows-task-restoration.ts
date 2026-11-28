@@ -6,4 +6,3 @@ export const WINDOWS_RESTORE_RECEIPT_WRITE_WARNING = `Could not record the uncon
 
 // A longer local manifest or receipt operation indicates a filesystem fault.
 export const WINDOWS_FINALIZE_FILE_IO_MS = 30_000;
-export const WINDOWS_RESTORE_STAGE_PREFIX = "traycer-windows-restoration-stage";

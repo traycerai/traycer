@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -84,8 +85,6 @@ const TEST_TIMEOUT_MS = 60_000;
 // have nothing to do with what's under test.
 const HELPER_SLEEP_SECONDS = 8;
 const SURVIVED_POLL_MS = 20_000;
-
-type WatchdogFault = "launch" | "receipt";
 
 const ORIGINAL_TEMP = process.env.TEMP;
 const ORIGINAL_TMP = process.env.TMP;
@@ -1031,250 +1030,221 @@ function armProbeRunner() {
   };
 }
 
+function ambientBreakawayForOwnershipTest(): "job-free" | "in-job" | "denied" {
+  const root = mkdtempSync(join(tmpdir(), "traycer-owned-pipe-probe-"));
+  try {
+    return probeBreakawayCapability(root);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 describe.skipIf(process.platform !== "win32")(
   "the finalize helper's real PowerShell handoff",
   () => {
-    it(
-      "waits for the original parent after it drops the owned stop pipe",
-      async () => {
-        const {
-          scheduleFinalizationHelper,
-          defaultSpawnImpl,
-          defaultWriteImpl,
-          defaultHelperArmWaitDeps,
-        } = await loadHelper();
-        const runnerPath = join(process.cwd(), "dist-sea", "traycer.exe");
-        const verdictPath = join(workRoot, "owner-admission.txt");
-        const startPath = join(workRoot, "start-admission.txt");
-        const parentSource = [
-          'const { createConnection } = require("node:net");',
-          'const { createInterface } = require("node:readline");',
-          'process.on("message", name => {',
-          '  if (name === "exit") return process.exit(0);',
-          "  const socket = createConnection(name);",
-          '  createInterface({ input: socket }).on("line", line => {',
-          '    if (line === "armed") socket.write("stop\\n");',
-          '    if (line === "owned") socket.write("issuing-stop\\n");',
-          '    if (line === "stop-admitted") socket.destroy();',
-          "  });",
-          '  socket.on("error", () => process.exit(1));',
-          "});",
-        ].join("\n");
-        const parent = spawn(process.execPath, ["-e", parentSource], {
-          stdio: ["ignore", "ignore", "inherit", "ipc"],
-          windowsHide: true,
-        });
-        const exited = new Promise<void>((resolve) => {
-          parent.once("exit", () => resolve());
-        });
-        try {
-          if (parent.pid === undefined)
-            throw new Error("Fixture parent did not start");
-          const receipt = await scheduleFinalizationHelper({
-            environment: "production",
-            currentWindowsRunner: {
-              path: runnerPath,
-              sha256: createHash("sha256")
-                .update(readFileSync(runnerPath))
-                .digest("hex"),
-              legacyDetached: false,
-            },
-            stagedBinaryPath: join(workRoot, "staged.exe"),
-            livePath: join(workRoot, "live.exe"),
-            parentPid: parent.pid,
-            parentExitTimeoutSeconds: 10,
-            platform: "win32",
-            coordinateWindowsRestart: true,
-            spawnImpl: defaultSpawnImpl,
-            writeImpl: async (path, body) => {
-              if (path.endsWith(".ps1")) {
-                body = body
-                  .replace(
-                    "  $parentExited = $parent.WaitForExit",
-                    `  [IO.File]::WriteAllText(${powershellSingleQuoted(verdictPath)}, "waiting")\n  $parentExited = $parent.WaitForExit`,
-                  )
-                  .replace(
+    // Select the case from the OS probe before the production helper runs.
+    const ambient =
+      process.platform === "win32"
+        ? ambientBreakawayForOwnershipTest()
+        : "denied";
+    if (ambient === "job-free") {
+      it(
+        "continues the owned stop while the parent is still live",
+        async () => {
+          const {
+            scheduleFinalizationHelper,
+            defaultSpawnImpl,
+            defaultWriteImpl,
+            defaultHelperArmWaitDeps,
+          } = await loadHelper();
+          const runnerPath = join(process.cwd(), "dist-sea", "traycer.exe");
+          const startPath = join(workRoot, "start-admission.txt");
+          const parentSource = [
+            'const { createConnection } = require("node:net");',
+            'const { createInterface } = require("node:readline");',
+            'process.on("message", name => {',
+            '  if (name === "exit") return process.exit(0);',
+            "  const socket = createConnection(name);",
+            '  createInterface({ input: socket }).on("line", line => {',
+            '    if (line === "armed") socket.write("stop\\n");',
+            '    if (line === "owned") socket.write("issuing-stop\\n");',
+            '    if (line === "stop-admitted") socket.destroy();',
+            "  });",
+            '  socket.on("error", () => process.exit(1));',
+            "});",
+          ].join("\n");
+          const parent = spawn(process.execPath, ["-e", parentSource], {
+            stdio: ["ignore", "ignore", "inherit", "ipc"],
+            windowsHide: true,
+          });
+          const exited = new Promise<void>((resolve) => {
+            parent.once("exit", () => resolve());
+          });
+          try {
+            if (parent.pid === undefined)
+              throw new Error("Fixture parent did not start");
+            const receipt = await scheduleFinalizationHelper({
+              environment: "production",
+              currentWindowsRunner: {
+                path: runnerPath,
+                sha256: createHash("sha256")
+                  .update(readFileSync(runnerPath))
+                  .digest("hex"),
+                legacyDetached: false,
+              },
+              stagedBinaryPath: join(workRoot, "staged.exe"),
+              livePath: join(workRoot, "live.exe"),
+              parentPid: parent.pid,
+              parentExitTimeoutSeconds: 10,
+              platform: "win32",
+              spawnImpl: defaultSpawnImpl,
+              writeImpl: async (path, body) => {
+                if (path.endsWith(".ps1")) {
+                  body = body.replace(
                     "  # A late CreateProcess completion",
                     `  [IO.File]::AppendAllText(${powershellSingleQuoted(startPath)}, ("$Mode parentExited=$($parent.HasExited)" + [Environment]::NewLine))\n  # A late CreateProcess completion`,
                   );
+                }
+                await defaultWriteImpl(path, body);
+              },
+              armWait: defaultHelperArmWaitDeps,
+            });
+            expect(
+              receipt.status,
+              `owned-pipe assertions require an armed helper: ${receipt.errorMessage}`,
+            ).toBe("armed");
+            const handoff = receipt.restartHandoff;
+            if (handoff === undefined)
+              throw new Error("Fixture helper did not offer its pipe");
+            parent.send(`\\\\.\\pipe\\${handoff.pipe}`);
+            expect(await waitForFile(receipt.markerPath, 20_000)).toBe(true);
+            expect(readFileSync(startPath, "utf8").trim()).toMatch(
+              /^start [0-9]+ [0-9]+ effect-unknown [A-Za-z0-9_-]+ [A-Za-z0-9_-]+ parentExited=False$/u,
+            );
+            expect(parent.exitCode).toBeNull();
+            parent.send("exit");
+            await exited;
+            expect(
+              JSON.parse(readFileSync(receipt.markerPath, "utf8")),
+            ).toMatchObject({
+              status: "start-only",
+              serviceObservation: { status: "not-ready" },
+            });
+          } finally {
+            if (parent.exitCode === null) parent.kill();
+          }
+        },
+        TEST_TIMEOUT_MS,
+      );
+    }
+    it(
+      ambient === "job-free"
+        ? "stands down the real helper when the stop ACK is lost with the slot down"
+        : "uses the guarded parent fallback when its job prevents breakaway",
+      async () => {
+        const { copyFileSync } = await import("node:fs");
+        const { captureWindowsCliFixture } =
+          await import("../../__tests__/support/windows-cli-entry-image");
+        const { restartWithPendingCliUpgradeFinalize } =
+          await import("../../commands/host-restart");
+        const { writeCliManifest } =
+          await import("../../manifest/cli-manifest");
+        const { createServiceController, serviceLabelFor } =
+          await import("../../service");
+        const { cliInstallHomeDir } = await import("../../store/paths");
+        const {
+          defaultSpawnImpl,
+          defaultWriteImpl,
+          defaultHelperArmWaitDeps,
+          WINDOWS_HELPER_DID_NOT_ARM,
+        } = await loadHelper();
+        const label = serviceLabelFor("production");
+        const runner = join(workRoot, "fixture-cli.exe");
+        copyFileSync(join(process.cwd(), "dist-sea", "traycer.exe"), runner);
+        mkdirSync(cliInstallHomeDir("production"), { recursive: true });
+        await writeCliManifest("production", {
+          version: "1.4.0",
+          installedAt: new Date().toISOString(),
+          binaryPath: runner,
+          source: "manual",
+          pendingUpgrade: {
+            version: "1.5.0",
+            stagedBinaryPath: join(workRoot, "missing-staged.exe"),
+            stagedAt: new Date().toISOString(),
+            reason: "binary-locked",
+            allowDowngrade: false,
+          },
+        });
+        captureWindowsCliFixture(runner);
+        const issued = join(workRoot, "before-lost-ack.txt");
+        const stop = vi.fn(
+          async (
+            _stopped: (() => void) | undefined,
+            beforeStop: (() => Promise<void>) | undefined,
+          ) => {
+            await beforeStop?.();
+            return { forcedRecycle: false };
+          },
+        );
+        const relaunch = vi.fn(async () => undefined);
+        let markerPath: string | null = null;
+        const restart = restartWithPendingCliUpgradeFinalize(
+          {
+            environment: "production",
+            controller: createServiceController(),
+            label,
+            parentPid: process.pid,
+            platform: "win32",
+            spawnImpl: defaultSpawnImpl,
+            armWait: defaultHelperArmWaitDeps,
+            force: true,
+            writeImpl: async (path, body) => {
+              if (path.endsWith(".ps1")) {
+                markerPath =
+                  /^\$MarkerPath = '([^']+)'/mu.exec(body)?.[1] ?? null;
+                // Lose precisely the boundary ACK, after the helper recorded issuing-stop.
+                body = body.replace(
+                  "$controlWriter.WriteLine('stop-admitted')",
+                  `[IO.File]::WriteAllText(${powershellSingleQuoted(issued)}, 'issued'); throw 'lost-ack fixture'`,
+                );
               }
               await defaultWriteImpl(path, body);
             },
-            armWait: defaultHelperArmWaitDeps,
+          },
+          { stop, relaunch },
+        );
+        if (ambient !== "job-free") {
+          const result = await restart;
+          expect(result.helper).toMatchObject({
+            status: "failed",
+            refusalReason: "in-job",
           });
-          expect(
-            receipt.status,
-            `owned-pipe assertions require an armed helper: ${receipt.errorMessage}`,
-          ).toBe("armed");
-          const handoff = receipt.restartHandoff;
-          if (handoff === undefined)
-            throw new Error("Fixture helper did not offer its pipe");
-          parent.send(`\\\\.\\pipe\\${handoff.pipe}`);
-          await expect
-            .poll(() => existsSync(verdictPath) || existsSync(startPath), {
-              timeout: 10_000,
-            })
-            .toBe(true);
-          expect(existsSync(verdictPath)).toBe(true);
-          expect(existsSync(startPath)).toBe(false);
-          expect(parent.exitCode).toBeNull();
-
-          parent.send("exit");
-          await exited;
-          expect(await waitForFile(receipt.markerPath, 20_000)).toBe(true);
-          expect(readFileSync(startPath, "utf8").trim()).toMatch(
-            /^start [0-9]+ [0-9]+ effect-unknown [A-Za-z0-9_-]+ parentExited=True$/u,
+          expect(stop).toHaveBeenCalledOnce();
+          expect(relaunch).toHaveBeenCalledExactlyOnceWith(
+            { forcedRecycle: false },
+            true,
           );
-          expect(
-            JSON.parse(readFileSync(receipt.markerPath, "utf8")),
-          ).toMatchObject({
-            status: "start-only",
-            serviceObservation: { status: "not-ready" },
-          });
-        } finally {
-          if (parent.exitCode === null) parent.kill();
+          expect(existsSync(issued)).toBe(false);
+          return;
         }
-      },
-      TEST_TIMEOUT_MS,
-    );
-
-    it.each(["launch", "receipt"] satisfies WatchdogFault[])(
-      "ends a hung %s without a late receipt",
-      async (fault) => {
-        const {
-          scheduleFinalizationHelper,
-          defaultWriteImpl,
-          HELPER_ARM_WAIT_MS,
-        } = await loadHelper();
-        const {
-          WINDOWS_FINALIZE_FILE_IO_MS,
-          WINDOWS_RESTORE_RECEIPT_WRITE_WARNING,
-          WINDOWS_RESTORE_STAGE_PREFIX,
-          WINDOWS_RESTORE_UNCONFIRMED,
-        } = await import("../../service/windows-task-restoration");
-        const observed = join(workRoot, "receipt-phase");
-        const pendingWrite = join(workRoot, "wait-for-release");
-        const worker = join(workRoot, "write-receipt.cjs");
-        const copy = join(workRoot, "private-verified-copy");
-        mkdirSync(copy);
-        const exitedParent = spawnSync("cmd.exe", ["/c", "exit", "0"]);
-        if (exitedParent.pid === undefined)
-          throw new Error("fixture parent did not start");
-        const scheduled = await scheduleFinalizationHelper({
-          environment: "production",
-          currentWindowsRunner: armProbeRunner(),
-          stagedBinaryPath: join(workRoot, "staged.exe"),
-          livePath: join(workRoot, "live.exe"),
-          parentPid: exitedParent.pid,
-          parentExitTimeoutSeconds: 2,
-          platform: "win32",
-          spawnImpl: () => ({
-            pid: undefined,
-            unref: () => undefined,
-            kill: () => undefined,
-            exited: NEVER_EXITS,
-          }),
-          writeImpl: defaultWriteImpl,
-          armWait: fastClock(),
+        await expect(restart).rejects.toThrow(WINDOWS_HELPER_DID_NOT_ARM);
+        expect(existsSync(issued)).toBe(true);
+        expect(relaunch).not.toHaveBeenCalled();
+        if (markerPath === null)
+          throw new Error("Fixture helper did not expose its receipt path");
+        expect(await waitForFile(markerPath, 20_000)).toBe(true);
+        expect(JSON.parse(readFileSync(markerPath, "utf8"))).toMatchObject({
+          status: "start-only",
+          serviceStartError: null,
+          serviceObservation: { status: "not-checked", stop: "effect-unknown" },
         });
-        if (scheduled.scriptPath === null)
-          throw new Error("fixture helper was not rendered");
-        expect(scheduled.markerPath.startsWith(workHome)).toBe(true);
-        writeFileSync(
-          worker,
-          [
-            'const { existsSync, writeFileSync } = require("node:fs");',
-            'process.stdin.once("data", bytes => {',
-            '  if (bytes.toString().trim() !== "restore") return process.exit(1);',
-            `  console.log(${JSON.stringify(`${WINDOWS_RESTORE_STAGE_PREFIX} receipt`)});`,
-            `  writeFileSync(${JSON.stringify(observed)}, String(process.pid));`,
-            "  const wait = setInterval(() => {",
-            `    if (!existsSync(${JSON.stringify(pendingWrite)})) return;`,
-            `    writeFileSync(${JSON.stringify(scheduled.markerPath)}, "late result", { flag: "wx" });`,
-            "    clearInterval(wait);",
-            "  }, 50);",
-            "});",
-          ].join("\n"),
+        const claims = readdirSync(workRoot).filter((name) =>
+          name.endsWith(".abandoned"),
         );
-        const body = readFileSync(scheduled.scriptPath, "utf8");
-        const guardAt = body.indexOf("$jobCheckFailed = $false");
-        const tailAt = body.indexOf("# END ARM GUARD");
-        expect(guardAt).toBeGreaterThan(0);
-        expect(tailAt).toBeGreaterThan(guardAt);
-        // Supply a committed disposable fixture to the real post-arm script.
-        // Arming and Windows job breakaway are exercised separately below.
-        const tail = body
-          .slice(tailAt)
-          .replace(
-            /^  \$info.Arguments = .*$/mu,
-            `  $info.Arguments = ${powershellSingleQuoted(`"${worker}"`)}`,
-          )
-          .replace(
-            "[Diagnostics.Process]::Start($startInfo)",
-            fault === "launch"
-              ? "[Threading.Thread]::Sleep(120000); [Diagnostics.Process]::Start($startInfo)"
-              : "[Diagnostics.Process]::Start($startInfo)",
-          );
-        const commit = join(workRoot, "known-committed");
-        writeFileSync(
-          scheduled.scriptPath,
-          [
-            body.slice(0, guardAt),
-            `$invokeBinary = ${powershellSingleQuoted(process.execPath)}`,
-            `$invokeDir = ${powershellSingleQuoted(copy)}`,
-            `$CommittedPath = ${powershellSingleQuoted(commit)}`,
-            "$stagedHandle = $null",
-            "[IO.File]::WriteAllText($CommittedPath, [string]$PID)",
-            tail,
-          ].join("\n"),
-        );
-        const budget = HELPER_ARM_WAIT_MS + WINDOWS_FINALIZE_FILE_IO_MS;
-        const run = spawnSync(
-          "powershell.exe",
-          ["-NoProfile", "-NonInteractive", "-File", scheduled.scriptPath],
-          { encoding: "utf8", timeout: budget + 5_000, windowsHide: true },
-        );
-        expect(run.error).toBeUndefined();
-        expect(run.status).toBe(0);
-        expect(run.stderr).toContain(WINDOWS_RESTORE_UNCONFIRMED);
-        if (fault === "launch") {
-          expect(existsSync(observed)).toBe(false);
-          expect(
-            JSON.parse(readFileSync(scheduled.markerPath, "utf8")),
-          ).toMatchObject({
-            status: "swap-failed",
-            serviceStartError: WINDOWS_RESTORE_UNCONFIRMED,
-          });
-        } else {
-          const workerPid = Number(readFileSync(observed, "utf8"));
-          expect(Number.isSafeInteger(workerPid) && workerPid > 0).toBe(true);
-          await expect
-            .poll(
-              () => {
-                try {
-                  process.kill(workerPid, 0);
-                  return true;
-                } catch (error) {
-                  if (
-                    error instanceof Error &&
-                    "code" in error &&
-                    error.code === "ESRCH"
-                  )
-                    return false;
-                  throw error;
-                }
-              },
-              { timeout: 2_000 },
-            )
-            .toBe(false);
-          writeFileSync(pendingWrite, "release");
-          expect(run.stderr).toContain(WINDOWS_RESTORE_RECEIPT_WRITE_WARNING);
-          expect(existsSync(scheduled.markerPath)).toBe(false);
-        }
+        expect(claims).toHaveLength(1);
       },
       TEST_TIMEOUT_MS,
     );
-
     it(
       "arms through the real launcher from a temp directory with an apostrophe and non-ASCII characters (or refuses, verified either way against this runner's actual job state)",
       async () => {

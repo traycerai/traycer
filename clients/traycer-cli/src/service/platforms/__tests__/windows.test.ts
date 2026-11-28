@@ -5892,6 +5892,35 @@ describe("Windows startService post-/Run spawn verification", () => {
     expect(polls).toBeGreaterThanOrEqual(2);
   });
 
+  it("honours the final recovery guard immediately before issuing /Run", async () => {
+    const { queryTaskXml } = recordingQueryTaskXml({
+      kind: "xml",
+      xml: definitionTaskXml("true"),
+    });
+    setWindowsDefinitionDepsForTests({
+      queryTaskXml,
+      predictCli: async () => {
+        throw new Error("unexpected CLI prediction");
+      },
+      resolveCli: async () => {
+        throw new Error("unexpected CLI resolution");
+      },
+    });
+    const run = vi.fn(async () => success(""));
+    const refuse = new Error("Windows restart was abandoned");
+    const beforeRun = vi.fn(async () => {
+      throw refuse;
+    });
+    await expect(
+      createWindowsController(run, noTimingDeps).startForWindowsRecovery(
+        serviceLabelFor("staging"),
+        beforeRun,
+      ),
+    ).rejects.toBe(refuse);
+    expect(beforeRun).toHaveBeenCalledOnce();
+    expect(run.mock.calls).toEqual([]);
+  });
+
   it.each([
     ["disabled", { kind: "xml", xml: definitionTaskXml("false") }],
     ["unreadable", { kind: "failed", reason: "fixture read refused" }],
@@ -5917,7 +5946,7 @@ describe("Windows startService post-/Run spawn verification", () => {
         return success("");
       };
       const result = await createWindowsController(runner, noTimingDeps)
-        .startForWindowsRecovery(serviceLabelFor("staging"))
+        .startForWindowsRecovery(serviceLabelFor("staging"), undefined)
         .catch((error: unknown) => error);
 
       expect(demandStarts).toEqual([]);

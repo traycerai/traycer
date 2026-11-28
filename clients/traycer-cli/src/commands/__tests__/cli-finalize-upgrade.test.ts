@@ -720,7 +720,7 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
         JSON.stringify({ supervisor: null, runtime: null }),
       ).toString("base64url");
       const now = Math.floor(uptime() * 1000);
-      mocks.workerInput = `start ${now + 30_000} ${now} stopped ${incumbent}`;
+      mocks.workerInput = `start ${now + 30_000} ${now} stopped ${incumbent} ${Buffer.from(join(workHome, ".abandoned")).toString("base64url")}`;
       mocks.serviceStartThrows = new Error("fixture guarded refusal");
       const result = await detached(fakeCtx());
 

@@ -52,6 +52,7 @@ const windowsHandoff = vi.hoisted(() => ({
   readinessPort: null as number | null,
   currentProcess: true,
   waitingForDemand: false,
+  evidenceUnreadable: false,
   gonePids: [] as number[],
 }));
 const fsMocks = vi.hoisted(() => ({
@@ -107,6 +108,7 @@ vi.mock("../../host/update-mutation", async (importOriginal) => {
     startHostServiceWithAttempt: async (
       ...args: Parameters<typeof actual.startHostServiceWithAttempt>
     ) => {
+      await args[3].beforeWindowsRecoveryRun?.();
       windowsHandoff.serviceStartCalls += 1;
       windowsHandoff.hostRunning = true;
       windowsHandoff.serviceCalls.push("start");
@@ -142,32 +144,44 @@ vi.mock("../../store/process-identity", async (importOriginal) => ({
 vi.mock("../../host/pid-metadata", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../host/pid-metadata")>();
+  const readHostPidMetadata = async (
+    ...args: Parameters<typeof actual.readHostPidMetadata>
+  ) => {
+    if (windowsHandoff.readinessPort === null) {
+      return actual.readHostPidMetadata(...args);
+    }
+    if (
+      (windowsHandoff.waitingForDemand || windowsHandoff.gonePids.length > 0) &&
+      !windowsHandoff.hostRunning
+    )
+      return null;
+    const started = "2026-01-01T00:00:00.0000000Z";
+    return {
+      pid: 99003,
+      hostId: "restoration-fixture",
+      version: "1.4.0",
+      websocketUrl: `ws://127.0.0.1:${windowsHandoff.readinessPort}/rpc`,
+      startedAt: started,
+      processStartIdentity: formatWindowsProcessStartIdentity(started),
+      processStartIdentityRead: "present" as const,
+      layer0: null,
+      layer0Slot: null,
+    };
+  };
   return {
     ...actual,
-    readHostPidMetadata: async (
-      ...args: Parameters<typeof actual.readHostPidMetadata>
+    readHostPidMetadata,
+    readHostPidMetadataEvidence: async (
+      ...args: Parameters<typeof actual.readHostPidMetadataEvidence>
     ) => {
-      if (windowsHandoff.readinessPort === null) {
-        return actual.readHostPidMetadata(...args);
-      }
-      if (
-        (windowsHandoff.waitingForDemand ||
-          windowsHandoff.gonePids.length > 0) &&
-        !windowsHandoff.hostRunning
-      )
-        return null;
-      const started = "2026-01-01T00:00:00.0000000Z";
-      return {
-        pid: 99003,
-        hostId: "restoration-fixture",
-        version: "1.4.0",
-        websocketUrl: `ws://127.0.0.1:${windowsHandoff.readinessPort}/rpc`,
-        startedAt: started,
-        processStartIdentity: formatWindowsProcessStartIdentity(started),
-        processStartIdentityRead: "present" as const,
-        layer0: null,
-        layer0Slot: null,
-      };
+      if (windowsHandoff.readinessPort === null)
+        return actual.readHostPidMetadataEvidence(...args);
+      if (windowsHandoff.evidenceUnreadable)
+        return { kind: "unreadable", cause: "fixture" };
+      const metadata = await readHostPidMetadata(...args);
+      return metadata === null
+        ? { kind: "absent" }
+        : { kind: "read", metadata };
     },
   };
 });
@@ -270,6 +284,7 @@ beforeEach(async () => {
   windowsHandoff.readinessPort = null;
   windowsHandoff.currentProcess = true;
   windowsHandoff.waitingForDemand = false;
+  windowsHandoff.evidenceUnreadable = false;
   windowsHandoff.gonePids = [];
   signingKey = createFeedSigningKey();
   previousTrustedKeys = config.hostTrustedPubkeys;
@@ -923,7 +938,7 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
       stop: "effect-unknown",
       live: true,
       answers: [],
-      result: { status: "incumbent-live", stop: "effect-unknown" },
+      result: { status: "incumbent-not-proven-gone", stop: "effect-unknown" },
       starts: 0,
     },
     {
@@ -932,7 +947,16 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
       stop: "not-issued",
       live: true,
       answers: [],
-      result: { status: "incumbent-live", stop: "not-issued" },
+      result: { status: "incumbent-not-proven-gone", stop: "not-issued" },
+      starts: 0,
+    },
+    {
+      label: "fresh runtime identity evidence unreadable",
+      gone: [99001, 99004],
+      stop: "stopped",
+      live: false,
+      answers: [],
+      result: { status: "incumbent-not-proven-gone", stop: "stopped" },
       starts: 0,
     },
     {
@@ -941,7 +965,11 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
       stop: "effect-unknown",
       live: true,
       answers: [200],
-      result: { status: "ready", runtimeVersion: "1.4.0" },
+      result: {
+        status: "endpoint-ready",
+        metadataRuntimeVersion: "1.4.0",
+        pidRecordCurrentBeforeAndAfter: true,
+      },
       starts: 0,
     },
     {
@@ -950,7 +978,11 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
       stop: "stopped",
       live: false,
       answers: [503, 200],
-      result: { status: "ready", runtimeVersion: "1.4.0" },
+      result: {
+        status: "endpoint-ready",
+        metadataRuntimeVersion: "1.4.0",
+        pidRecordCurrentBeforeAndAfter: true,
+      },
       starts: 1,
     },
     {
@@ -980,6 +1012,8 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
       windowsHandoff.gonePids = gone;
       windowsHandoff.hostRunning = live;
       windowsHandoff.waitingForDemand = !live;
+      windowsHandoff.evidenceUnreadable =
+        label === "fresh runtime identity evidence unreadable";
       const statuses: number[] = [];
       await useReadinessServer(
         createServer((request, response) => {
@@ -1008,7 +1042,7 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
         throw new Error("The stdin property is missing");
       Object.defineProperty(process, "stdin", {
         value: Readable.from([
-          `start ${now + 10_000} ${now} ${stop} ${frame}\n`,
+          `start ${now + 10_000} ${now} ${stop} ${frame} ${Buffer.from(join(workHome, ".abandoned")).toString("base64url")}\n`,
         ]),
       });
       try {
@@ -1682,7 +1716,8 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
       expect(run.calls.calls).toEqual(["stopForRestart"]);
       expect(run.result).toMatchObject({
         helperArmed: true,
-        serviceRestore: "restore-failed",
+        serviceRestore: null,
+        swapCommitted: fault === "commit-blocked" ? null : false,
       });
       expect(run.writeCalls[1]?.path).toMatch(/\.committed$/u);
     },
