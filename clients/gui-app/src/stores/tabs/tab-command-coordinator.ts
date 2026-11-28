@@ -28,6 +28,7 @@ import {
   isOpenLandingDraft,
   resumableLandingDraftId,
   useLandingDraftStore,
+  closeOrDeleteSubmittedLandingDraft,
 } from "@/stores/home/landing-draft-store";
 import { isMobileApp } from "@/lib/mobile-app";
 import { landingDraftIsRetired } from "@/lib/drafts/landing-draft-retirement";
@@ -1428,7 +1429,7 @@ export class TabCommandCoordinator {
       },
       applyRemovals: () => {
         this.applyExpectedSourceMutation(() => {
-          useLandingDraftStore.getState().deleteDraft(command.draftId);
+          closeOrDeleteSubmittedLandingDraft(command.draftId);
         });
       },
     });

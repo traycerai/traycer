@@ -91,6 +91,7 @@ import {
 } from "@/stores/workspace/workspace-folders-store";
 import {
   isOpenLandingDraft,
+  landingDraftAnnotations,
   landingRowIsForeign,
   useLandingDraftNamedHostId,
   useLandingDraftStore,
@@ -554,8 +555,9 @@ export function LandingComposer(props: LandingComposerProps) {
     (state) =>
       contentIsSubmittable(runtimeState.content) ||
       Boolean(
-        state.drafts.find((draft) => draft.id === draftId)
-          ?.wholeDraftAnnotations?.length,
+        landingDraftAnnotations(
+          state.drafts.find((draft) => draft.id === draftId),
+        )?.length,
       ),
   );
   const draftWorkspace = useLandingDraftStore((state) => {
@@ -1020,9 +1022,11 @@ export function LandingComposer(props: LandingComposerProps) {
       const account = signedInUserId();
       const settings = pickedRunSettings(toolbarStore.getState());
       const settingsKey = JSON.stringify(settings);
-      const browserAnnotations = useLandingDraftStore
-        .getState()
-        .drafts.find((draft) => draft.id === draftId)?.wholeDraftAnnotations;
+      const browserAnnotations = landingDraftAnnotations(
+        useLandingDraftStore
+          .getState()
+          .drafts.find((draft) => draft.id === draftId),
+      );
       const generation = captureComposerSubmitGeneration(
         () => runtimeStore.getState().contentRevision,
       );
@@ -1034,10 +1038,11 @@ export function LandingComposer(props: LandingComposerProps) {
         stagedSubmitAttempt.current === attempt &&
         readStagedSandbox(composerSurfaceKey) === staged &&
         signedInUserId() === account &&
-        useLandingDraftStore
-          .getState()
-          .drafts.find((draft) => draft.id === draftId)
-          ?.wholeDraftAnnotations === browserAnnotations &&
+        landingDraftAnnotations(
+          useLandingDraftStore
+            .getState()
+            .drafts.find((draft) => draft.id === draftId),
+        ) === browserAnnotations &&
         JSON.stringify(pickedRunSettings(toolbarStore.getState())) ===
           settingsKey &&
         generation.stillCurrent();
@@ -1083,6 +1088,7 @@ export function LandingComposer(props: LandingComposerProps) {
                 settings,
                 now: Date.now(),
                 browserAnnotations,
+                sourceDraftId: draftId ?? createdUnboundDraftIdRef.current,
               }),
           });
           raiseHostNotice(
@@ -1148,9 +1154,11 @@ export function LandingComposer(props: LandingComposerProps) {
       // draft and strand the one already holding the user's content.
       draftId: draftId ?? createdUnboundDraftIdRef.current,
       editor: editorRef.current,
-      browserAnnotations: useLandingDraftStore
-        .getState()
-        .drafts.find((draft) => draft.id === draftId)?.wholeDraftAnnotations,
+      browserAnnotations: landingDraftAnnotations(
+        useLandingDraftStore
+          .getState()
+          .drafts.find((draft) => draft.id === draftId),
+      ),
       slashCatalog: pickerStore.getState().knownSlashCommands,
       toolbar: {
         selection: toolbar.selection,
@@ -1527,9 +1535,8 @@ export function LandingComposerAttachmentStrip(props: {
     props.hostId,
   );
   const { draftId } = props;
-  const annotations = useLandingDraftStore(
-    (state) =>
-      state.drafts.find((draft) => draft.id === draftId)?.wholeDraftAnnotations,
+  const annotations = useLandingDraftStore((state) =>
+    landingDraftAnnotations(state.drafts.find((draft) => draft.id === draftId)),
   );
   const onRemoveAnnotation =
     typeof draftId !== "string" || props.annotationsReadOnly

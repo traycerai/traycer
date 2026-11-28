@@ -13,9 +13,27 @@ import {
 } from "@/lib/sandboxes/__tests__/pending-send-fixtures";
 import type { PendingSandboxSend } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { NO_DRAFT_IMAGE_BYTE_TARGET } from "@/lib/drafts/resolve-draft-image-bytes";
-import { saveUnsentWholeDraft } from "../save-unsent-whole-draft";
+import { serializeDraftHeadDocumentV11 } from "@traycer/protocol/persistence/draft/document";
+import {
+  utf8Bytes,
+  webCryptoSha256Hex,
+} from "@traycer-clients/shared/cloud-chat/bytes";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  emptyLandingDraftWorkspaceSnapshot,
+  useLandingDraftStore,
+} from "@/stores/home/landing-draft-store";
+import {
+  readSavedWholeDraft,
+  retireSentWholeDraft,
+  saveUnsentWholeDraft,
+} from "../save-unsent-whole-draft";
 
 const boundary = vi.hoisted(() => ({
+  /** Hashes the fake pool currently holds; the real invalidation empties it. */
+  confirmed: new Set<string>(),
+  uploaded: new Array<ReadonlyArray<string>>(),
   request: vi.fn<(method: string, payload: unknown) => Promise<unknown>>(),
   putDraftBlobs:
     vi.fn<
@@ -48,8 +66,15 @@ vi.mock("@/lib/host/binding-host-client", () => ({
 vi.mock("@/lib/host/read-negotiated-method-version", () => ({
   readNegotiatedMethodVersion: () => ({ major: 1, minor: 0 }),
 }));
-vi.mock("@/lib/drafts/draft-blob-transport", () => ({
+vi.mock("@/lib/drafts/draft-blob-transport", async (load) => ({
+  ...(await load<typeof import("@/lib/drafts/draft-blob-transport")>()),
   putDraftBlobs: boundary.putDraftBlobs,
+  invalidateDraftBlobConfirmations: (
+    _host: string,
+    hashes: ReadonlyArray<string>,
+  ) => {
+    for (const hash of hashes) boundary.confirmed.delete(hash);
+  },
 }));
 vi.mock("@/lib/composer/landing-image-store", async (load) => ({
   ...(await load<typeof import("@/lib/composer/landing-image-store")>()),
@@ -183,6 +208,8 @@ function save(send: PendingSandboxSend, stillCurrent: () => boolean) {
 
 beforeEach(() => {
   boundary.request.mockReset();
+  boundary.confirmed.clear();
+  boundary.uploaded.length = 0;
   boundary.request.mockResolvedValue({ kind: "saved", draftId: DRAFT_ID });
   boundary.putDraftBlobs.mockReset();
   boundary.putDraftBlobs.mockImplementation((_host, _client, hashes) =>
@@ -246,6 +273,34 @@ describe("saveUnsentWholeDraft", () => {
     expect(boundary.request).not.toHaveBeenCalled();
   });
 
+  it("a stale-authority refusal of the save is not a save and drops the pool's blob confirmations, so a retry uploads the same hashes again", async () => {
+    boundary.putDraftBlobs.mockImplementation((_host, _client, hashes) => {
+      const missing = hashes.filter((hash) => !boundary.confirmed.has(hash));
+      if (missing.length > 0) boundary.uploaded.push(missing);
+      for (const hash of hashes) boundary.confirmed.add(hash);
+      return Promise.resolve(hashes);
+    });
+    boundary.request.mockRejectedValueOnce(
+      new HostRpcError({
+        code: "CHAT_PUBLICATION_STALE_AUTHORITY",
+        message: "stale authority",
+        requestId: "req-stale",
+        method: "drafts.mutateWhole",
+        fatalDetails: null,
+      }),
+    );
+
+    expect(await save(MESSAGE_SEND, always)).toBeNull();
+    const hashes = [INLINE_HASH, SHARED_HASH, CROP_HASH];
+    expect(boundary.uploaded).toEqual([hashes]);
+    expect(boundary.confirmed.size).toBe(0);
+
+    const head = await save(MESSAGE_SEND, always);
+    expect(boundary.uploaded).toEqual([hashes, hashes]);
+    expect(head?.portable.blobHashes).toEqual(hashes);
+    expect(boundary.request).toHaveBeenCalledTimes(2);
+  });
+
   it("an acknowledgement for anything but this saved draft is not a save", async () => {
     boundary.request.mockResolvedValue({ kind: "saved", draftId: "other" });
     expect(await save(MESSAGE_SEND, always)).toBeNull();
@@ -263,5 +318,124 @@ describe("saveUnsentWholeDraft", () => {
 
     expect(await save(MESSAGE_SEND, () => current)).toBeNull();
     expect(boundary.request).not.toHaveBeenCalled();
+  });
+});
+
+describe("readSavedWholeDraft", () => {
+  const SCOPE = "scope-1";
+  const OPERATION_ID = "00000000-0000-4000-8000-000000000001";
+
+  async function committedHead(): Promise<string> {
+    const head = await save(MESSAGE_SEND, always);
+    if (head === null) throw new Error("expected a saved head");
+    return serializeDraftHeadDocumentV11({
+      ...head,
+      operationId: OPERATION_ID,
+      requestSha256: "d".repeat(64),
+    });
+  }
+
+  function answer(resolve: unknown): void {
+    boundary.request.mockImplementation((method) =>
+      Promise.resolve(method === "drafts.list" ? { scopeId: SCOPE } : resolve),
+    );
+  }
+
+  it("reads the committed head through the own pool scope, verified by its digest", async () => {
+    const head = await committedHead();
+    boundary.request.mockClear();
+    answer({
+      outcome: { status: "ok", head, headSha256: await digest(head) },
+    });
+
+    const read = await readSavedWholeDraft(DRAFT_ID, "user-read-ok", always);
+
+    expect(read?.portable.annotations.map((a) => a.annotationId)).toEqual([
+      "ann-canvas",
+      "ann-browser",
+    ]);
+    expect(boundary.request.mock.calls).toEqual([
+      ["drafts.list", {}],
+      [
+        "epic.resolveCloudChatHead",
+        { taskId: SCOPE, chatId: DRAFT_ID, ownerUserId: "user-read-ok" },
+      ],
+    ]);
+  });
+
+  it("answers null only for an exact absence, and undefined for anything inconclusive", async () => {
+    const head = await committedHead();
+    answer({ outcome: { status: "missing" } });
+    expect(
+      await readSavedWholeDraft(DRAFT_ID, "user-read-missing", always),
+    ).toBeNull();
+
+    answer({ outcome: { status: "ok", head, headSha256: "0".repeat(64) } });
+    expect(
+      await readSavedWholeDraft(DRAFT_ID, "user-read-bad-digest", always),
+    ).toBeUndefined();
+
+    boundary.request.mockRejectedValue(new Error("offline"));
+    expect(
+      await readSavedWholeDraft(DRAFT_ID, "user-read-offline", always),
+    ).toBeUndefined();
+  });
+});
+
+async function digest(text: string): Promise<string> {
+  return webCryptoSha256Hex(utf8Bytes(text));
+}
+
+describe("retireSentWholeDraft", () => {
+  const SOURCE_ID = "source-draft";
+  const USER = "user-retire";
+
+  function installSource(draftId: string) {
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: USER, userName: "U", email: "u@example.com" },
+        { userId: USER, username: "U" },
+        [],
+      );
+    useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+    useLandingDraftStore.getState().installLandingDraft({
+      id: draftId,
+      wholeDraftAnnotations: [],
+      content: CONTENT,
+      selection: null,
+      lastTouchedAt: 1,
+      settings: null,
+      composerMode: "chat",
+      workspace: emptyLandingDraftWorkspaceSnapshot(),
+      closed: true,
+      returnedSandbox: null,
+      namedHostId: null,
+      durability: "saved",
+    });
+  }
+
+  it("deletes the captured row on a matching receipt, but a later local edit suppresses the delete", async () => {
+    boundary.request.mockResolvedValue({ kind: "deleted", draftId: SOURCE_ID });
+    const submission = {
+      content: CONTENT,
+      settings: PICKED_SETTINGS,
+      userId: USER,
+    };
+    installSource(SOURCE_ID);
+    await retireSentWholeDraft(SOURCE_ID, submission);
+    expect(boundary.request).toHaveBeenCalledExactlyOnceWith(
+      "drafts.mutateWhole",
+      { kind: "delete", draftId: SOURCE_ID },
+    );
+    expect(useLandingDraftStore.getState().drafts).toEqual([]);
+
+    boundary.request.mockClear();
+    const editedId = "edited-draft";
+    installSource(editedId);
+    useLandingDraftStore.getState().setDraftComposerMode(editedId, "terminal");
+    await retireSentWholeDraft(editedId, submission);
+    expect(boundary.request).not.toHaveBeenCalled();
+    expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
   });
 });

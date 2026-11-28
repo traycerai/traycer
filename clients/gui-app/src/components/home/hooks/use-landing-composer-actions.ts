@@ -65,6 +65,7 @@ import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
 import {
   useLandingDraftStore,
+  closeOrDeleteSubmittedLandingDraft,
   type LandingDraftWorkspaceSnapshot,
 } from "@/stores/home/landing-draft-store";
 import {
@@ -104,6 +105,10 @@ import {
 import { containsFileAttachments } from "@/lib/composer/file-attachments";
 import { appendAnnotationCropReferences } from "@/lib/composer/annotation-image-atoms";
 import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
+import {
+  wholeLandingDraft,
+  retireSentWholeDraft,
+} from "@/lib/drafts/save-unsent-whole-draft";
 import { sessionImageBytes } from "@/lib/composer/landing-image-store";
 import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
 import { openLandingDraft } from "@/lib/drafts/open-landing-draft";
@@ -841,6 +846,10 @@ export function useLandingComposerActions(
         .getState()
         .setEpicRunSettings(epicId, activeHostId, lastRunSettings, now);
       rememberLandingWorktreeIntent(workspaceContext, epicId, now);
+      const sourceWholeDraftId = wholeDraftSubmission(
+        attempt.draftId,
+        args.browserAnnotations,
+      );
       useInitialChatHandoffStore.getState().register({
         hostId: activeHostId,
         userId,
@@ -848,6 +857,7 @@ export function useLandingComposerActions(
         chatId,
         content: handoffContent,
         browserAnnotations: args.browserAnnotations,
+        sourceWholeDraftId,
         settings,
         worktreeIntent: workspaceContext.worktreeIntent,
         placement: null,
@@ -922,7 +932,7 @@ export function useLandingComposerActions(
         // the sent text stays as a draft alongside the new epic.
         placeCreatedEpicInBackground(epicId, epicTitle);
         if (settlement.kind === "closed") {
-          useLandingDraftStore.getState().deleteDraft(attempt.draftId);
+          closeOrDeleteSubmittedLandingDraft(attempt.draftId);
         }
       };
 
@@ -1026,12 +1036,19 @@ export function useLandingComposerActions(
           // re-send. (Re-sends are harmless - the host dedupes on
           // `messageId` - but skipping the round-trip is cheaper.)
           if (response.initialTurnStarted === true) {
-            useInitialChatHandoffStore
+            const started = useInitialChatHandoffStore
               .getState()
               .markInitialTurnStarted(
                 { hostId: activeHostId, userId, epicId },
                 chatId,
               );
+            if (started)
+              void retireSentWholeDraft(sourceWholeDraftId, {
+                content: attempt.content,
+                settings,
+                userId,
+                browserAnnotations: args.browserAnnotations,
+              });
           }
           placeLandedEpic(settlement);
           draftRuntimeRegistry.complete(attempt);
@@ -1704,7 +1721,8 @@ export function useLandingComposerActions(
         );
         if (!version || version.major !== 1 || version.minor < 5) {
           return {
-            message: "Update the host to start a chat with this capture.",
+            message:
+              "This needs a newer Traycer host. Update the host to continue.",
           };
         }
       }
@@ -2002,7 +2020,7 @@ function openEpicBeforeCreate(
     // A draft with no tab to replace is still the message being sent: the
     // replace is what removes a draft's row, so it is removed here.
     if (input.draftId !== null) {
-      useLandingDraftStore.getState().deleteDraft(input.draftId);
+      closeOrDeleteSubmittedLandingDraft(input.draftId);
     }
     activateTabIntent(
       navigate,
@@ -2092,7 +2110,7 @@ function placeCreatedDraftEpic(input: {
   if (replaced === null) {
     // No tab of the draft was there to replace, so nothing removed its row:
     // what it holds is the text just sent, and it must not stay a draft.
-    useLandingDraftStore.getState().deleteDraft(input.draftId);
+    closeOrDeleteSubmittedLandingDraft(input.draftId);
     input.editor.clear();
     useEpicCanvasStore
       .getState()
@@ -2111,6 +2129,14 @@ function placeCreatedEpicInBackground(epicId: string, epicTitle: string): void {
   scheduleLandingImageReconcile();
   useEpicCanvasStore.getState().openEpicTabInBackground(epicId, epicTitle);
   toast.info("Epic created in the background.");
+}
+
+function wholeDraftSubmission(
+  draftId: string,
+  annotations: ReadonlyArray<BrowserAnnotationRecord> | undefined,
+) {
+  const row = wholeLandingDraft(draftId);
+  return row?.wholeDraftAnnotations === annotations ? row?.id : undefined;
 }
 
 function placementOwnedFocusedRoute(

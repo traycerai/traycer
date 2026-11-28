@@ -357,6 +357,7 @@ export const RPC_ERROR_CODES = [
   // The cloud copy is no longer the one the host dropped: the chat was
   // continued on another host, whose copy is the latest.
   "CHAT_EVICTED_HEAD_MOVED",
+  "CHAT_PUBLICATION_STALE_AUTHORITY",
 ] as const;
 
 export type RpcErrorCode = (typeof RPC_ERROR_CODES)[number];

@@ -33,6 +33,7 @@ export interface InitialChatHandoff {
   readonly status: InitialChatHandoffStatus;
   readonly content: JsonContent;
   readonly browserAnnotations?: ReadonlyArray<BrowserAnnotationRecord>;
+  readonly sourceWholeDraftId?: string;
   readonly settings: ChatRunSettings;
   /**
    * Resolved worktree intent captured at landing-composer Send time. The
@@ -65,6 +66,7 @@ export interface RegisterInitialChatHandoffInput extends InitialChatHandoffScope
   readonly chatId: string;
   readonly content: JsonContent;
   readonly browserAnnotations?: ReadonlyArray<BrowserAnnotationRecord>;
+  readonly sourceWholeDraftId?: string;
   readonly settings: ChatRunSettings;
   readonly worktreeIntent: WorktreeIntent | null;
   readonly placement: ExplicitTilePlacement | null;
@@ -256,6 +258,9 @@ export const useInitialChatHandoffStore = create<InitialChatHandoffStore>()(
               ...(input.browserAnnotations?.length
                 ? { browserAnnotations: input.browserAnnotations }
                 : {}),
+              ...(input.sourceWholeDraftId === undefined
+                ? {}
+                : { sourceWholeDraftId: input.sourceWholeDraftId }),
               settings: input.settings,
               worktreeIntent: input.worktreeIntent,
               placement: input.placement,
@@ -317,6 +322,7 @@ export const useInitialChatHandoffStore = create<InitialChatHandoffStore>()(
           return {
             ...handoff,
             status: "sending",
+            sourceWholeDraftId: undefined,
             failureReason: null,
             updatedAt: Date.now(),
           };

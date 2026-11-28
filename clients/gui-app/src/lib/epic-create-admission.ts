@@ -1,5 +1,6 @@
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import type { EpicCreateOwner } from "@traycer/protocol/host/epic/unary-schemas";
+import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
 import {
   HostMethodVersionUnsatisfiedError,
   HostRpcError,
@@ -90,6 +91,29 @@ export function epicCreateFloor(input: {
   };
 }
 
+const CREATE_ANNOTATIONS_MINOR = 5;
+
+export function annotatedCreateFloor(
+  method: "epic.create" | "epic.createChat",
+  message:
+    | { readonly browserAnnotations?: ReadonlyArray<BrowserAnnotationRecord> }
+    | null
+    | undefined,
+): RequiredHostMethodVersion | null {
+  return message?.browserAnnotations?.length
+    ? { method, version: { major: 1, minor: CREATE_ANNOTATIONS_MINOR } }
+    : null;
+}
+
+export function isAnnotatedCreateFloorRefusal(error: unknown): boolean {
+  return (
+    error instanceof HostMethodVersionUnsatisfiedError &&
+    (error.requirement.method === "epic.create" ||
+      error.requirement.method === "epic.createChat") &&
+    error.requirement.version.minor === CREATE_ANNOTATIONS_MINOR
+  );
+}
+
 /**
  * What a rejected team create says, or `null` to leave the error to the
  * generic toast: the transport's `@1.3` floor refusal, and the cloud's
@@ -101,7 +125,7 @@ export function teamCreateRejectionMessage(
 ): string | null {
   if (error instanceof HostMethodVersionUnsatisfiedError) {
     return error.requirement.method === "epic.create" &&
-      error.requirement.version.minor >= EPIC_CREATE_TEAM_OWNER_MINOR
+      error.requirement.version.minor === EPIC_CREATE_TEAM_OWNER_MINOR
       ? TEAM_CREATE_HOST_TOO_OLD
       : null;
   }

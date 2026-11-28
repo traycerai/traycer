@@ -86,9 +86,9 @@ export function persistWindowCanvasAnnotations(
       { readonly browserAnnotations: ReadonlyArray<BrowserAnnotationRecord> }
     >
   >,
-): void {
+): boolean {
   const target = windowStorage();
-  if (target === null) return;
+  if (target === null) return false;
   const entries = Object.entries(drafts).flatMap(([chatId, draft]) => {
     const records =
       draft === undefined ? [] : canvasAnnotations(draft.browserAnnotations);
@@ -104,8 +104,10 @@ export function persistWindowCanvasAnnotations(
     if (isMobileApp()) {
       window.sessionStorage.removeItem(composerCanvasAnnotationsKey("session"));
     }
+    return true;
   } catch {
     // Storage may be unavailable or full; the in-memory draft remains sendable.
+    return false;
   }
 }
 

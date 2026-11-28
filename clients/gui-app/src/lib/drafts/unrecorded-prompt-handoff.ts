@@ -206,10 +206,10 @@ export async function buildUnrecordedPromptHandoff(args: {
   /**
    * The prompt's annotation sidecar, or `[]` for a source that has none.
    * Required rather than defaulted, so a new handoff site has to decide - the
-   * draft this builds is the LAST copy of the text, and it cannot carry the
-   * sidecar at all.
+   * draft this builds is the last copy of the text.
    */
   readonly browserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
+  readonly keepBrowserAnnotations?: boolean;
   readonly reason: string;
   /**
    * Whether `reason` came from the removed-account code, which puts the
@@ -269,12 +269,17 @@ export async function buildUnrecordedPromptHandoff(args: {
       return { draftId, readsSettled: Promise.resolve() };
     }
     try {
+      const localAnnotations =
+        args.keepBrowserAnnotations === true
+          ? args.browserAnnotations
+          : undefined;
       const draftId = installHandoffDraft({
         recovery: args.recovery,
         content: raced.result.content,
         stillCurrent: args.stillCurrent,
         returnedSandbox: args.returnedSandbox,
         durability: args.durability,
+        localAnnotations,
         qualification: teardownQualification({
           reason: args.reason,
           reasonIsRemovedProfile: args.reasonIsRemovedProfile,
@@ -283,13 +288,8 @@ export async function buildUnrecordedPromptHandoff(args: {
           // the landing partition above.
           droppedImages: raced.droppedInline,
           droppedImageCause: raced.droppedInline > 0 ? "unsupported" : null,
-          // The sidecar is dropped unconditionally: a landing draft has no
-          // annotation sidecar to carry it in (M02). A record's comment, the
-          // page it was taken on and which elements were marked are none of
-          // them in the document text, and a draft that looks complete is how
-          // the user finds that out far too late, if at all - so the count is
-          // stated instead.
-          droppedAnnotations: args.browserAnnotations.length,
+          droppedAnnotations:
+            localAnnotations === undefined ? args.browserAnnotations.length : 0,
         }),
       });
       return { draftId, readsSettled: Promise.resolve() };
@@ -434,6 +434,7 @@ export interface TextOnlyPromptHandoffInput {
    * draft owns no sidecar - but the COUNT is what lets the draft say so
    * instead of looking complete.
    */
+  readonly keepBrowserAnnotations?: boolean;
   readonly browserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
   readonly reason: string;
   readonly reasonIsRemovedProfile: boolean;
@@ -476,6 +477,10 @@ function installTextOnly(
         stillCurrent: args.stillCurrent,
         returnedSandbox: args.returnedSandbox,
         durability: args.durability,
+        localAnnotations:
+          args.keepBrowserAnnotations === true
+            ? args.browserAnnotations
+            : undefined,
         qualification: teardownQualification({
           reason: args.reason,
           reasonIsRemovedProfile: args.reasonIsRemovedProfile,
@@ -483,7 +488,10 @@ function installTextOnly(
           droppedImageCause: args.cause,
           // EVERY record, not a subset: this path carries no images at all,
           // so there is nothing for a record to name.
-          droppedAnnotations: args.browserAnnotations.length,
+          droppedAnnotations:
+            args.keepBrowserAnnotations === true
+              ? 0
+              : args.browserAnnotations.length,
         }),
       }),
     );
@@ -509,6 +517,7 @@ function installHandoffDraft(args: {
   readonly stillCurrent: () => boolean;
   readonly returnedSandbox: ReturnedSandbox | null;
   readonly durability: LandingDraftDurability;
+  readonly localAnnotations?: ReadonlyArray<BrowserAnnotationRecord>;
 }): string | null {
   // SYNCHRONOUS with the install, with no await between them. The fence is
   // about WHO this text belongs to, and the image reads above it are long
@@ -519,6 +528,7 @@ function installHandoffDraft(args: {
   const draftId = args.recovery?.draftId ?? mintDraftId();
   const installed = useLandingDraftStore.getState().installLandingDraft({
     id: draftId,
+    localAnnotations: args.localAnnotations,
     content: appendPromptQualification(args.content, args.qualification),
     selection: null,
     lastTouchedAt: Date.now(),

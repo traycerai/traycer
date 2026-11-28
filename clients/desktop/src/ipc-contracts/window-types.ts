@@ -78,6 +78,7 @@ export interface PerWindowStateUpdateAcknowledgement {
 
 export interface PerWindowLandingDraft {
   readonly id: string;
+  readonly localAnnotations?: JsonValue;
   /**
    * Full editor JSON (hash-only image nodes, no base64), carried opaquely as
    * `JsonValue`. The renderer validates the doc shape on parse.

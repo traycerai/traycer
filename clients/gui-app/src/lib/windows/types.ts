@@ -71,6 +71,7 @@ export interface DesktopPerWindowStateUpdateAcknowledgement {
 
 export interface DesktopPerWindowLandingDraft {
   readonly id: string;
+  readonly localAnnotations?: DesktopJsonValue;
   /**
    * Full editor JSON (hash-only image nodes, no base64). Crosses the IPC
    * boundary as opaque `DesktopJsonValue`; validated on parse, not via casts.

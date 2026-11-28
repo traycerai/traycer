@@ -33,6 +33,7 @@ import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import {
   EPIC_CREATE_TEAM_OWNER_MINOR,
+  annotatedCreateFloor,
   epicCreateFloor,
   teamCreateRejectionMessage,
 } from "@/lib/epic-create-admission";
@@ -144,6 +145,7 @@ export function useEpicCreateForClient(
       return variables;
     },
     requiredHostMethodVersion: (variables) =>
+      annotatedCreateFloor("epic.create", variables.chat?.initialMessage) ??
       createFloorFor(variables.owner ?? null),
     // The epic this request is MINTING, which makes a replay of the frame the
     // same create rather than a second one. Only stable because hash-only

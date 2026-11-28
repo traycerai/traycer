@@ -22,6 +22,7 @@ import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budge
 import { containsPendingInlineImageNode } from "@/lib/composer/image-atoms";
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 import { stripBase64ImageNodesWithSelection } from "@/lib/composer/strip-base64-image-nodes";
+import { isMobileApp } from "@/lib/mobile-app";
 import {
   persistWindowCanvasAnnotations,
   readWindowCanvasAnnotations,
@@ -745,6 +746,28 @@ export function readComposerDraftSnapshot(
 ): DraftState {
   if (chatId === undefined) return EMPTY_COMPOSER_DRAFT;
   return ensureDraft(useComposerDraftStore.getState().drafts, chatId);
+}
+
+/** Confirm the phone sidecar before the existing composer writer installs the return. */
+export function persistReturnedCanvasAnnotations(
+  chatId: string,
+  records: ReadonlyArray<BrowserAnnotationRecord>,
+): boolean {
+  if (
+    !isMobileApp() ||
+    !records.some((record) => record.source.kind === "canvas")
+  )
+    return true;
+  const { drafts } = useComposerDraftStore.getState();
+  return persistWindowCanvasAnnotations({
+    ...drafts,
+    [chatId]: {
+      browserAnnotations: mergeBrowserAnnotationRecords(
+        ensureDraft(drafts, chatId).browserAnnotations,
+        records,
+      ),
+    },
+  });
 }
 
 function touchLocalComposerDraft(

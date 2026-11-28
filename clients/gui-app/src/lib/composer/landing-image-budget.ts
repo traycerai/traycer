@@ -281,7 +281,7 @@ export function landingLiveImageRootHashes(): Set<string> {
   for (const draft of currentDrafts()) {
     for (const hash of imageHashesOf(draft.content)) roots.add(hash);
     for (const hash of collectAnnotationImageHashes(
-      draft.wholeDraftAnnotations ?? [],
+      draft.wholeDraftAnnotations ?? draft.localAnnotations ?? [],
     ))
       roots.add(hash);
   }

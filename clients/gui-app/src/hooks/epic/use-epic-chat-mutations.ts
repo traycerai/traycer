@@ -25,6 +25,7 @@ import {
   toHostRpcError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useHostMutation } from "@/hooks/host/use-host-query";
+import { annotatedCreateFloor } from "@/lib/epic-create-admission";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import {
@@ -299,6 +300,8 @@ function useCreateChatForClient(
   >({
     client,
     method: "epic.createChat",
+    requiredHostMethodVersion: (params) =>
+      annotatedCreateFloor("epic.createChat", params.initialMessage),
     mapVariables: (params) => {
       if (
         ownerFence !== null &&

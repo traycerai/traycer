@@ -119,8 +119,10 @@ export function parseLandingDraft(
     return null;
   }
   const returnedSandbox = parseJsonValue(obj.returnedSandbox) ?? null;
+  const localAnnotations = parseJsonValue(obj.localAnnotations);
   return {
     id: obj.id,
+    ...(Array.isArray(localAnnotations) ? { localAnnotations } : {}),
     content,
     selection: parseJsonValue(obj.selection) ?? null,
     lastTouchedAt:

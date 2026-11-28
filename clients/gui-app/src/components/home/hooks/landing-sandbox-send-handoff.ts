@@ -11,6 +11,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { readStagedSandbox } from "@/stores/composer/staged-sandbox-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
+import { wholeLandingDraft } from "@/lib/drafts/save-unsent-whole-draft";
 import {
   pendingSendSurfaceKey,
   usePendingSandboxSendStore,
@@ -39,14 +40,17 @@ export interface LandingSandboxSendHandoff {
 export function handLandingSandboxSend(
   input: Omit<PendingSandboxSendInput, "request" | "epicConfirmed"> & {
     readonly browserAnnotations?: ReadonlyArray<BrowserAnnotationRecord>;
+    readonly sourceDraftId?: string | null;
   },
 ): LandingSandboxSendHandoff | null {
+  const sourceWholeDraftId = wholeLandingDraft(input.sourceDraftId)?.id;
   const id = handPendingSandboxSend({
     ...input,
     request: {
       kind: "chat",
       parentId: null,
       placement: null,
+      ...(sourceWholeDraftId === undefined ? {} : { sourceWholeDraftId }),
       ...(input.browserAnnotations?.length
         ? { browserAnnotations: input.browserAnnotations }
         : {}),

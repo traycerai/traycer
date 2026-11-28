@@ -85,7 +85,10 @@ import {
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
 import { isEmptyLandingDraftContent } from "@/lib/composer/landing-draft-empty";
 import { runSettingsFromDraftEcho } from "@/lib/drafts/draft-write-codec";
-import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
+import {
+  parseBrowserAnnotationRecords,
+  type BrowserAnnotationRecord,
+} from "@/lib/browser-view/annotation/browser-annotation-record";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
@@ -99,6 +102,7 @@ export interface LandingDraftTab {
   readonly id: string;
   /** Present only on the app's projection of a whole cloud draft, even if empty. */
   readonly wholeDraftAnnotations?: ReadonlyArray<BrowserAnnotationRecord>;
+  readonly localAnnotations?: ReadonlyArray<BrowserAnnotationRecord>;
   /**
    * Full editor JSON - the persisted source of truth for the draft. Replaces
    * the former lossy `prompt: string`; the tab title is derived from it and the
@@ -199,6 +203,7 @@ export type LandingDraftDurability = "saved" | "in-memory";
 export interface InstallLandingDraftInput {
   readonly id: string;
   readonly wholeDraftAnnotations?: ReadonlyArray<BrowserAnnotationRecord>;
+  readonly localAnnotations?: ReadonlyArray<BrowserAnnotationRecord>;
   readonly content: JsonContent;
   readonly selection: DraftSelection | null;
   readonly lastTouchedAt: number;
@@ -492,6 +497,10 @@ function readProjectedDrafts(
     return [
       {
         id: draft.id,
+        localAnnotations:
+          draft.localAnnotations === undefined
+            ? undefined
+            : parseBrowserAnnotationRecords(draft.localAnnotations),
         content,
         selection: parseLandingDraftSelection(draft.selection),
         lastTouchedAt: parseLandingDraftLastTouchedAt(draft.lastTouchedAt),
@@ -585,6 +594,10 @@ function parsePersistedLandingDrafts(
       return [
         {
           id,
+          localAnnotations:
+            raw.localAnnotations === undefined
+              ? undefined
+              : parseBrowserAnnotationRecords(raw.localAnnotations),
           content,
           selection: parseLandingDraftSelection(raw.selection),
           lastTouchedAt: parseLandingDraftLastTouchedAt(raw.lastTouchedAt),
@@ -689,9 +702,23 @@ function destroyLandingDraft(
  */
 export function isLandingDraftEmpty(draft: LandingDraftTab): boolean {
   return (
-    !draft.wholeDraftAnnotations?.length &&
+    !landingDraftAnnotations(draft)?.length &&
     isEmptyLandingDraftContent(draft.content)
   );
+}
+
+export function closeOrDeleteSubmittedLandingDraft(draftId: string): void {
+  const drafts = useLandingDraftStore.getState();
+  if (
+    drafts.drafts.find((draft) => draft.id === draftId)
+      ?.wholeDraftAnnotations !== undefined
+  )
+    drafts.closeDraft(draftId);
+  else drafts.deleteDraft(draftId);
+}
+
+export function landingDraftAnnotations(draft: LandingDraftTab | undefined) {
+  return draft?.wholeDraftAnnotations ?? draft?.localAnnotations;
 }
 
 /**
@@ -833,6 +860,7 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
         const next: LandingDraftTab = {
           id: nextId,
           content: source.content,
+          localAnnotations: source.localAnnotations,
           selection: source.selection,
           lastTouchedAt: Date.now(),
           settings: copyChatRunSettings(source.settings),
@@ -868,6 +896,7 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
         if (get().drafts.some((draft) => draft.id === input.id)) return false;
         const next: LandingDraftTab = {
           id: input.id,
+          localAnnotations: input.localAnnotations,
           ...(input.wholeDraftAnnotations === undefined
             ? {}
             : { wholeDraftAnnotations: input.wholeDraftAnnotations }),
@@ -918,7 +947,7 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
 
       removeWholeDraftAnnotation: (draftId, annotationId) => {
         const draft = get().drafts.find((entry) => entry.id === draftId);
-        const records = draft?.wholeDraftAnnotations;
+        const records = landingDraftAnnotations(draft);
         if (
           records === undefined ||
           !records.some((record) => record.annotationId === annotationId)
@@ -929,7 +958,9 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
             entry.id === draftId
               ? {
                   ...entry,
-                  wholeDraftAnnotations: records.filter(
+                  [entry.wholeDraftAnnotations === undefined
+                    ? "localAnnotations"
+                    : "wholeDraftAnnotations"]: records.filter(
                     (record) => record.annotationId !== annotationId,
                   ),
                   lastTouchedAt: Date.now(),
@@ -962,7 +993,9 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
         // A row this host does not own closes as local view state only: the
         // owner keeps its own tab state, and dirtying a foreign row would
         // leave an edit bound to a host session that never writes it.
-        const local = landingRowIsForeign(closing);
+        const local =
+          closing.wholeDraftAnnotations !== undefined ||
+          landingRowIsForeign(closing);
         set((state) => ({
           drafts: state.drafts.map((d) =>
             d.id === id
@@ -1010,7 +1043,9 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
         // Reopening a replica is local view state, like closing one: looking
         // at a draft another host owns must not write to that host's row or
         // leave a dirty replica behind. The first substantive edit forks.
-        const local = landingRowIsForeign(draft);
+        const local =
+          draft.wholeDraftAnnotations !== undefined ||
+          landingRowIsForeign(draft);
         set((state) => ({
           drafts: state.drafts.map((d) =>
             d.id === id
@@ -1405,6 +1440,11 @@ function areLandingDraftsEqual(
     if (!sameJsonContent(left[index].content, right[index].content)) {
       return false;
     }
+    if (
+      JSON.stringify(left[index].localAnnotations) !==
+      JSON.stringify(right[index].localAnnotations)
+    )
+      return false;
     if (!sameDraftSelection(left[index].selection, right[index].selection)) {
       return false;
     }
@@ -1472,6 +1512,13 @@ function projectLandingDraftsToDesktop(state: LandingDraftStoreState): void {
   });
 }
 
+export async function persistLandingDraftDesktopProjection(): Promise<void> {
+  const bridge = desktopProjectionBridge;
+  if (bridge === null) return;
+  projectLandingDraftsToDesktop(useLandingDraftStore.getState());
+  await bridge.flush();
+}
+
 useLandingDraftStore.subscribe((state) => {
   if (desktopProjectionBridge === null || applyingDesktopProjection) return;
   projectLandingDraftsToDesktop(state);
@@ -1494,6 +1541,9 @@ function projectLandingDraftForDesktop(
   );
   return {
     id: draft.id,
+    ...(draft.localAnnotations === undefined
+      ? {}
+      : { localAnnotations: toDesktopJsonValue(draft.localAnnotations) }),
     // `content` is plain JSON already; the walker reproduces it as a
     // `DesktopJsonValue` without a cast (`JsonContent`'s `unknown`-valued attrs
     // are not structurally assignable to `DesktopJsonValue`).
@@ -2293,8 +2343,11 @@ function keptAccountFollowsDefault(
  * A host document never names the draft's machine: only a gesture on this
  * device does, and a named row is never adopted, so the row here keeps it.
  */
-function keptNamedHostId(existing: LandingDraftTab | undefined): string | null {
-  return existing?.namedHostId ?? null;
+function keptLocalLandingFields(existing: LandingDraftTab | undefined) {
+  return {
+    namedHostId: existing?.namedHostId ?? null,
+    localAnnotations: existing?.localAnnotations,
+  };
 }
 
 /**
@@ -2379,7 +2432,7 @@ export function applyLandingHostDocument(
     ),
     returnedSandbox: keptReturnedSandbox(existing),
     accountFollowsDefault: keptAccountFollowsDefault(existing, document),
-    namedHostId: keptNamedHostId(existing),
+    ...keptLocalLandingFields(existing),
   };
   useLandingDraftStore.setState((state) => {
     const without = state.drafts.filter((draft) => draft.id !== next.id);

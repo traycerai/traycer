@@ -74,6 +74,7 @@ export type PendingSandboxSendRequest =
       readonly parentId: string | null;
       readonly placement: ExplicitTilePlacement | null;
       readonly browserAnnotations?: readonly BrowserAnnotationRecord[];
+      readonly sourceWholeDraftId?: string;
     }
   /**
    * A terminal on the sandbox, in place of an agent (`Open terminal
