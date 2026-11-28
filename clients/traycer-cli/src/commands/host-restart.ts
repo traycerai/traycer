@@ -64,6 +64,7 @@ import {
   defaultWriteImpl,
   reconcilePostFinalizeMarker,
   scheduleFinalizationHelper,
+  WINDOWS_RESTART_STOP_WAIT_MS,
   type HelperArmWaitDeps,
   type ReconcileOutcome,
   type ScheduleHelperResult,
@@ -319,11 +320,11 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
                 ctx.runtime.environment,
               );
             },
-            onWindowsStopped: (result) => {
+            scheduleWindowsRestartExit: (result, waitMs) => {
               const attestation = prepared.attestation;
               if (attestation === undefined) return;
-              // An unanswered cleanup, commit or lock release cannot keep the
-              // initiating CLI alive while the detached owner waits to start.
+              // A blocked stop or cleanup must release the owner to recover.
+              clearTimeout(parentTimer);
               parentTimer = setTimeout(
                 () =>
                   pendingTimeout.resolve({
@@ -332,7 +333,7 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
                     attestation,
                     result: { ...result, serviceRestore: "restore-failed" },
                   }),
-                HELPER_ARM_WAIT_MS,
+                waitMs,
               );
             },
           },
@@ -430,7 +431,10 @@ interface RestartFinalizeArgs {
   readonly armWait: HelperArmWaitDeps;
   readonly force: boolean;
   readonly prepareWindowsStop?: () => Promise<void>;
-  readonly onWindowsStopped?: (result: RestartFinalizeResult) => void;
+  readonly scheduleWindowsRestartExit?: (
+    result: RestartFinalizeResult,
+    waitMs: number,
+  ) => void;
 }
 
 export interface RestartFinalizeResult {
@@ -652,10 +656,11 @@ async function restartWindowsWithPendingUpgrade(
     if (stopClock !== null) return;
     stopClock = performance.now();
     control.stopped(Math.floor(uptime() * 1000));
-    args.onWindowsStopped?.(result);
+    args.scheduleWindowsRestartExit?.(result, HELPER_ARM_WAIT_MS);
   };
   try {
     await control.begin();
+    args.scheduleWindowsRestartExit?.(result, WINDOWS_RESTART_STOP_WAIT_MS);
   } catch {
     control.close();
     throw new Error(WINDOWS_RESTORE_UNCONFIRMED);

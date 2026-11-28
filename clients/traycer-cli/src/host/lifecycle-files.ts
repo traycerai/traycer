@@ -61,6 +61,8 @@ import { writeTextAtomically } from "./lifecycle-probe";
  * (`readInheritableRunOwnership`), which inherits only on an `absent`
  * `supervisor.json`.
  */
+export const WINDOWS_SPAWN_WITNESS_CAPABILITY = "windows-spawn-witness-v1";
+
 export type LifecycleRecordRead<T> =
   | { readonly kind: "absent" }
   | { readonly kind: "valid"; readonly record: T }

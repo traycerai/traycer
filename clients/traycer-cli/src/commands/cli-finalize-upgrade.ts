@@ -36,6 +36,11 @@ import { publicWindowsCliDiagnostic } from "../upgrade/windows-cli-publication";
 import { readCliManifest } from "../manifest/cli-manifest";
 import { readHostInstallRecord } from "../manifest/host-install";
 import { readLiveSupervisorRun } from "../host/live-supervisor-run";
+import {
+  readSupervisorRecord,
+  WINDOWS_SPAWN_WITNESS_CAPABILITY,
+} from "../host/lifecycle-files";
+import { wouldDowngradeCli } from "../upgrade/downgrade-floor";
 import { probeHostHealth } from "../service/health-probe";
 import { getPublishedProcessIdentityVerdict } from "../store/process-identity";
 import {
@@ -49,6 +54,7 @@ interface FinalizeStartObservation {
   started: boolean;
   readonly confirmWindowsStart: boolean;
   readonly admissionDeadlineMs: number | null;
+  readonly downgradedTo: string | null;
   readonly reportStage: ((stage: "start" | "receipt") => void) | null;
 }
 
@@ -99,6 +105,8 @@ export function buildCliFinalizeUpgradeCommand(
       confirmWindowsStart: windowsHandoff,
       admissionDeadlineMs:
         workerMode?.kind === "start" ? workerMode.admissionDeadlineMs : null,
+      downgradedTo:
+        workerMode?.kind === "start" ? workerMode.downgradedTo : null,
       reportStage:
         detached.windowsWorkerReceiptId === undefined
           ? null
@@ -109,21 +117,40 @@ export function buildCliFinalizeUpgradeCommand(
             },
     };
     if (workerMode?.kind === "swap") {
-      let marker: PostFinalizeMarker | null = null;
-      await withCliUpdateContender(contenderOptions, () =>
+      const result = await withCliUpdateContender(contenderOptions, () =>
         runFinalizeUpgradeSwapWithStart(
-          {
-            environment,
-            ...detached,
-            captureReceipt: (receipt) => {
-              marker = receipt;
-            },
-          },
+          { environment, ...detached, coordinatorOwnsReceipt: true },
           null,
         ),
+      ).catch((error: unknown): FinalizeSwapOutcome =>
+        error instanceof CliError &&
+        (error.code === CLI_ERROR_CODES.CLI_LOCK_BUSY ||
+          error.code === CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE)
+          ? { status: "lock-timeout" }
+          : {
+              status: "swap-failed",
+              errorMessage: "",
+              serviceStartError: null,
+            },
       );
+      const downgradedTo =
+        result.status === "swapped" &&
+        wouldDowngradeCli({
+          installedVersion: result.previousVersion,
+          candidateVersion: result.version,
+        })
+          ? result.version
+          : null;
+      const swapStatus =
+        result.status === "swapped" ||
+        result.status === "manifest-update-failed" ||
+        result.status === "swap-failed"
+          ? result.status
+          : result.status === "staged-binary-missing"
+            ? "swap-failed"
+            : "deferred";
       return {
-        data: { marker },
+        data: { swapStatus, downgradedTo },
         human: "",
         exitCode: 0,
       };
@@ -290,7 +317,11 @@ function windowsReceiptPath(
 
 type WindowsWorkerAdmission =
   | { readonly kind: "restore" | "swap" }
-  | { readonly kind: "start"; readonly admissionDeadlineMs: number };
+  | {
+      readonly kind: "start";
+      readonly admissionDeadlineMs: number;
+      readonly downgradedTo: string | null;
+    };
 
 async function readWindowsWorkerAdmission(
   receiptId: string,
@@ -304,10 +335,14 @@ async function readWindowsWorkerAdmission(
   try {
     for await (const line of input) {
       if (line === "restore" || line === "swap") return { kind: line };
-      const deadline = /^start ([0-9]+)$/u.exec(line)?.[1];
-      const admissionDeadlineMs = Number(deadline);
+      const start = /^start ([0-9]+)(?: ([0-9A-Za-z.+-]+))?$/u.exec(line);
+      const admissionDeadlineMs = Number(start?.[1]);
       return Number.isSafeInteger(admissionDeadlineMs)
-        ? { kind: "start", admissionDeadlineMs }
+        ? {
+            kind: "start",
+            admissionDeadlineMs,
+            downgradedTo: start?.[2] ?? null,
+          }
         : null;
     }
     return null;
@@ -477,9 +512,16 @@ async function startHostWithAttempt(
   );
   if (start.confirmWindowsStart && expected !== null) {
     const expectedGeneration = encodeInstallGeneration(expected);
-    if (outcome.kind !== "started" || acknowledgedSupervisor === null) {
-      throw new Error(WINDOWS_RESTORE_UNCONFIRMED);
-    }
+    const supervisorPid =
+      outcome.kind === "supervisor-relaunching"
+        ? outcome.supervisorPid
+        : acknowledgedSupervisor;
+    if (supervisorPid === null) throw new Error(WINDOWS_RESTORE_UNCONFIRMED);
+    const downgradeVersion =
+      start.downgradedTo !== null &&
+      (await readCliManifest(environment))?.version === start.downgradedTo
+        ? start.downgradedTo
+        : null;
     const health = await probeHostHealth({
       environment,
       checkProcessAlive: null,
@@ -490,30 +532,52 @@ async function startHostWithAttempt(
         );
         if (
           startedMicros === null ||
-          startedMicros < afterStopMicros ||
-          metadata.version !== expected.version ||
+          (outcome.kind === "started" && startedMicros < afterStopMicros) ||
+          metadata.version !== expected.version
+        ) {
+          return false;
+        }
+        const witness = async (): Promise<"generation" | "legacy" | null> => {
+          const supervisor = await readLiveSupervisorRun(environment);
+          if (supervisor?.supervisorPid !== supervisorPid) return null;
+          const runtime = supervisor.spawnedRuntime;
+          if (runtime !== undefined) {
+            return runtime.pid === metadata.pid &&
+              runtime.processStartIdentity === metadata.processStartIdentity &&
+              runtime.installGeneration === expectedGeneration
+              ? "generation"
+              : null;
+          }
+          if (downgradeVersion === null) return null;
+          const legacy = await readSupervisorRecord(environment);
+          return legacy.kind === "valid" &&
+            legacy.record.pid === supervisorPid &&
+            legacy.record.cliVersion === downgradeVersion &&
+            !legacy.record.capabilities.includes(
+              WINDOWS_SPAWN_WITNESS_CAPABILITY,
+            )
+            ? "legacy"
+            : null;
+        };
+        const current = async (): Promise<boolean> =>
           (await getPublishedProcessIdentityVerdict(
             metadata.pid,
             metadata.processStartIdentity,
-          )) !== "current"
-        ) {
-          return false;
-        }
-        const supervisor = await readLiveSupervisorRun(environment);
-        if (
-          supervisor?.supervisorPid !== acknowledgedSupervisor ||
-          supervisor.spawnedRuntime?.pid !== metadata.pid ||
-          supervisor.spawnedRuntime.processStartIdentity !==
-            metadata.processStartIdentity ||
-          supervisor.spawnedRuntime.installGeneration !== expectedGeneration
-        ) {
-          return false;
-        }
+          )) === "current";
         const installed = await readHostInstallRecord(environment);
+        if (
+          installed === null ||
+          encodeInstallGeneration(installed) !== expectedGeneration ||
+          !(await current())
+        ) {
+          return false;
+        }
+        const before = await witness();
         return (
-          installed !== null &&
-          encodeInstallGeneration(installed) === expectedGeneration &&
-          (await probeHostReady(metadata.websocketUrl, remainingMs))
+          before !== null &&
+          (await probeHostReady(metadata.websocketUrl, remainingMs)) &&
+          (await witness()) === before &&
+          (await current())
         );
       },
       totalBudgetMs: Math.max(
@@ -523,6 +587,7 @@ async function startHostWithAttempt(
       retryDelayMs: null,
     });
     if (!health.healthy) throw new Error(WINDOWS_RESTORE_UNCONFIRMED);
+    start.started = true;
   }
   if (outcome.kind === "started") start.started = true;
   // Not expected here: the stop that released the binary ended the old
@@ -627,27 +692,31 @@ async function startAsSupervisorRelaunch(
   await withCliSupervisorRelaunchSegment(
     relaunchOptions,
     (capability, context) =>
-      withCliAttemptMutation(capability, relaunchOptions, async () => {
-        logger.info(
-          "Finalize-upgrade deferred its CLI swap and is starting the installed host beside a standing update attempt",
-          {
-            environment,
-            attemptId: context.activeAttempt?.attemptId ?? null,
-            phase: context.activeAttempt?.phase ?? null,
-          },
-        );
-        await startServiceBestEffort(
-          () =>
-            startHostWithAttempt(
+      withCliAttemptMutation(
+        capability,
+        { ...relaunchOptions, waitMs: recoveryAdmissionWait(start) },
+        async () => {
+          logger.info(
+            "Finalize-upgrade deferred its CLI swap and is starting the installed host beside a standing update attempt",
+            {
               environment,
-              capability,
-              relaunchOptions,
-              start,
-            ),
-          environment,
-          logger,
-        );
-      }),
+              attemptId: context.activeAttempt?.attemptId ?? null,
+              phase: context.activeAttempt?.phase ?? null,
+            },
+          );
+          await startServiceBestEffort(
+            () =>
+              startHostWithAttempt(
+                environment,
+                capability,
+                relaunchOptions,
+                start,
+              ),
+            environment,
+            logger,
+          );
+        },
+      ),
   );
 }
 
@@ -678,23 +747,27 @@ async function startAsRestartCompletion(
         );
         return;
       }
-      await withCliAttemptMutation(capability, recoveryOptions, async () => {
-        logger.info(
-          "Finalize-upgrade deferred its CLI swap and is starting the installed host to complete the restart that stopped it",
-          attempt,
-        );
-        await startServiceBestEffort(
-          () =>
-            startHostWithAttempt(
-              environment,
-              capability,
-              recoveryOptions,
-              start,
-            ),
-          environment,
-          logger,
-        );
-      });
+      await withCliAttemptMutation(
+        capability,
+        { ...recoveryOptions, waitMs: recoveryAdmissionWait(start) },
+        async () => {
+          logger.info(
+            "Finalize-upgrade deferred its CLI swap and is starting the installed host to complete the restart that stopped it",
+            attempt,
+          );
+          await startServiceBestEffort(
+            () =>
+              startHostWithAttempt(
+                environment,
+                capability,
+                recoveryOptions,
+                start,
+              ),
+            environment,
+            logger,
+          );
+        },
+      );
     },
   );
 }
@@ -715,7 +788,7 @@ async function runFinalizeUpgradeSwapWithStart(
     readonly environment: Environment;
     readonly receiptPath?: string;
     readonly reportReceipt?: () => void;
-    readonly captureReceipt?: (marker: PostFinalizeMarker) => void;
+    readonly coordinatorOwnsReceipt?: boolean;
   } & DetachedFinalizeOptions,
   startService: (() => Promise<void>) | null,
 ): Promise<FinalizeSwapOutcome> {
@@ -723,10 +796,7 @@ async function runFinalizeUpgradeSwapWithStart(
   const markerPath =
     opts.receiptPath ?? newCliPostFinalizeReceiptPath(opts.environment);
   const writeReceipt = async (marker: PostFinalizeMarker): Promise<void> => {
-    if (opts.captureReceipt !== undefined) {
-      opts.captureReceipt(marker);
-      return;
-    }
+    if (opts.coordinatorOwnsReceipt === true) return;
     opts.reportReceipt?.();
     await writePostFinalizeMarkerFile(markerPath, marker);
   };

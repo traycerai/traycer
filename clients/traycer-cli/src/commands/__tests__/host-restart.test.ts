@@ -27,7 +27,8 @@ import type { HostInstallRecord } from "../../manifest/host-install";
 const mocks = vi.hoisted(() => ({
   controllerCalls: [] as string[],
   lockEvents: [] as string[],
-  relaunchError: null as Error | null,
+  helperEvents: [] as string[],
+  commitFails: false,
   beforeCliLock: null as (() => void) | null,
   // Runs at the marker-reconciliation step - after the admission checks and
   // before the stop - so a test can publish a host in that window.
@@ -58,9 +59,6 @@ const mocks = vi.hoisted(() => ({
   publishedOrigins: [] as string[],
   credentialProvisionMock: vi.fn(),
   platform: null as NodeJS.Platform | null,
-  finalizeOutcome: null as
-    | import("../cli-upgrade").FinalizePendingCliUpgradeOutcome
-    | null,
   scheduleCalls: [] as Array<
     Parameters<
       typeof import("../../upgrade/finalize-helper").scheduleFinalizationHelper
@@ -77,19 +75,6 @@ vi.mock("../../host/install-auth", async (importOriginal) => {
   return {
     ...actual,
     maybeProvisionCredential: mocks.credentialProvisionMock,
-  };
-});
-
-vi.mock("../cli-upgrade", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../cli-upgrade")>();
-  return {
-    ...actual,
-    finalizePendingCliUpgrade: (
-      ...args: Parameters<typeof actual.finalizePendingCliUpgrade>
-    ) =>
-      mocks.finalizeOutcome === null
-        ? actual.finalizePendingCliUpgrade(...args)
-        : Promise.resolve(mocks.finalizeOutcome),
   };
 });
 
@@ -127,7 +112,6 @@ vi.mock("../../service", async (importOriginal) => {
         },
         relaunchAfterRestart: async () => {
           mocks.controllerCalls.push("relaunchAfterRestart");
-          if (mocks.relaunchError !== null) throw mocks.relaunchError;
           if (mocks.crossSpawnEdge) {
             const { atServiceSpawnEdge } =
               await import("../../service/spawn-edge");
@@ -221,6 +205,28 @@ vi.mock("../../upgrade/finalize-helper", async (importOriginal) => {
       return mocks.scheduleOutcome === null
         ? actual.scheduleFinalizationHelper(...args)
         : Promise.resolve(mocks.scheduleOutcome);
+    },
+    connectWindowsRestartControl: async () => ({
+      begin: async () => {
+        expect(mocks.controllerCalls).toEqual([]);
+        mocks.helperEvents.push("owned");
+      },
+      stopped: () => {
+        expect(mocks.controllerCalls).toEqual(["stopForRestart"]);
+        mocks.helperEvents.push("stopped");
+      },
+      close: () => {
+        mocks.helperEvents.push("closed");
+      },
+    }),
+    defaultWriteImpl: async (
+      ...args: Parameters<typeof actual.defaultWriteImpl>
+    ) => {
+      if (args[0].endsWith(".committed")) {
+        mocks.helperEvents.push("commit");
+        if (mocks.commitFails) throw new Error(`write denied at ${args[0]}`);
+      }
+      await actual.defaultWriteImpl(...args);
     },
     reconcilePostFinalizeMarker: async (
       ...callArgs: Parameters<typeof actual.reconcilePostFinalizeMarker>
@@ -320,7 +326,8 @@ describe("buildHostRestartCommand", () => {
     expect(hostHomeDir("production").startsWith(workHome)).toBe(true);
     mocks.controllerCalls = [];
     mocks.lockEvents = [];
-    mocks.relaunchError = null;
+    mocks.helperEvents.length = 0;
+    mocks.commitFails = false;
     mocks.beforeCliLock = null;
     mocks.afterAdmission = null;
     mocks.afterStop = null;
@@ -339,7 +346,6 @@ describe("buildHostRestartCommand", () => {
       minted: true,
     });
     mocks.platform = null;
-    mocks.finalizeOutcome = null;
     mocks.scheduleOutcome = null;
     mocks.scheduleCalls = [];
   });
@@ -520,17 +526,26 @@ describe("buildHostRestartCommand", () => {
     );
   });
 
-  it.each([
-    "unchanged",
-    "restore-failed",
-    "typed-relaunch-expiry",
-    "helper-error",
-  ] as const)(
-    "reports %s without exposing paths when checking the Windows finalize helper",
+  function setArmedWindowsHelper(): void {
+    mocks.scheduleOutcome = {
+      status: "armed",
+      platform: "win32",
+      scriptPath: join(workHome, "helper.ps1"),
+      armedPath: join(workHome, "helper.armed"),
+      markerPath: join(workHome, "post-finalize.json"),
+      helperPid: 99001,
+      errorMessage: null,
+      restartHandoff: {
+        pipe: "fixture-helper",
+        commitPath: join(workHome, "helper.committed"),
+        helperPid: 99001,
+      },
+    };
+  }
+
+  it.each(["armed", "commit-failed", "replaced-entry", "arm-failed"] as const)(
+    "keeps the Windows pending-upgrade restart private when it is %s",
     async (state) => {
-      const expired =
-        state === "restore-failed" || state === "typed-relaunch-expiry";
-      const changed = expired;
       mocks.platform = "win32";
       const entryPath = join(workHome, "current", "traycer.exe");
       const entryBytes = "Windows packaged entry image fixture";
@@ -539,133 +554,80 @@ describe("buildHostRestartCommand", () => {
       const { captureWindowsCliFixture } =
         await import("../../__tests__/support/windows-cli-entry-image");
       captureWindowsCliFixture(entryPath);
-      if (changed) {
-        let changedOnce = false;
+      const { stagedBinaryPath, liveBinaryPath } = writePriorSwapFailedMarker({
+        serviceStartError: null,
+      });
+      rmSync(join(workHome, ".traycer", "cli", "post-finalize.json"));
+      rmSync(stagedBinaryPath); // No swap can be authorized; recovery still owns the restart.
+      setArmedWindowsHelper();
+      if (state === "replaced-entry") {
         mocks.beforeCliLock = () => {
-          if (changedOnce) return;
           const next = join(workHome, "replacement.exe");
           writeFileSync(next, "replacement bytes");
           renameSync(next, entryPath);
-          changedOnce = true;
         };
       }
-      mocks.finalizeOutcome = {
-        status: "still-locked",
-        handoff: {
-          stagedBinaryPath: join(workHome, "traycer-1.5.0-after-stop"),
-          sha256: "a".repeat(64),
-          windowsEvidence: "signed-feed-v1",
-        },
-        stagedBinaryPath: join(workHome, "traycer-1.5.0"),
-        livePath: join(workHome, "traycer"),
-        errorMessage: `binary at ${entryPath} still held`,
-      };
-      mocks.scheduleOutcome = changed
-        ? null
-        : {
-            status: "armed",
-            platform: "win32",
-            scriptPath: null,
-            armedPath: null,
-            markerPath: join(workHome, "post-finalize.json"),
-            helperPid: 99001,
-            errorMessage: null,
-          };
-      if (state === "helper-error" && mocks.scheduleOutcome !== null) {
+      if (state === "arm-failed") {
         mocks.scheduleOutcome = {
-          ...mocks.scheduleOutcome,
           status: "failed",
+          platform: "win32",
+          scriptPath: null,
+          armedPath: null,
+          markerPath: join(workHome, "post-finalize.json"),
           helperPid: null,
-          errorMessage: `Windows launcher failed at ${entryPath}`,
+          errorMessage: `launcher failed at ${entryPath}`,
         };
       }
-
-      if (state === "restore-failed") {
-        mocks.relaunchError = new Error(`Scheduler error at ${entryPath}`);
-      } else if (state === "typed-relaunch-expiry") {
-        const { CLI_ERROR_CODES, cliError } =
-          await import("../../runner/errors");
-        mocks.relaunchError = cliError({
-          code: CLI_ERROR_CODES.CLI_LOCK_BUSY,
-          message: `Scheduler error at ${entryPath}`,
-          details: { path: entryPath },
-          exitCode: 1,
-        });
-      }
+      mocks.commitFails = state === "commit-failed";
       const { buildHostRestartCommand } = await import("../host-restart");
-      const result = await buildHostRestartCommand({
+      const command = buildHostRestartCommand({
         ifIdle: false,
         force: false,
         deferIfParked: false,
         expectedHost: null,
         lifecycleOrigin: "terminal",
-      })(fakeCtx());
-
-      expect(JSON.stringify(result.data)).not.toContain(workHome);
-      expect(JSON.stringify(result.data)).not.toContain("stagedBinaryPath");
-      expect(JSON.stringify(result.data)).not.toContain("markerPath");
-      expect(JSON.stringify(result.data)).not.toContain("sha256");
-      expect(result.human).not.toContain(workHome);
-      if (state === "helper-error") {
-        expect(result.data).toMatchObject({
-          restarted: true,
-          serviceRestore: null,
-          helper: { errorMessage: "The CLI upgrade helper did not arm." },
-        });
-        expect(result.human).toContain("The CLI upgrade helper did not arm.");
-        return;
-      }
-      if (changed) {
-        const { UNVERIFIED_WINDOWS_CLI_MESSAGE } =
-          await import("../../upgrade/windows-cli-publication");
-        const code =
-          state === "typed-relaunch-expiry"
-            ? "E_CLI_LOCK_BUSY"
-            : "E_SERVICE_CONTROL_FAILED";
-        expect(result.data).toMatchObject({
-          restarted: false,
-          serviceRestore: "restore-failed",
-          serviceRelaunchErrorCode: code,
-          cliUpgrade: { status: "still-locked" },
-          helper: {
-            status: "failed",
-            errorMessage: UNVERIFIED_WINDOWS_CLI_MESSAGE,
-          },
-        });
-        expect(result.human).toContain(code);
-        expect(result.exitCode).toBe(1);
-        if (expired) {
-          expect(result.data).toMatchObject({
-            serviceRestoreError:
-              "The service start could not be confirmed. Retry with 'traycer host start'.",
-          });
-        }
-        expect(mocks.controllerCalls).toEqual([
-          "stopForRestart",
-          "relaunchAfterRestart",
-        ]);
-        expect(mocks.scheduleCalls).toEqual([
-          expect.objectContaining({ currentWindowsRunner: undefined }),
-        ]);
-        return;
-      }
-      expect(result.data).toMatchObject({
-        restarted: true,
-        helper: { status: "armed", helperPid: 99001 },
-        serviceRestore: null,
       });
+      const { WINDOWS_RESTORE_UNCONFIRMED } =
+        await import("../../service/windows-task-restoration");
+      if (state === "replaced-entry" || state === "arm-failed") {
+        await expect(command(fakeCtx())).rejects.toThrow(
+          WINDOWS_RESTORE_UNCONFIRMED,
+        );
+        expect(mocks.controllerCalls).toEqual([]);
+        expect(mocks.helperEvents).toEqual([]);
+        expect(mocks.scheduleCalls).toHaveLength(
+          state === "arm-failed" ? 1 : 0,
+        );
+        return;
+      }
+
+      const result = await command(fakeCtx());
+      expect(result.data).toMatchObject({
+        restarted: state === "armed",
+        cliUpgrade: { status: "still-locked" },
+        helper: { status: "armed", helperPid: 99001 },
+        serviceRestore: state === "armed" ? null : "restore-failed",
+      });
+      expect(JSON.stringify(result.data)).not.toMatch(
+        /stagedBinaryPath|markerPath|sha256/u,
+      );
+      expect(JSON.stringify(result)).not.toContain(workHome);
+      expect(result.exitCode).toBe(state === "armed" ? 0 : 1);
+      if (state === "commit-failed")
+        expect(result.human).toContain(WINDOWS_RESTORE_UNCONFIRMED);
       expect(mocks.credentialProvisionMock).not.toHaveBeenCalled();
       expect(mocks.controllerCalls).toEqual(["stopForRestart"]);
+      expect(mocks.helperEvents).toEqual(["owned", "stopped", "commit"]);
       expect(mocks.scheduleCalls).toEqual([
         expect.objectContaining({
-          stagedBinaryPath: join(workHome, "traycer-1.5.0-after-stop"),
-          stagedSha256: "a".repeat(64),
+          stagedBinaryPath,
+          stagedSha256: null,
           currentWindowsRunner: expect.objectContaining({
             path: entryPath,
             sha256: createHash("sha256").update(entryBytes).digest("hex"),
-            legacyDetached: false,
+            legacyDetached: true,
           }),
-          livePath: join(workHome, "traycer"),
+          livePath: liveBinaryPath,
         }),
       ]);
     },
@@ -1249,31 +1211,23 @@ describe("buildHostRestartCommand", () => {
   });
 
   it.each([
-    [
-      "still-locked",
-      "stale-marker-discarded",
-      "Discarded a stale CLI upgrade marker.",
-    ],
-    [
-      "staged-binary-missing",
-      "marker-invalid",
-      "The prior CLI upgrade could not be confirmed.",
-    ],
-    [
-      "publish-failed",
-      "applied-swap-failed",
-      "The prior service start could not be confirmed.",
-    ],
+    ["stale-marker-discarded", "Discarded a stale CLI upgrade marker."],
+    ["marker-invalid", "The prior CLI upgrade could not be confirmed."],
+    ["applied-swap-failed", "The prior service start could not be confirmed."],
   ] as const)(
-    "redacts a Windows %s result with a %s prior marker",
-    async (status, markerStatus, diagnostic) => {
+    "redacts a Windows pending restart with a %s prior marker",
+    async (markerStatus, diagnostic) => {
       mocks.platform = "win32";
-      const { liveBinaryPath, stagedBinaryPath } = writePriorSwapFailedMarker({
+      const { stagedBinaryPath } = writePriorSwapFailedMarker({
         serviceStartError: `cannot run ${join(workHome, "registered.exe")}`,
       });
-      // The absent staged file keeps this command-level projection test
-      // from consulting Scheduler before its mocked finalize result.
       rmSync(stagedBinaryPath);
+      const entryPath = join(workHome, "current.exe");
+      writeFileSync(entryPath, "Windows packaged entry fixture");
+      const { captureWindowsCliFixture } =
+        await import("../../__tests__/support/windows-cli-entry-image");
+      captureWindowsCliFixture(entryPath);
+      setArmedWindowsHelper();
       const markerPath = join(
         workHome,
         ".traycer",
@@ -1294,14 +1248,6 @@ describe("buildHostRestartCommand", () => {
       } else if (markerStatus === "marker-invalid") {
         writeFileSync(markerPath, workHome);
       }
-      const paths = { stagedBinaryPath, livePath: liveBinaryPath };
-      const errorMessage = `Windows could not publish ${stagedBinaryPath}`;
-      mocks.finalizeOutcome =
-        status === "staged-binary-missing"
-          ? { status, ...paths, stagedVersion: "1.5.0" }
-          : status === "still-locked"
-            ? { status, ...paths, errorMessage, handoff: null }
-            : { status, ...paths, errorMessage };
       const { buildHostRestartCommand } = await import("../host-restart");
       const result = await buildHostRestartCommand({
         ifIdle: false,
@@ -1313,7 +1259,7 @@ describe("buildHostRestartCommand", () => {
 
       expect(result.data).toMatchObject({
         restarted: true,
-        cliUpgrade: { status },
+        cliUpgrade: { status: "still-locked" },
         markerReconcile: { status: markerStatus },
       });
       expect(JSON.stringify(result.data)).not.toContain(workHome);

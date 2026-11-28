@@ -89,6 +89,7 @@ import {
   readInheritableRunOwnership,
   removeSupervisorRecords,
   writeSupervisorRecords,
+  WINDOWS_SPAWN_WITNESS_CAPABILITY,
   type InheritedRunOwnership,
   type ObservedDesktopPresence,
   type SupervisorRecordRemoval,
@@ -3812,7 +3813,12 @@ async function publishSupervisorRecords(input: {
       v: 1,
       pid: input.supervisorPid,
       cliVersion: input.deps.lifecycle.cliVersion,
-      capabilities: [SUPERVISOR_CAPABILITY_LIFECYCLE_POLICY_V1],
+      capabilities: [
+        SUPERVISOR_CAPABILITY_LIFECYCLE_POLICY_V1,
+        ...(process.platform === "win32"
+          ? [WINDOWS_SPAWN_WITNESS_CAPABILITY]
+          : []),
+      ],
       startedAt: input.startedAt,
     },
     runState: {

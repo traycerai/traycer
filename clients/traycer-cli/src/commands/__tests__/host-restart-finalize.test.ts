@@ -10,12 +10,14 @@ import {
 import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { PathLike } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, uptime } from "node:os";
+import { Readable } from "node:stream";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { powershellSingleQuoted } from "@traycer-clients/shared/platform/powershell-quote";
 import { formatWindowsProcessStartIdentity } from "@traycer/protocol/host/lifecycle";
 import type { RestartStop } from "../../service";
+import type { CommandContext } from "../../runner/runner";
 import type { ServiceLabel } from "../../service/label";
 import type { ScheduledTaskXmlQuery } from "../../service/platforms/windows";
 import { config } from "../../config";
@@ -51,6 +53,8 @@ const windowsHandoff = vi.hoisted(() => ({
   metadataReads: 0,
   runtimeStartedAt: null as string | null,
   installGeneration: "id:legacy-running-host",
+  witnessed: true,
+  currentProcess: true,
 }));
 const fsMocks = vi.hoisted(() => ({
   failHelperPreparation: false,
@@ -123,19 +127,24 @@ vi.mock("../../host/live-supervisor-run", () => ({
   readLiveSupervisorRun: async () => ({
     supervisorPid: 99002,
     admission: "granted",
-    spawnedRuntime: {
-      pid: 99003,
-      processStartIdentity:
-        windowsHandoff.runtimeStartedAt === null
-          ? null
-          : formatWindowsProcessStartIdentity(windowsHandoff.runtimeStartedAt),
-      installGeneration: windowsHandoff.installGeneration,
-    },
+    ...(windowsHandoff.witnessed && {
+      spawnedRuntime: {
+        pid: 99003,
+        processStartIdentity:
+          windowsHandoff.runtimeStartedAt === null
+            ? null
+            : formatWindowsProcessStartIdentity(
+                windowsHandoff.runtimeStartedAt,
+              ),
+        installGeneration: windowsHandoff.installGeneration,
+      },
+    }),
   }),
 }));
 vi.mock("../../store/process-identity", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../store/process-identity")>()),
-  getPublishedProcessIdentityVerdict: async () => "current",
+  getPublishedProcessIdentityVerdict: async () =>
+    windowsHandoff.currentProcess ? "current" : "stale",
 }));
 vi.mock("../../host/pid-metadata", async (importOriginal) => {
   const actual =
@@ -267,6 +276,8 @@ beforeEach(async () => {
   windowsHandoff.metadataReads = 0;
   windowsHandoff.runtimeStartedAt = null;
   windowsHandoff.installGeneration = "id:legacy-running-host";
+  windowsHandoff.witnessed = true;
+  windowsHandoff.currentProcess = true;
   signingKey = createFeedSigningKey();
   previousTrustedKeys = config.hostTrustedPubkeys;
   previousEnvironment = config.environment;
@@ -872,6 +883,171 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
     );
   });
 
+  async function writeRestorationInstall(): Promise<void> {
+    const { writeHostInstallRecord } =
+      await import("../../manifest/host-install");
+    await writeHostInstallRecord("production", {
+      version: "1.4.0",
+      runtimeVersion: null,
+      platform: "win32",
+      arch: "x64",
+      installId: "legacy-running-host",
+      installedAt: "2026-05-01T00:00:00Z",
+      source: { kind: "registry", value: "1.4.0" },
+      archiveSha256: null,
+      executableSha256: null,
+      signatureVerifiedAt: "2026-05-01T00:00:00Z",
+      signatureKeyId: "fixture-key",
+      sizeBytes: 42,
+      executablePath: join(workHome, "host.exe"),
+    });
+  }
+
+  async function useReadinessServer(server: Server): Promise<void> {
+    readinessServer = server;
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (address === null || typeof address === "string")
+      throw new Error("The readiness server did not bind loopback");
+    windowsHandoff.readinessPort = address.port;
+  }
+
+  function finalizeContext(): CommandContext {
+    return {
+      runtime: {
+        json: true,
+        quiet: false,
+        noProgress: false,
+        noBootstrap: false,
+        nonInteractive: false,
+        environment: "production",
+        logger: {
+          debug: vi.fn(),
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+        },
+      },
+      output: {
+        progress: vi.fn(),
+        human: vi.fn(),
+        humanRequired: vi.fn(),
+        emitResult: vi.fn(),
+        emitError: vi.fn(),
+      },
+      progress: vi.fn(),
+    };
+  }
+
+  it.each([
+    ["legacy-ready", false, 200, "restored"],
+    ["legacy-unready", false, 503, "restore-failed"],
+    ["witness-capable", true, 200, "restore-failed"],
+  ] as const)(
+    "requires the appropriate readiness evidence after a verified downgrade (%s)",
+    async (_case, witnessCapable, status, expectedResult) => {
+      Object.defineProperty(process, "platform", { value: "win32" });
+      const { buildCliFinalizeUpgradeCommand } =
+        await import("../cli-finalize-upgrade");
+      const { hostHomeDir } = await import("../../store/paths");
+      const { supervisorRecordPath } =
+        await import("@traycer/protocol/config/supervisor-record");
+      const { WINDOWS_SPAWN_WITNESS_CAPABILITY } =
+        await import("../../host/lifecycle-files");
+      const bin = join(workHome, "bin");
+      mkdirSync(bin, { recursive: true });
+      const liveBinaryPath = join(bin, "traycer.exe");
+      const stagedBinaryPath = join(bin, "traycer-1.5.1.exe");
+      writeFileSync(liveBinaryPath, "current installed executable");
+      const staged = peImage(Buffer.from("verified older release"));
+      writeFileSync(stagedBinaryPath, staged);
+      const manifestPath = writeManifest({
+        liveBinaryPath,
+        stagedBinaryPath,
+        version: "1.5.1",
+      });
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+      manifest.version = "1.6.0";
+      manifest.pendingUpgrade.allowDowngrade = true;
+      const digest = createHash("sha256").update(staged).digest("hex");
+      writeFileSync(manifestPath, JSON.stringify(manifest));
+      writeFileSync(
+        `${stagedBinaryPath}.release-evidence.json`,
+        await signedCliEvidence("1.5.1", digest),
+      );
+
+      const originalStdin = Object.getOwnPropertyDescriptor(process, "stdin");
+      if (originalStdin === undefined)
+        throw new Error("The stdin property is missing");
+      const invokeWorker = async (frame: string) => {
+        Object.defineProperty(process, "stdin", {
+          value: Readable.from([`${frame}\n`]),
+        });
+        try {
+          return await buildCliFinalizeUpgradeCommand({
+            legacyDetached: true,
+            expectedStagedPath: stagedBinaryPath,
+            expectedStagedSha256: digest,
+            windowsWorkerReceiptId: "c3349888-373c-47cd-ab5a-0b415dc54dbd",
+          })(finalizeContext());
+        } finally {
+          Object.defineProperty(process, "stdin", originalStdin);
+        }
+      };
+
+      const label = (await import("../../service/label")).serviceLabelFor(
+        "production",
+      );
+      const events: string[] = [];
+      await withBootTaskDefinition(
+        label,
+        async () => {
+          const swap = await invokeWorker("swap");
+          expect(swap.data).toEqual({
+            swapStatus: "swapped",
+            downgradedTo: "1.5.1",
+          });
+          expect(readFileSync(liveBinaryPath)).toEqual(staged);
+        },
+        ["logon", "logon"],
+        events,
+      );
+
+      await writeRestorationInstall();
+      windowsHandoff.witnessed = false;
+      writeFileSync(
+        supervisorRecordPath(hostHomeDir("production")),
+        JSON.stringify({
+          v: 1,
+          pid: 99002,
+          cliVersion: "1.5.1",
+          capabilities: witnessCapable
+            ? [WINDOWS_SPAWN_WITNESS_CAPABILITY]
+            : [],
+          startedAt: new Date().toISOString(),
+          admittedAs: "service",
+        }),
+      );
+      const statuses: number[] = [];
+      await useReadinessServer(
+        createServer((_request, response) => {
+          statuses.push(status);
+          response.writeHead(status, { "content-type": "application/json" });
+          response.end('{"busy":false}');
+        }),
+      );
+      const start = await invokeWorker(
+        `start ${Math.floor(uptime() * 1000) + 10_000} 1.5.1`,
+      );
+      expect(start.data).toEqual({ serviceRestore: expectedResult });
+      expect(windowsHandoff.serviceCalls).toEqual(["start"]);
+      expect(statuses.length > 0).toBe(!witnessCapable);
+    },
+  );
+
   it.each([
     {
       evidence: "without",
@@ -895,6 +1071,18 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
       evidence: "with",
       result: "swapped",
       readiness: "never",
+      modes: ["logon", "logon", "logon"],
+    },
+    {
+      evidence: "with",
+      result: "swapped",
+      readiness: "process-replaced-during-response",
+      modes: ["logon", "logon", "logon"],
+    },
+    {
+      evidence: "with",
+      result: "swapped",
+      readiness: "witness-changed-during-response",
       modes: ["logon", "logon", "logon"],
     },
     {
@@ -1014,23 +1202,7 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
           }
 
           fsMocks.failBinaryRenameTarget = null;
-          const { writeHostInstallRecord } =
-            await import("../../manifest/host-install");
-          await writeHostInstallRecord(label.environment, {
-            version: "1.4.0",
-            runtimeVersion: null,
-            platform: "win32",
-            arch: "x64",
-            installId: "legacy-running-host",
-            installedAt: "2026-05-01T00:00:00Z",
-            source: { kind: "registry", value: "1.4.0" },
-            archiveSha256: null,
-            executableSha256: null,
-            signatureVerifiedAt: "2026-05-01T00:00:00Z",
-            signatureKeyId: "fixture-key",
-            sizeBytes: 42,
-            executablePath: join(workHome, "host.exe"),
-          });
+          await writeRestorationInstall();
           if (readiness === "wrong-generation") {
             windowsHandoff.installGeneration =
               "id:same-version-different-generation";
@@ -1040,23 +1212,19 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
             expect(request.url).toBe("/activity");
             const status =
               readiness === "wrong-generation" ||
+              readiness.endsWith("-during-response") ||
               (readiness === "eventual" && statuses.length > 0)
                 ? 200
                 : 503;
             statuses.push(status);
+            if (readiness === "process-replaced-during-response")
+              windowsHandoff.currentProcess = false;
+            if (readiness === "witness-changed-during-response")
+              windowsHandoff.installGeneration = "id:different-generation";
             response.writeHead(status, { "content-type": "application/json" });
             response.end(status === 200 ? '{"busy":true}' : '{"busy":false}');
           });
-          readinessServer = server;
-          await new Promise<void>((resolve, reject) => {
-            server.once("error", reject);
-            server.listen(0, "127.0.0.1", resolve);
-          });
-          const address = server.address();
-          if (address === null || typeof address === "string") {
-            throw new Error("The readiness server did not bind loopback");
-          }
-          windowsHandoff.readinessPort = address.port;
+          await useReadinessServer(server);
           const command = buildCliFinalizeUpgradeCommand({
             legacyDetached: true,
             expectedStagedPath: stagedBinaryPath,
@@ -1106,8 +1274,12 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
               serviceRestore: "restore-failed",
             });
           } else {
-            expect(statuses.length).toBeGreaterThan(1);
-            expect(statuses.every((status) => status === 503)).toBe(true);
+            if (readiness.endsWith("-during-response")) {
+              expect(statuses).toEqual([200]);
+            } else {
+              expect(statuses.length).toBeGreaterThan(1);
+              expect(statuses.every((status) => status === 503)).toBe(true);
+            }
             expect(finalize.data).toMatchObject({
               serviceRestore: "restore-failed",
             });

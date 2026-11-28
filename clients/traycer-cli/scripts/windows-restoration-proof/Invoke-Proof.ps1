@@ -7,35 +7,26 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+. (Join-Path $PSScriptRoot 'Proof-Process.ps1')
 $transcriptPath = [IO.Path]::GetFullPath($Transcript)
 $kitPath = (Get-Item -LiteralPath $Kit).FullName
-$cli = Join-Path $kitPath 'traycer.exe'
-$proof = Join-Path $kitPath 'traycer-win-restore-proof.exe'
-$legacy = Join-Path $kitPath 'traycer-win-restore-legacy-writer.exe'
 $powerShell = Join-Path $PSHOME 'powershell.exe'
 $signature = [Guid]::NewGuid().ToString('N')
 $probe = "Traycer-Restoration-Logon-$signature"
 $probeRoot = Join-Path ([IO.Path]::GetTempPath()) $probe
 $marker = Join-Path $probeRoot 'interactive-task-started'
-[IO.File]::WriteAllText($transcriptPath, "Windows restoration proof`r`n")
+[IO.File]::WriteAllText($transcriptPath, '', [Text.UTF8Encoding]::new($false))
+Write-ProofLine 'Windows restoration proof' $transcriptPath
 if ($DemandStartRecordingPassed) {
-    'PASS disabled and unreadable task issued no /Run (recording process runner)' |
-        Tee-Object -FilePath $transcriptPath -Append
+    Write-ProofLine 'PASS disabled and unreadable task issued no /Run (recording process runner)' $transcriptPath
 }
 
-function Invoke-Driver([string] $Driver, [string[]] $Options) {
-    & $powerShell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot $Driver) `
-        -CliExe $cli -ProofExe $proof @Options 2>&1 | Tee-Object -FilePath $transcriptPath -Append
-    if ($LASTEXITCODE -ne 0) { throw "Disposable driver failed: $Driver" }
-}
-
-function New-BootFixture([string] $Id) {
-    Invoke-Driver 'Test-RestorationFreshness.ps1' @('-Mode', 'Boot', '-BootFixtureId', $Id, '-PrepareBoot')
-    $root = Join-Path ([IO.Path]::GetTempPath()) "traycer-win-restore-$Id"
-    $xml = Join-Path $root 'task.xml'
-    & schtasks.exe /Create /TN "\Traycer\Host-Dev-Restoreproof-$Id" /XML $xml 2>&1 |
-        Tee-Object -FilePath $transcriptPath -Append
-    if ($LASTEXITCODE -ne 0) { throw 'Could not register the disposable boot task.' }
+function Invoke-Driver([string] $Case, [string] $Mode) {
+    $driverArgs = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
+        (Join-Path $PSScriptRoot 'Run-RestartCase.ps1'), '-Kit', $kitPath, '-Case', $Case, '-Mode', $Mode)
+    Invoke-ProofProcess -File $powerShell -Arguments $driverArgs -Case "$Case $Mode driver" `
+        -TimeoutMilliseconds 520000 -TranscriptPath $transcriptPath
 }
 
 try {
@@ -78,22 +69,18 @@ try {
     $createdTaskFolder = $true
 }
 try {
+    $failures = [Collections.Generic.List[string]]::new()
     if ($canRunLogon) {
-        Invoke-Driver 'Test-RestorationDeadline.ps1' @()
-        Invoke-Driver 'Test-RestorationFreshness.ps1' @()
-        Invoke-Driver 'Test-RestorationFreshness.ps1' @('-OldCliExe', $legacy)
+        foreach ($case in @('cold', 'legacy', 'parent-exit', 'busy', 'disabled', 'receipt')) {
+            try { Invoke-Driver $case 'Logon' } catch { $failures.Add("$case Logon") }
+        }
     } else {
-        'Logon proof not run: no interactive task session' | Tee-Object -FilePath $transcriptPath -Append
+        $message = 'Logon proof not run: no interactive task session'
+        Write-ProofLine $message $transcriptPath
+        $failures.Add($message)
     }
-
-    $deadlineId = [Guid]::NewGuid().ToString('N')
-    New-BootFixture $deadlineId
-    Invoke-Driver 'Test-RestorationDeadline.ps1' @('-Mode', 'Boot', '-BootFixtureId', $deadlineId)
-    $freshnessId = [Guid]::NewGuid().ToString('N')
-    New-BootFixture $freshnessId
-    Invoke-Driver 'Test-RestorationFreshness.ps1' @('-Mode', 'Boot', '-BootFixtureId', $freshnessId)
-
-    if (-not $canRunLogon) { throw 'Logon proof not run: no interactive task session' }
+    try { Invoke-Driver 'cold' 'Boot' } catch { $failures.Add('cold Boot') }
+    if ($failures.Count -gt 0) { throw ($failures -join '; ') }
 } finally {
     if ($createdTaskFolder) {
         $folder = $scheduler.GetFolder('\Traycer')

@@ -27,7 +27,7 @@ async function main() {
   const externals = ["bun:sqlite"];
   const proof = join(build, "restoration-proof.cjs");
   await bundleCjs({
-    entry: join(__dirname, "restore-proof.ts"),
+    entry: join(__dirname, "__tests__", "restore-proof.ts"),
     outfile: proof,
     tsconfig: join(cli, "tsconfig.json"),
     cwd: cli,
@@ -69,6 +69,10 @@ async function main() {
     });
   }
   copyFileSync(join(cli, "dist-sea/traycer.exe"), join(output, "traycer.exe"));
+  copyFileSync(
+    join(__dirname, "Set-ProofTask.ps1"),
+    join(output, "Set-ProofTask.ps1"),
+  );
 }
 
 main().catch((error) => {

@@ -157,14 +157,18 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/bootstrap-ci-tools
         with:
-          tools: bun node
+          tools: bun node electron
           bun-version: "1.4.4"
-          mirror-base-url: ${{ vars.CI_TOOLS_MIRROR_BASE_URL }}
+          mirror-base-url: ${{ inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}
+      - name: Install current dependencies and Electron
+        shell: bash
+        run: |
+          bun install --frozen-lockfile
+          bun run --cwd clients/desktop install-electron
+          echo "executed=true" >> "$GITHUB_OUTPUT"
       - name: Build the CLI and the test-only Windows fixtures
         shell: powershell
         run: |
-          bun install --frozen-lockfile
-          if ($LASTEXITCODE -ne 0) { throw 'Current dependencies did not install.' }
           bun install --cwd restoration-legacy-source --frozen-lockfile
           if ($LASTEXITCODE -ne 0) { throw 'Legacy dependencies did not install.' }
           bun run --filter @traycer-clients/traycer-cli build:sea

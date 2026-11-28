@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   existsSync,
@@ -1034,6 +1034,106 @@ function armProbeRunner() {
 describe.skipIf(process.platform !== "win32")(
   "the finalize helper's real PowerShell handoff",
   () => {
+    it(
+      "waits for the original parent after it drops the owned stop pipe",
+      async () => {
+        const {
+          scheduleFinalizationHelper,
+          defaultSpawnImpl,
+          defaultWriteImpl,
+          defaultHelperArmWaitDeps,
+        } = await loadHelper();
+        const runnerPath = join(process.cwd(), "dist-sea", "traycer.exe");
+        const verdictPath = join(workRoot, "owner-admission.txt");
+        const startPath = join(workRoot, "start-admission.txt");
+        const parentSource = [
+          'const { createConnection } = require("node:net");',
+          'const { createInterface } = require("node:readline");',
+          'process.on("message", name => {',
+          '  if (name === "exit") return process.exit(0);',
+          "  const socket = createConnection(name);",
+          '  createInterface({ input: socket }).on("line", line => {',
+          '    if (line === "armed") socket.write("stop\\n");',
+          '    if (line === "owned") socket.destroy();',
+          "  });",
+          '  socket.on("error", () => process.exit(1));',
+          "});",
+        ].join("\n");
+        const parent = spawn(process.execPath, ["-e", parentSource], {
+          stdio: ["ignore", "ignore", "inherit", "ipc"],
+          windowsHide: true,
+        });
+        const exited = new Promise<void>((resolve) => {
+          parent.once("exit", () => resolve());
+        });
+        try {
+          if (parent.pid === undefined)
+            throw new Error("Fixture parent did not start");
+          const receipt = await scheduleFinalizationHelper({
+            environment: "production",
+            currentWindowsRunner: {
+              path: runnerPath,
+              sha256: createHash("sha256")
+                .update(readFileSync(runnerPath))
+                .digest("hex"),
+              legacyDetached: false,
+            },
+            stagedBinaryPath: join(workRoot, "staged.exe"),
+            livePath: join(workRoot, "live.exe"),
+            parentPid: parent.pid,
+            parentExitTimeoutSeconds: 10,
+            platform: "win32",
+            coordinateWindowsRestart: true,
+            spawnImpl: defaultSpawnImpl,
+            writeImpl: async (path, body) => {
+              if (path.endsWith(".ps1")) {
+                body = body
+                  .replace(
+                    "    $parentExited = $parent.WaitForExit",
+                    `    [IO.File]::WriteAllText(${powershellSingleQuoted(verdictPath)}, "waiting")\n    $parentExited = $parent.WaitForExit`,
+                  )
+                  .replace(
+                    "  # A late CreateProcess completion",
+                    `  [IO.File]::AppendAllText(${powershellSingleQuoted(startPath)}, ("$Mode parentExited=$($parent.HasExited)" + [Environment]::NewLine))\n  # A late CreateProcess completion`,
+                  );
+              }
+              await defaultWriteImpl(path, body);
+            },
+            armWait: defaultHelperArmWaitDeps,
+          });
+          assertArmedOrRefused(receipt);
+          if (receipt.status !== "armed") return;
+          const handoff = receipt.restartHandoff;
+          if (handoff === undefined)
+            throw new Error("Fixture helper did not offer its pipe");
+          parent.send(`\\\\.\\pipe\\${handoff.pipe}`);
+          await expect
+            .poll(() => existsSync(verdictPath) || existsSync(startPath), {
+              timeout: 10_000,
+            })
+            .toBe(true);
+          expect(existsSync(verdictPath)).toBe(true);
+          expect(existsSync(startPath)).toBe(false);
+          expect(parent.exitCode).toBeNull();
+
+          parent.send("exit");
+          await exited;
+          expect(await waitForFile(receipt.markerPath, 20_000)).toBe(true);
+          expect(readFileSync(startPath, "utf8").trim()).toMatch(
+            /^start [0-9]+ parentExited=True$/u,
+          );
+          expect(
+            JSON.parse(readFileSync(receipt.markerPath, "utf8")),
+          ).toMatchObject({
+            status: "swap-failed",
+          });
+        } finally {
+          if (parent.exitCode === null) parent.kill();
+        }
+      },
+      TEST_TIMEOUT_MS,
+    );
+
     it.each(["launch", "receipt"] satisfies WatchdogFault[])(
       "ends a hung %s without a late receipt",
       async (fault) => {

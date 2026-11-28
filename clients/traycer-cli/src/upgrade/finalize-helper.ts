@@ -16,6 +16,11 @@ import { createInterface } from "node:readline";
 import { basename, dirname, join } from "node:path";
 import { spawn, type SpawnOptions } from "node:child_process";
 import { HOST_START_ADOPTION_MAX_AGE_MS } from "@traycer-clients/shared/host-start-adoption/spawn-edge-bounds";
+import {
+  HARD_EXIT_DEADLINE_MS,
+  SHUTDOWN_FORCE_EXIT_MS,
+  WINDOWS_RESTART_SEQUENCE_TIMEOUT_MS,
+} from "@traycer/protocol/host/lifecycle-constants";
 import { powershellSingleQuoted } from "@traycer-clients/shared/platform/powershell-quote";
 import { windowsSystemPath } from "../service/windows-system-path";
 import {
@@ -60,8 +65,9 @@ import {
 //   2. On Windows the script proves it is outside every job object and
 //      verifies its private executable copy before publishing "armed".
 //      The CLI waits up to `HELPER_ARM_WAIT_MS` for a complete PID.
-//      The parent commits the handoff to that verified helper. An uncommitted
-//      helper never finalizes the upgrade or starts the service.
+//      For a Windows restart, the acknowledged handoff grants recovery
+//      authority before the stop. The commit admits only the optional swap.
+//      The older helper protocol still requires a commit for both.
 //   3. The CLI returns its result to the caller and exits, releasing its
 //      lock on the live binary.
 //   4. Once the parent exits, the helper invokes `cli finalize-upgrade`
@@ -69,9 +75,9 @@ import {
 //      runs a digest-bound private copy of the parent CLI.
 //      The finalizer has its own PID and start time and acquires the
 //      same cli-lock as every other mutation.
-//   5. The finalizer owns the service start and writes its outcome to
-//      `~/.traycer/cli/post-finalize.<attempt-id>.json`. A helper that could
-//      not run the finalizer can record that failure.
+//   5. The Windows coordinator authorizes one guarded start and publishes
+//      the attempt receipt. The legacy combined worker has its original
+//      start and receipt responsibilities.
 //   6. The next `host restart` reconciles the receipts and deletes only
 //      those it handled. Doctor reads the receipts without consuming them.
 //
@@ -891,7 +897,9 @@ function Publish-ExclusiveFile([string]$Destination, [byte[]]$Bytes, [switch]$Ig
     } catch {
       # HRESULT_FROM_WIN32(ERROR_FILE_EXISTS or ERROR_ALREADY_EXISTS).
       $result = $_.Exception.GetBaseException().HResult
-      if ($IgnoreDestinationCollision -and ($result -eq -2147024816 -or $result -eq -2147024713)) { return }
+      if ($IgnoreDestinationCollision -and
+          ($result -eq -2147024816 -or $result -eq -2147024713) -and
+          [IO.File]::Exists($Destination)) { return }
       throw
     }
   } finally {
@@ -917,7 +925,7 @@ function Write-Marker(
     $encoding = [System.Text.UTF8Encoding]::new($false)
     Publish-ExclusiveFile $MarkerPath ($encoding.GetBytes($json)) -IgnoreDestinationCollision
   } catch {
-    if ($null -ne $Payload["serviceStartError"]) {
+    if (${opts.restartPipe === null ? '$null -ne $Payload["serviceStartError"]' : "$true"}) {
       $warning = ${psString(WINDOWS_RESTORE_RECEIPT_WRITE_WARNING)}
       try {
         $line = @{
@@ -1164,6 +1172,13 @@ try {
 `;
 }
 
+// Before the stop edge, give the cooperative shutdown and task sweep their
+// normal ceilings. The recovery clock itself starts at the proved stop or exit.
+export const WINDOWS_RESTART_STOP_WAIT_MS =
+  WINDOWS_RESTART_SEQUENCE_TIMEOUT_MS +
+  SHUTDOWN_FORCE_EXIT_MS +
+  HARD_EXIT_DEADLINE_MS;
+
 export const WINDOWS_RESTART_RECOVERY_ADMISSION_MS = 30_000;
 export const WINDOWS_RESTART_RECOVERY_MS =
   HELPER_ARM_WAIT_MS +
@@ -1238,17 +1253,24 @@ try {
   $begin = $controlReader.ReadLineAsync()
   if (-not $begin.Wait(${HELPER_ARM_WAIT_MS}) -or $begin.Result -cne 'stop') { exit 0 }
   $controlWriter.WriteLine('owned')
+  $ownedUntil = (Get-BootMilliseconds) + ${WINDOWS_RESTART_STOP_WAIT_MS}
   $stopReply = $null
-  # The controller sends this at the proved stop edge, before disk cleanup.
-  # Parent exit closes the pipe even when the parent could not send an edge.
-  try { $stopReply = $controlReader.ReadLineAsync().GetAwaiter().GetResult() } catch {}
+  # Only the controller's explicit stop frame proves the stop and admits a swap.
+  try {
+    $reading = $controlReader.ReadLineAsync()
+    if ($reading.Wait((Read-Remaining $ownedUntil))) { $stopReply = $reading.Result }
+  } catch {}
   $control.Dispose()
-  if ($stopReply -ceq 'cancel') { exit 0 }
   $stopMs = Get-BootMilliseconds
   $canSwap = $stopReply -match '^stopped ([0-9]+)$'
+  $parentExited = $false
   if ($canSwap) {
     # Node's Windows uptime and this clock both read GetTickCount64.
     $stopMs = [Math]::Min($stopMs, [long]$Matches[1])
+  } else {
+    # A broken pipe can precede the end of the parent's stop or its lock release.
+    $parentExited = $parent.WaitForExit((Read-Remaining ($ownedUntil + ${WINDOWS_RESTART_RECOVERY_ADMISSION_MS})))
+    $stopMs = Get-BootMilliseconds
   }
 
   $swapLaunchUntil = $stopMs + ${HELPER_ARM_WAIT_MS}
@@ -1256,8 +1278,7 @@ try {
   $startAdmitUntil = $swapUntil + ${WINDOWS_RESTART_RECOVERY_ADMISSION_MS}
   $startUntil = $startAdmitUntil + ${HOST_START_ADOPTION_MAX_AGE_MS}
   $deadline = $stopMs + ${WINDOWS_RESTART_RECOVERY_MS}
-  $receipt = $null
-
+  $swap = $null
   if ($canSwap -and $parent.WaitForExit((Read-Remaining $swapLaunchUntil))) {
     try {
       $reader = [PowerShell]::Create()
@@ -1271,7 +1292,6 @@ try {
         $reader.Dispose()
         if ($committed -eq $true) {
           $swap = Invoke-Worker 'swap' $swapLaunchUntil $swapUntil
-          if ($null -ne $swap) { $receipt = $swap.marker }
         }
       }
     } catch {
@@ -1280,28 +1300,40 @@ try {
   }
 
   $restored = $false
-  try {
-    $start = Invoke-Worker "start $startAdmitUntil" $startAdmitUntil $startUntil
-    $restored = $null -ne $start -and $start.serviceRestore -ceq 'restored'
-  } catch {}
+  if ($canSwap -or $parentExited) {
+    try {
+      $admission = "start $startAdmitUntil"
+      if ($swap.downgradedTo -cmatch '^[0-9A-Za-z.+-]+$') {
+        $admission += " " + $swap.downgradedTo
+      }
+      $start = Invoke-Worker $admission $startAdmitUntil $startUntil
+      $restored = $null -ne $start -and $start.serviceRestore -ceq 'restored'
+    } catch {}
+  }
   if (-not $restored) {
     [Console]::Error.WriteLine(${psString(WINDOWS_RESTORE_UNCONFIRMED)})
-    if ($null -eq $receipt) {
-      $receipt = @{ status = 'swap-failed'; errorMessage = 'The CLI upgrade is still pending.' }
-    }
   }
-  $payload = $null
+  $receiptStatus = 'start-only'
+  $swapError = $null
+  if (-not $canSwap -and -not $parentExited) {
+    $receiptStatus = 'parent-still-alive'
+  } elseif ($swap.swapStatus -ceq 'swapped' -or $swap.swapStatus -ceq 'manifest-update-failed') {
+    $receiptStatus = 'swapped'
+    if ($swap.swapStatus -ceq 'manifest-update-failed') {
+      $swapError = 'The CLI upgrade could not finish.'
+    }
+  } elseif ($swap.swapStatus -ceq 'swap-failed' -or -not $restored) {
+    $receiptStatus = 'swap-failed'
+    $swapError = 'The CLI upgrade is still pending.'
+  }
+  $payload = @{
+    status = $receiptStatus
+    errorMessage = $swapError
+    serviceStartError = $(if (-not $restored) { ${psString(WINDOWS_RESTORE_UNCONFIRMED)} })
+  }
   $receiptLive = $LiveBinary
   $receiptStaged = $StagedBinary
-  if ($null -ne $receipt) {
-    $payload = @{
-      status = $receipt.status
-      errorMessage = $receipt.errorMessage
-      serviceStartError = $(if (-not $restored) { ${psString(WINDOWS_RESTORE_UNCONFIRMED)} })
-    }
-    if ($null -ne $receipt.livePath) { $receiptLive = $receipt.livePath }
-    if ($null -ne $receipt.stagedBinaryPath) { $receiptStaged = $receipt.stagedBinaryPath }
-  }
+  if ($swap.swapStatus -ceq 'swapped') { $receiptStaged = '' }
   if ($null -ne $stagedHandle) { $stagedHandle.Dispose(); $stagedHandle = $null }
   try {
     $receiptUntil = [Math]::Min($deadline, (Get-BootMilliseconds) + ${WINDOWS_FINALIZE_FILE_IO_MS})
@@ -1447,7 +1479,8 @@ function shString(value: string): string {
 export type PostFinalizeMarkerStatus =
   | "swapped"
   | "swap-failed"
-  | "parent-still-alive";
+  | "parent-still-alive"
+  | "start-only";
 
 export interface PostFinalizeMarker {
   readonly status: PostFinalizeMarkerStatus;
@@ -1466,7 +1499,8 @@ function isPostFinalizeMarker(value: unknown): value is PostFinalizeMarker {
   if (
     obj.status !== "swapped" &&
     obj.status !== "swap-failed" &&
-    obj.status !== "parent-still-alive"
+    obj.status !== "parent-still-alive" &&
+    obj.status !== "start-only"
   ) {
     return false;
   }
@@ -1778,8 +1812,9 @@ export async function reconcilePostFinalizeMarker(opts: {
       };
     }
     if (
-      outcome.status !== "applied-swapped" ||
-      handled.status === "applied-swapped"
+      handled.status !== "no-marker" &&
+      (outcome.status !== "applied-swapped" ||
+        handled.status === "applied-swapped")
     ) {
       outcome = handled;
     }
@@ -1795,6 +1830,10 @@ async function reconcileFinalizeReceipt(
   markerPath: string,
   parsed: PostFinalizeMarker,
 ): Promise<ReconcileOutcome> {
+  if (parsed.status === "start-only") {
+    await safeUnlink(markerPath);
+    return { status: "no-marker" };
+  }
   const manifest = await readCliManifest(environment);
   if (manifest === null || manifest.pendingUpgrade === null) {
     // The helper completed but the manifest no longer references a

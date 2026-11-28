@@ -687,13 +687,16 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
       });
       mocks.lockThrows = cliError({
         code: CLI_ERROR_CODES.CLI_LOCK_BUSY,
-        message: "fixture lock held",
-        details: null,
+        message: `fixture lock held at ${workHome}`,
+        details: { lockPath: workHome },
         exitCode: 1,
       });
       mocks.workerInput = "swap";
-      await expect(detached(fakeCtx())).rejects.toMatchObject({
-        code: CLI_ERROR_CODES.CLI_LOCK_BUSY,
+      const swap = await detached(fakeCtx());
+      expect(swap).toEqual({
+        data: { swapStatus: "deferred", downgradedTo: null },
+        human: "",
+        exitCode: 0,
       });
       expect(mocks.controllerCalls).toEqual([]);
       mocks.lockThrows = null;
