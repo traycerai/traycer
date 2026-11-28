@@ -23,6 +23,7 @@ import { useBoundSandboxSend } from "@/hooks/sandboxes/use-bound-sandbox-send";
 import { PendingSandboxSendForChat } from "@/components/sandboxes/pending-sandbox-sends";
 import { SandboxReadyLineForChat } from "@/components/sandboxes/pending-sandbox-sends";
 import { queueWithDrainingPrompts } from "@/stores/chats/chat-send-state";
+import { queuedPromptHasBegun } from "@/stores/chats/chat-effective-queue";
 import { useFallbackProfileLabels } from "@/components/chat/fallback/fallback-identity";
 import { ChatSandboxDestroyedLine } from "@/components/chat/chat-sandbox-destroyed-line";
 import {
@@ -2224,10 +2225,10 @@ function teardownSendRefusalReason(
  * the user confirms (a blocking approval can arrive, the turn can start
  * stopping), so `refusal` reads current state and returns the sentence to
  * surface instead of dispatching, or `null` when the send is still
- * eligible. Never a silent no-op: an ineligible confirm states why. The one
- * exception is a queued message's edit that ended while the dialog was open
- * (its row began or left the queue): the edit has already ended, visibly (its
- * draft is put back), so its confirm only closes the dialog.
+ * eligible. Never a silent no-op: an ineligible confirm states why. That
+ * holds for a queued message's edit too. When its row begins or leaves the
+ * queue, the dialog closes at that moment and says why, and a confirm
+ * that still finds the edit ended says the same.
  * `folders` names what the gate judges the send's rebind by.
  */
 type GatedChatSend = {
@@ -2239,16 +2240,36 @@ type GatedChatSend = {
 
 // The folders a gated send would commit: the chat's staged pick for a send,
 // or, for a queued message's edit, that message's own folders as saving it
-// would leave them.
+// would leave them. `messageId` tells a row that began from one removed.
 type GatedSendFolders =
   | { readonly kind: "staged" }
   | {
       readonly kind: "queue-edit";
       readonly queueItemId: string;
+      readonly messageId: string;
       readonly editSessionId: string;
     };
 
 const STAGED_SEND_FOLDERS: GatedSendFolders = { kind: "staged" };
+
+const QUEUE_EDIT_DIALOG_ROW_STARTED =
+  "This message already started in its original folder. Nothing was changed.";
+const QUEUE_EDIT_DIALOG_ROW_REMOVED =
+  "This message was removed from the queue. Nothing was changed.";
+
+// Said as the folder dialog closes on a queued message's edit whose row has
+// left the queue, begun or removed: nothing was saved.
+function sayQueueEditDialogClosed(
+  folders: GatedSendFolders,
+  live: ChatSessionState,
+): void {
+  if (folders.kind !== "queue-edit") return;
+  toast(
+    queuedPromptHasBegun(live, folders.messageId)
+      ? QUEUE_EDIT_DIALOG_ROW_STARTED
+      : QUEUE_EDIT_DIALOG_ROW_REMOVED,
+  );
+}
 
 // A queued message's edit is confirmed by saving it; the switch comes when
 // the message is sent from the queue.
@@ -2577,6 +2598,7 @@ function useChatTileSessionViewModel(
         item.queueItemId === uiState.editingQueueItemId,
     ) ?? null;
   const activeEditingQueueItemId = editingQueueItem?.queueItemId ?? null;
+  const activeEditingMessageId = editingQueueItem?.messageId ?? null;
   const queueEditWorkspace = useQueueEditWorkspace({
     hostId: viewModelHostId,
     epicId: currentEpicId,
@@ -3838,7 +3860,10 @@ function useChatTileSessionViewModel(
         return false;
       if (activeEditingQueueItemId !== null) {
         const editSessionId = uiState.queueEditSessionId;
-        if (!canAct || editSessionId === null) return false;
+        const messageId = activeEditingMessageId;
+        if (!canAct || editSessionId === null || messageId === null) {
+          return false;
+        }
         // Cmd+Enter in edit mode = save-and-steer (decision 14): the steer
         // carries the settings and the host picks safe-point vs interrupt-restart
         // (any drift was already confirmed by the composer's steer dialog).
@@ -3881,7 +3906,12 @@ function useChatTileSessionViewModel(
             return true;
           },
           refusal: NO_LIVE_SEND_REFUSAL,
-          folders: { kind: "queue-edit", queueItemId, editSessionId },
+          folders: {
+            kind: "queue-edit",
+            queueItemId,
+            messageId,
+            editSessionId,
+          },
         }).accepted;
       }
       if (props.restingSandbox !== undefined)
@@ -3896,6 +3926,7 @@ function useChatTileSessionViewModel(
     },
     [
       activeEditingQueueItemId,
+      activeEditingMessageId,
       uiState.queueEditSessionId,
       props.restingSandbox,
       submitBoundSandboxMessage,
@@ -4324,6 +4355,23 @@ function useChatTileSessionViewModel(
     },
     [isCopy, currentEpicId, node.id, updateChatRunSettingsMutateAsync],
   );
+  // The folder dialog asking about an edit's Save closes the moment the
+  // edit's row leaves the queue, saying why: nothing is left to save, and
+  // its Save button goes with it.
+  const closeTeardownForDepartedRow = useCallback(
+    (queueItemId: string): void => {
+      const armed = pendingSubmitRef.current;
+      if (armed === null) return;
+      const { folders } = armed.input.send;
+      if (folders.kind !== "queue-edit" || folders.queueItemId !== queueItemId)
+        return;
+      pendingSubmitRef.current = null;
+      armed.input.settle(false);
+      setTeardownDialog(null);
+      sayQueueEditDialogClosed(folders, handle.store.getState());
+    },
+    [handle.store],
+  );
   const {
     editQueuedItem,
     cancelQueuedItem,
@@ -4348,6 +4396,7 @@ function useChatTileSessionViewModel(
     dispatchUi,
     setEpicRunSettings,
     persistChatRunSettings,
+    onEditedRowLeftQueue: closeTeardownForDepartedRow,
   });
   const handleForkOpenChange = useCallback(
     (open: boolean): void => {
@@ -4905,13 +4954,15 @@ function useChatTileSessionViewModel(
           setTeardownDialog(null);
           return;
         }
-        const live = judgeGatedSend(armed.input.send.folders);
-        // The queued message's edit it was armed for has ended (its row began
-        // or left the queue, and its draft was put back): there is nothing
-        // left to save. See `GatedChatSend`.
+        const { folders } = armed.input.send;
+        const live = judgeGatedSend(folders);
+        // The queued message's edit it was armed for has ended, its row begun
+        // or removed: nothing is left to save, and the dialog says so. See
+        // `GatedChatSend`.
         if (live === null) {
           armed.input.settle(false);
           setTeardownDialog(null);
+          sayQueueEditDialogClosed(folders, handle.store.getState());
           return;
         }
         const disclosedHolders = teardownDialog?.holders ?? [];
