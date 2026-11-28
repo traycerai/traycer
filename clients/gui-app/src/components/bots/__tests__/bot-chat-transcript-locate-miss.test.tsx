@@ -57,6 +57,7 @@ import {
   CHAT_ID,
   createLandingStore,
   otherUserMessage,
+  reply,
   resolvedUserMessage,
   type LandingState,
 } from "@/components/bots/__tests__/bot-chat-transcript-landing-support";
@@ -199,6 +200,7 @@ import {
   settleLegendList,
 } from "@/components/chat/__tests__/legend-list-test-environment";
 import { UNRESOLVED_BOT_MEMBERS } from "@/lib/bots/bot-member-names";
+import { resetReadingPositionServiceForTests } from "@/lib/reading-position/service";
 
 /** A landing that says whether the host's having no row for it is reported. */
 interface MissLanding extends BotTranscriptLanding {
@@ -445,6 +447,10 @@ function failedHost(): HostRpcError {
 }
 
 beforeEach(() => {
+  // The reading position a chat's tab last saved is kept per chat, and
+  // restores into the next mount of it: a mount that follows the end must not
+  // inherit the position an earlier case left.
+  resetReadingPositionServiceForTests();
   installLegendListTestClock();
   vi.clearAllMocks();
   installLegendListViewportMetrics();
@@ -1299,5 +1305,77 @@ describe('an "in reply to" open, with no landing asked of the transcript', () =>
     await waitFor(() => {
       expect(flashing(TARGET)).toBe(true);
     });
+  });
+});
+
+describe("a movement the list reports from inside the commit that sets a pending jump", () => {
+  /**
+   * The browser has reported the view at the end, as it does once the list
+   * follows it, and then scrolls it away with no report delivered yet: the
+   * list, following the end, finds it moved when its rows next change, and
+   * says so from its layout effect in that commit.
+   */
+  function moveTheViewAheadOfItsReport(): void {
+    const node = screen.getByTestId("chat-messages-scroll");
+    const end = node.scrollHeight - node.clientHeight;
+    node.scrollTop = end;
+    act(() => {
+      node.dispatchEvent(new Event("scroll", { bubbles: true }));
+    });
+    node.scrollTop = end - 400;
+  }
+
+  /** The commit that asks `target` and carries a row that is not the jump's. */
+  function askInACommitThatChangesRows(
+    view: { readonly rerender: () => void },
+    target: string,
+  ): void {
+    landing = landingOf(target, { reportsMiss: true, sendPostId: null });
+    act(() => {
+      store.setState({ messages: [resolvedUserMessage(), reply()] });
+      view.rerender();
+    });
+  }
+
+  it("keeps a jump asked in that commit", async () => {
+    mocks.locate = () => Promise.resolve(FOUND_ROW);
+    const view = mountTranscript();
+    await settleLegendList();
+    moveTheViewAheadOfItsReport();
+
+    jumpAskedAt = Date.now();
+    askInACommitThatChangesRows(view, TARGET);
+    await answered();
+
+    expect(lastOrdinalRequested()).toBe(FOUND_ORDINAL);
+    await rowArrives();
+    await waitFor(() => {
+      expect(flashing(TARGET)).toBe(true);
+    });
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("keeps a jump that replaces one already waiting, asked in that commit", async () => {
+    mocks.locate = () => Promise.resolve(FOUND_ROW);
+    const view = mountTranscript();
+    await settleLegendList();
+    landing = landingOf("ghost-1", { reportsMiss: true, sendPostId: null });
+    act(() => {
+      view.rerender();
+    });
+    await answered();
+    expect(lastOrdinalRequested()).toBe(FOUND_ORDINAL);
+    moveTheViewAheadOfItsReport();
+
+    jumpAskedAt = Date.now();
+    askInACommitThatChangesRows(view, TARGET);
+    await answered();
+
+    expect(lastOrdinalRequested()).toBe(FOUND_ORDINAL);
+    await rowArrives();
+    await waitFor(() => {
+      expect(flashing(TARGET)).toBe(true);
+    });
+    expect(toast.error).not.toHaveBeenCalled();
   });
 });
