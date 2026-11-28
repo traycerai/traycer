@@ -14,6 +14,10 @@
  * names these fields, and the store shape follows. Nothing here imports the
  * store, which is what finally breaks the projector's circular import.
  */
+import {
+  EMPTY_OCCUPIED_WRITE_FIELDS,
+  type OccupiedWriteFields,
+} from "../write-field-key";
 import type { EpicAdapterArm } from "./epic-adapter-selection";
 import type { EpicArtifactSync } from "@traycer/protocol/host/epic/status-subscribe";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
@@ -217,6 +221,7 @@ export interface EpicRecordsProjection extends EpicProjectedSlices {
   readonly unsyncedQueueSize: number;
   /** Pending and terminal-unacknowledged write commands, in issue order. */
   readonly writeCommands: readonly CommandRecord<EpicWriteCommandIntent>[];
+  readonly occupiedWriteFields: OccupiedWriteFields;
 }
 
 export const EMPTY_RECORDS_PROJECTION: EpicRecordsProjection = Object.freeze({
@@ -244,6 +249,7 @@ export const EMPTY_RECORDS_PROJECTION: EpicRecordsProjection = Object.freeze({
   latestHostStateVectorBase64: null,
   unsyncedQueueSize: 0,
   writeCommands: Object.freeze([]),
+  occupiedWriteFields: EMPTY_OCCUPIED_WRITE_FIELDS,
 });
 
 // ─── Artifact-body doc plane ──────────────────────────────────────────────

@@ -109,7 +109,10 @@ export function useRenameCanvasTab(
           renameArtifact
             .mutateAsync({ epicId, artifactId: id, title: trimmed })
             .then(
-              () => renameArtifactInTab(viewTabId, id, trimmed, null),
+              (result) => {
+                if (result.updated)
+                  renameArtifactInTab(viewTabId, id, trimmed, null);
+              },
               () => {
                 // SUPERSEDED IS NOT LOST. `enqueueAndWait` throws for every
                 // non-committed terminal state, so a rename whose own

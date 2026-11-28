@@ -30,6 +30,10 @@ import { useHeaderTabForRef } from "@/stores/tabs/use-header-tabs";
 import { selectHostFocusedRef } from "@/stores/tabs/selectors";
 import { useTabsStore } from "@/stores/tabs/store";
 import {
+  readWriteFieldBusy,
+  useRegisteredTaskTitleBusy,
+} from "@/hooks/epic/use-write-field-busy";
+import {
   getEpicSessionHandleHostClient,
   getOpenEpicRegistry,
 } from "@/lib/registries/epic-session-registry";
@@ -116,9 +120,10 @@ export function MobileEpicHeaderTitle(props: {
   const cloudAuthorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
+  const titlePermission = useRegisteredEpicPermissionRole(epicId);
+  const titleBusy = useRegisteredTaskTitleBusy(epicId);
   const canEdit =
-    isEditableRole(useRegisteredEpicPermissionRole(epicId)) &&
-    (localHome || cloudAuthorized);
+    isEditableRole(titlePermission) && (localHome || cloudAuthorized);
   const focusedTab = useHeaderTabForRef(useTabsStore(selectHostFocusedRef));
   const tabHostId =
     focusedTab?.kind === "epic" && focusedTab.epicId === epicId
@@ -150,13 +155,13 @@ export function MobileEpicHeaderTitle(props: {
         const hostId = sessionClient?.getActiveHostId() ?? null;
         const userId = sessionClient?.getRequestContextUserId() ?? null;
         const state = handle.store.getState();
-        const commandId = await state.enqueueWriteCommand({
+        const submission = state.submitWriteCommand({
           kind: "update-epic-title",
           title: next,
           updatedAt: Date.now(),
         });
-        // A promise is truthy, so this guard only means anything against the
-        // awaited value - see the enqueue above.
+        if (submission === "busy") return;
+        const commandId = await submission;
         if (commandId === null) return;
         settleEpicTitleWrite(state.waitForWriteCommand(commandId), {
           onCommitted: () => {
@@ -201,6 +206,14 @@ export function MobileEpicHeaderTitle(props: {
     <InlineTitleField
       value={title}
       editable={canEdit}
+      disabled={titleBusy}
+      isBlocked={() =>
+        readWriteFieldBusy(
+          getOpenEpicRegistry().peek(epicId),
+          "epic-title",
+          null,
+        )
+      }
       // Wrapped: the prop is declared void-returning and the commit is a
       // round trip now. `void` states the fire-and-forget the caller already
       // assumed, instead of leaking a promise into a void slot.

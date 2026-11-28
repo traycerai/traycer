@@ -37,10 +37,13 @@ import { appLogger } from "@/lib/logger";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import { useEpicSidebarExpansionStore } from "@/stores/epics/epic-sidebar-expansion-store";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
+import { createArtifactInDocForTests } from "@/stores/epics/open-epic/__tests__/projection-helpers-test-shims";
 import {
   openStoreForTest,
+  type OpenStoreForTestOptions,
   type OpenedStoreForTest,
 } from "@/stores/epics/open-epic/test-support/open-store-for-test";
+import { writeFieldKey } from "@/stores/epics/open-epic/write-field-key";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 
@@ -92,7 +95,9 @@ function makeMeta(): SnapshotMetaEpic {
   };
 }
 
-function newSession(): OpenedStoreForTest {
+function newSession(
+  writeCommand: OpenStoreForTestOptions["writeCommand"],
+): OpenedStoreForTest {
   const captured: { value: EpicStreamCallbacks | null } = { value: null };
   const factory: EpicStreamClientFactory = (_id, callbacks) => {
     captured.value = callbacks;
@@ -119,7 +124,7 @@ function newSession(): OpenedStoreForTest {
     },
     // Explicit: `null` means this suite never writes, so a write in
     // one that said so fails rather than resolving quietly.
-    writeCommand: null,
+    writeCommand,
   });
   if (captured.value === null) throw new Error("factory not invoked");
   const seed = Y.encodeStateAsUpdate(new Y.Doc());
@@ -194,7 +199,7 @@ describe("commitSidebarReparentDrop when the projected gate and the doc write no
   });
 
   it("commits a doc-only terminal agent dropped onto a record-backed chat, and the projected tree agrees with the outcome", async () => {
-    const handle = newSession();
+    const handle = newSession(null);
 
     // The source: a doc-only terminal agent. No `epic.listTuiAgents` row for
     // it, so `projectTerminalAgent`'s doc projection is the only source and
@@ -227,6 +232,7 @@ describe("commitSidebarReparentDrop when the projected gate and the doc write no
     );
 
     const expand = vi.spyOn(useEpicSidebarExpansionStore.getState(), "expand");
+    expand.mockClear();
     const errorSpy = vi.spyOn(appLogger, "error");
 
     // AWAITED. `commitSidebarReparentDrop` returns `Promise<void>`, and the
@@ -273,5 +279,61 @@ describe("commitSidebarReparentDrop when the projected gate and the doc write no
 
     // The divergence this file used to pin is gone: nothing is logged.
     expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it("refuses a stale artifact drop while its reparent is busy, before expanding the new parent", async () => {
+    const handle = newSession(
+      () => new Promise<{ readonly hostId: string }>(() => undefined),
+    );
+    const sourceId = createArtifactInDocForTests(handle.doc, "ticket", null);
+    const firstParentId = createArtifactInDocForTests(handle.doc, "spec", null);
+    const laterParentId = createArtifactInDocForTests(handle.doc, "spec", null);
+    __getOpenEpicRegistryForTests().acquireMounted("epic-1", () => handle);
+
+    const firstSubmission = handle.store.getState().submitWriteCommand({
+      kind: "reparent-artifact",
+      artifactId: sourceId,
+      parentId: firstParentId,
+    });
+    if (firstSubmission === "busy")
+      throw new Error("the first reparent unexpectedly found a busy field");
+    const firstCommandId = await firstSubmission;
+    expect(firstCommandId).not.toBeNull();
+    expect(
+      handle.store.getState().occupiedWriteFields[
+        writeFieldKey("reparent", sourceId)
+      ],
+    ).toBe(true);
+    expect(handle.store.getState().tree.nodeById[sourceId]?.parentId).toBe(
+      firstParentId,
+    );
+
+    const expand = vi.spyOn(useEpicSidebarExpansionStore.getState(), "expand");
+    expand.mockClear();
+    await expect(
+      commitSidebarReparentDrop({
+        epicId: "epic-1",
+        sourceNodeId: sourceId,
+        newParentId: laterParentId,
+        panelId: "artifacts",
+        viewTabId: "tab-1",
+        queryClient,
+        hostBinding: null,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(expand).not.toHaveBeenCalled();
+    expect(handle.store.getState().tree.nodeById[sourceId]?.parentId).toBe(
+      firstParentId,
+    );
+    expect(
+      handle.store
+        .getState()
+        .writeCommands.filter(
+          (command) =>
+            command.intent.kind === "reparent-artifact" &&
+            command.intent.artifactId === sourceId,
+        ),
+    ).toHaveLength(1);
   });
 });

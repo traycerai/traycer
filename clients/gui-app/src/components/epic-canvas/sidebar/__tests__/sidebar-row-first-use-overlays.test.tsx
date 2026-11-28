@@ -44,8 +44,10 @@ import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-a
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
   openStoreForTest,
+  type OpenStoreForTestOptions,
   type OpenedStoreForTest,
 } from "@/stores/epics/open-epic/test-support/open-store-for-test";
+import { writeFieldKey } from "@/stores/epics/open-epic/write-field-key";
 import {
   getPaneScopedDndId,
   getSidebarNodeDragId,
@@ -497,7 +499,10 @@ function seedArtifactDoc(): Uint8Array {
   return Y.encodeStateAsUpdate(donor);
 }
 
-function openSeededStore(seed: Uint8Array): OpenedStoreForTest {
+function openSeededStore(
+  seed: Uint8Array,
+  writeCommand: OpenStoreForTestOptions["writeCommand"],
+): OpenedStoreForTest {
   const captured: { value: EpicStreamCallbacks | null } = { value: null };
   const factory: EpicStreamClientFactory = (_id, callbacks) => {
     captured.value = callbacks;
@@ -514,19 +519,27 @@ function openSeededStore(seed: Uint8Array): OpenedStoreForTest {
     epicId: EPIC_ID,
     userId: USER_ID,
     factories: { streamClientFactory: factory, laneSelection: null },
-    writeCommand: null,
+    writeCommand,
   });
   if (captured.value === null) throw new Error("factory not invoked");
+  if (writeCommand !== null)
+    captured.value.onConnectionStatus("open", null, true, null);
   captured.value.onSnapshot(makeMeta(), seed);
   return handle;
 }
 
 function createSession(): OpenedStoreForTest {
-  return openSeededStore(seedDoc());
+  return openSeededStore(seedDoc(), null);
 }
 
 function createArtifactSession(): OpenedStoreForTest {
-  return openSeededStore(seedArtifactDoc());
+  return openSeededStore(seedArtifactDoc(), null);
+}
+
+function createArtifactSessionWithWriter(
+  writeCommand: OpenStoreForTestOptions["writeCommand"],
+): OpenedStoreForTest {
+  return openSeededStore(seedArtifactDoc(), writeCommand);
 }
 
 const ROW_C = "chat-c";
@@ -698,7 +711,7 @@ function renderTreeWithMessageHits(
 }
 
 function renderMixedOwnersTree(): void {
-  const handle = openSeededStore(seedMixedOwnersDoc());
+  const handle = openSeededStore(seedMixedOwnersDoc(), null);
   opened.push(handle);
   render(
     <QueryClientProvider client={new QueryClient()}>
@@ -739,7 +752,13 @@ function renderTreeInSelectionMode(): HTMLElement {
 }
 
 function renderArtifactTree(): HTMLElement {
-  const handle = createArtifactSession();
+  return renderArtifactTreeWithSession(null);
+}
+
+function renderArtifactTreeWithSession(
+  existingHandle: OpenedStoreForTest | null,
+): HTMLElement {
+  const handle = existingHandle ?? createArtifactSession();
   opened.push(handle);
   render(
     <QueryClientProvider client={new QueryClient()}>
@@ -1355,6 +1374,52 @@ describe("sidebar row first-use overlays", () => {
     expect(screen.getByRole("menu")).toBeTruthy();
     expect(overlayMounted.dropdownMenu).toBe(1);
     expect(screen.queryByTestId(`epic-sidebar-rename-${ART_B}`)).toBeNull();
+  });
+
+  it("keeps occupied artifact Rename visible-disabled while its sibling can still enter rename", async () => {
+    const handle = createArtifactSessionWithWriter(
+      () => new Promise<{ readonly hostId: string }>(() => undefined),
+    );
+    const submission = handle.store.getState().submitWriteCommand({
+      kind: "rename-artifact",
+      artifactId: ART_A,
+      title: "Busy artifact title",
+    });
+    if (submission === "busy")
+      throw new Error("the artifact fixture's initial rename was refused");
+    const commandId = await submission;
+    if (commandId === null)
+      throw new Error("expected artifact rename admission");
+    await act(async () => {
+      await handle.flush();
+    });
+    const busyKey = writeFieldKey("rename", ART_A);
+    expect(handle.store.getState().occupiedWriteFields[busyKey]).toBe(true);
+
+    renderArtifactTreeWithSession(handle);
+    const user = userEvent.setup();
+    await user.click(screen.getByTestId(`epic-sidebar-more-${ART_A}`));
+    const occupiedRename = await screen.findByTestId(
+      `epic-sidebar-rename-${ART_A}`,
+    );
+    expect(occupiedRename.hasAttribute("data-disabled")).toBe(true);
+    expect(occupiedRename.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.keyDown(occupiedRename, { key: "Enter", code: "Enter" });
+    expect(
+      screen.queryByTestId(`epic-sidebar-rename-input-${ART_A}`),
+    ).toBeNull();
+
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    await user.click(screen.getByTestId(`epic-sidebar-more-${ART_B}`));
+    const siblingRename = await screen.findByTestId(
+      `epic-sidebar-rename-${ART_B}`,
+    );
+    expect(siblingRename.hasAttribute("data-disabled")).toBe(false);
+    await user.click(siblingRename);
+    expect(
+      await screen.findByTestId(`epic-sidebar-rename-input-${ART_B}`),
+    ).toBeTruthy();
   });
 
   it("opens the artifact add-child menu on the first click of a never-touched add button", async () => {
