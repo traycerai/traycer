@@ -1,5 +1,5 @@
 import {
-  isManagedCliAuth,
+  isManagedSignIn,
   managedSignInRefusal,
 } from "../internal/managed-host-auth";
 import { createInterface } from "node:readline";
@@ -241,7 +241,7 @@ function sleep(ms: number): Promise<void> {
  * script's exit code.
  */
 async function requireBearerToken(): Promise<string> {
-  if (await isManagedCliAuth()) throw managedSignInRefusal();
+  if (await isManagedSignIn()) throw managedSignInRefusal();
   const validation = await validateStoredCredentials();
   if (validation.kind === "network-error") {
     throw cliError({

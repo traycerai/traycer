@@ -1,10 +1,18 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { readCliAuthMode } from "@traycer/protocol/config/managed-cli-auth";
+import {
+  readCliAuthMode,
+  type CliAuthMode,
+} from "@traycer/protocol/config/managed-cli-auth";
 import {
   MANAGED_CLI_AUTH_PATH,
   MANAGED_CLI_HOST_HEADER,
-  managedCliIdentitySchema,
+  MANAGED_CLI_WAITING_HEADER,
+  MANAGED_CLI_WAITING,
+  MANAGED_CLI_REFUSAL,
+  MANAGED_CLI_RETRY,
+  MANAGED_CLI_UNCONFIRMED,
+  managedCliAccountSchema,
   type ManagedCliIdentity,
 } from "@traycer/protocol/host/managed-cli-auth";
 import type { HostTransportEndpoint } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -19,24 +27,30 @@ import { cliError, CLI_ERROR_CODES, type CliError } from "../runner/errors";
 import type { CommandContext, CommandResult } from "../runner/runner";
 import { hostHomeDir } from "../store/paths";
 
-export const MANAGED_SIGN_IN = "Sign-in is managed for this machine.";
-const WAITING = "Waiting for this machine's Traycer account.";
+export const MANAGED_SIGN_IN = MANAGED_CLI_REFUSAL;
 const STOPPED =
   "Traycer is not running on this machine. Run `traycer host ensure`.";
-export const MANAGED_ACCOUNT_UNCONFIRMED =
-  "Could not confirm this machine's Traycer account.";
-const RETRY_ACCOUNT = MANAGED_ACCOUNT_UNCONFIRMED + " Try again.";
+export const MANAGED_ACCOUNT_UNCONFIRMED = MANAGED_CLI_UNCONFIRMED;
 
-export async function isManagedCliAuth(): Promise<boolean> {
+async function currentCliAuthMode(): Promise<CliAuthMode> {
   let hostDataDir: string;
   try {
     hostDataDir = hostHomeDir(config.environment);
   } catch {
     // Keep ordinary commands' existing invalid-slot handling.
-    return false;
+    return "interactive";
   }
-  // An unreadable marker in a resolved slot cannot permit interactive login.
-  return (await readCliAuthMode(hostDataDir)) !== "interactive";
+  return readCliAuthMode(hostDataDir);
+}
+
+export async function isManagedCliAuth(): Promise<boolean> {
+  return (await currentCliAuthMode()) === "managed";
+}
+
+export async function isManagedSignIn(): Promise<boolean> {
+  const mode = await currentCliAuthMode();
+  if (mode === "unreadable") throw managedUnavailable(false);
+  return mode === "managed";
 }
 
 export function managedSignInRefusal(): CliError {
@@ -56,6 +70,7 @@ const credentialRecord = z.object({
 const storedClaims = z.object({
   aud: z.union([z.literal("host"), z.tuple([z.literal("host")])]),
   hostId: z.string().min(1),
+  exp: z.number().optional(),
   id: z.string().min(1).optional(),
   principal: z.string().optional(),
   teamId: z.string().min(1).optional(),
@@ -65,12 +80,14 @@ const storedClaims = z.object({
 
 interface StoredHostAuth {
   readonly token: string;
+  readonly expiresAtMs: number;
   readonly identity: ManagedCliIdentity;
 }
 
 async function readStoredHostAuth(
   hostId: string | null,
-): Promise<StoredHostAuth | null> {
+): Promise<StoredHostAuth | "wrong-host" | null> {
+  let wrongHost = false;
   const directory = join(hostHomeDir(config.environment), "identity");
   for (const filename of ["device-credentials.json", "team-credential.json"]) {
     try {
@@ -82,16 +99,22 @@ async function readStoredHostAuth(
           Buffer.from(token.split(".")[1], "base64url").toString("utf8"),
         ),
       );
-      if (hostId !== null && claims.hostId !== hostId) continue;
+      if (hostId !== null && claims.hostId !== hostId) {
+        wrongHost = true;
+        continue;
+      }
+      const expiresAtMs = (claims.exp ?? 0) * 1000;
       if (claims.principal === "team" && claims.teamId !== undefined) {
         return {
           token,
+          expiresAtMs,
           identity: { kind: "team", id: claims.teamId, label: claims.teamId },
         };
       }
       if (claims.principal === undefined && claims.id !== undefined) {
         return {
           token,
+          expiresAtMs,
           identity: { kind: "user", id: claims.id, label: claims.id },
         };
       }
@@ -99,7 +122,7 @@ async function readStoredHostAuth(
       // An absent or invalid record supplies no authentication.
     }
   }
-  return null;
+  return wrongHost ? "wrong-host" : null;
 }
 
 function managedAuthUrl(endpoint: HostTransportEndpoint): URL | null {
@@ -113,14 +136,16 @@ function managedAuthUrl(endpoint: HostTransportEndpoint): URL | null {
 }
 
 /** Discover the versioned local door without sending a bearer to released peers. */
-export async function readManagedHostBearer(
+export async function readManagedHostCredential(
   endpoint: HostTransportEndpoint,
   signal: AbortSignal | null,
-): Promise<string> {
+): Promise<StoredHostAuth> {
   const url = managedAuthUrl(endpoint);
   if (url === null) throw managedUnavailable(false);
   const stored = await readStoredHostAuth(endpoint.hostId);
-  if (stored === null) throw managedUnavailable(false);
+  if (stored === "wrong-host") throw managedUnavailable(false);
+  if (stored === null || stored.expiresAtMs <= Date.now())
+    throw managedWaiting();
   const availability = await managedDoorAvailability(
     url,
     endpoint.hostId,
@@ -128,7 +153,7 @@ export async function readManagedHostBearer(
   );
   if (availability !== "available")
     throw managedUnavailable(availability === "unreachable");
-  return stored.token;
+  return stored;
 }
 
 async function managedDoorAvailability(
@@ -155,8 +180,28 @@ function managedDeadline(signal: AbortSignal | null): AbortSignal {
 
 export function managedUnavailable(canRetry: boolean): CliError {
   return cliError({
-    code: CLI_ERROR_CODES.AUTH_REJECTED,
-    message: canRetry ? RETRY_ACCOUNT : MANAGED_ACCOUNT_UNCONFIRMED,
+    code: canRetry
+      ? CLI_ERROR_CODES.HOST_UNREACHABLE
+      : CLI_ERROR_CODES.AUTH_REJECTED,
+    message: canRetry ? MANAGED_CLI_RETRY : MANAGED_ACCOUNT_UNCONFIRMED,
+    details: null,
+    exitCode: 1,
+  });
+}
+
+export function managedWaiting(): CliError {
+  return cliError({
+    code: CLI_ERROR_CODES.HOST_UNREACHABLE,
+    message: MANAGED_CLI_WAITING,
+    details: null,
+    exitCode: 1,
+  });
+}
+
+export function managedHostStopped(): CliError {
+  return cliError({
+    code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
+    message: STOPPED,
     details: null,
     exitCode: 1,
   });
@@ -165,27 +210,36 @@ export function managedUnavailable(canRetry: boolean): CliError {
 type ManagedAccount =
   | { readonly status: "waiting" | "unconfirmed" | "unreachable" | "stopped" }
   | {
-      readonly status: "stored" | "valid";
+      readonly status: "stored-managed" | "valid-team";
       readonly identity: ManagedCliIdentity;
+    }
+  | {
+      readonly status: "valid";
+      readonly identity: ManagedCliIdentity;
+      readonly user: {
+        readonly id: string;
+        readonly email: string;
+        readonly name: string;
+      };
+      readonly authnBaseUrl: string;
     };
 
 async function readManagedAccount(local: boolean): Promise<ManagedAccount> {
   if (local) {
     const stored = await readStoredHostAuth(null);
-    return stored === null
-      ? { status: "waiting" }
-      : { status: "stored", identity: stored.identity };
+    if (stored !== null && stored !== "wrong-host")
+      return { status: "stored-managed", identity: stored.identity };
   }
   const metadata = await readHostPidMetadata(config.environment);
   if (metadata === null || publishedHostProcessGone(metadata)) {
-    return {
-      status: (await readStoredHostAuth(null)) === null ? "waiting" : "stopped",
-    };
+    return { status: "stopped" };
   }
   const url = managedAuthUrl(metadata);
   if (url === null) return { status: "unconfirmed" };
   const stored = await readStoredHostAuth(metadata.hostId);
-  if (stored === null) return { status: "waiting" };
+  if (stored === "wrong-host") return { status: "unconfirmed" };
+  if (stored === null || stored.expiresAtMs <= Date.now() || local)
+    return { status: "waiting" };
   const availability = await managedDoorAvailability(
     url,
     metadata.hostId,
@@ -204,26 +258,39 @@ async function readManagedAccount(local: boolean): Promise<ManagedAccount> {
     });
     if (!response.ok) {
       await response.body?.cancel();
+      if (
+        response.status === 503 &&
+        response.headers.get(MANAGED_CLI_WAITING_HEADER) === "1"
+      )
+        return { status: "waiting" };
       return { status: response.status >= 500 ? "unreachable" : "unconfirmed" };
     }
-    const identity = managedCliIdentitySchema.safeParse(await response.json());
-    return identity.success
-      ? { status: "valid", identity: identity.data }
-      : { status: "unconfirmed" };
+    const account = managedCliAccountSchema.safeParse(await response.json());
+    if (!account.success) return { status: "unconfirmed" };
+    const { kind, id, label } = account.data;
+    const identity = { kind, id, label };
+    return account.data.kind === "team"
+      ? { status: "valid-team", identity }
+      : {
+          status: "valid",
+          identity,
+          user: account.data.user,
+          authnBaseUrl: account.data.authnBaseUrl,
+        };
   } catch {
     return { status: "unreachable" };
   }
 }
 
 function accountLine(account: ManagedAccount): string {
-  if (account.status === "waiting") return WAITING;
+  if (account.status === "waiting") return MANAGED_CLI_WAITING;
   if (account.status === "stopped") return STOPPED;
-  if (account.status === "unreachable") return RETRY_ACCOUNT;
+  if (account.status === "unreachable") return MANAGED_CLI_RETRY;
   if (!("identity" in account)) return MANAGED_ACCOUNT_UNCONFIRMED;
   const { identity } = account;
   const label = identity.label.replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, " ");
   const display = identity.kind === "team" ? `team ${label}` : label;
-  return account.status === "stored"
+  return account.status === "stored-managed"
     ? `Stored Traycer account: ${display} (unverified).`
     : `Signed in as ${display}. ${MANAGED_SIGN_IN}`;
 }
@@ -237,10 +304,12 @@ export async function managedAccountResult(
   local: boolean,
 ): Promise<CommandResult> {
   const account = await readManagedAccount(local);
+  if (account.status === "waiting") throw managedWaiting();
+  if (account.status === "unreachable") throw managedUnavailable(true);
   return {
     data: {
       ...account,
-      validated: account.status === "valid",
+      validated: account.status === "valid" || account.status === "valid-team",
       credentialUpdate: "none",
     },
     human: ctx.runtime.json ? null : accountLine(account),

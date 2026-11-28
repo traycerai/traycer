@@ -1,5 +1,5 @@
 import {
-  isManagedCliAuth,
+  isManagedSignIn,
   managedSignInRefusal,
 } from "../internal/managed-host-auth";
 import {
@@ -184,7 +184,7 @@ export async function runSignInPreflight(
   if (policy === true) {
     return { state: "not-checked", reason: "bytes-only" };
   }
-  if (await isManagedCliAuth()) {
+  if (await isManagedSignIn()) {
     if (typeof policy === "object") throw managedSignInRefusal();
     return { state: "managed", reason: null };
   }

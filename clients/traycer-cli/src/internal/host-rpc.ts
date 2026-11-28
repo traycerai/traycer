@@ -1,13 +1,17 @@
 import {
-  MANAGED_CLI_OPEN_PREFIX,
+  encodeManagedCliOpen,
+  MANAGED_CLI_REFUSAL,
+  MANAGED_CLI_WAITING,
   MANAGED_CLI_RPC_PATH,
   MANAGED_CLI_UNARY_METHODS,
 } from "@traycer/protocol/host/managed-cli-auth";
 import {
   isManagedCliAuth,
   managedSignInRefusal,
+  managedHostStopped,
+  managedWaiting,
   managedUnavailable,
-  readManagedHostBearer,
+  readManagedHostCredential,
 } from "./managed-host-auth";
 import {
   isRefusalOfAgentSessionCapability,
@@ -94,7 +98,7 @@ import {
   readHostPidMetadata,
 } from "../host/pid-metadata";
 import { resolveHostAuth, type HostAuth } from "./host-auth";
-import { cliError, CLI_ERROR_CODES, type CliError } from "../runner/errors";
+import { cliError, CLI_ERROR_CODES, CliError } from "../runner/errors";
 import {
   clientCompatibilityRecoveryHint,
   compatRecoveryHint,
@@ -134,7 +138,7 @@ export async function callHostRpc<
     return requestWithManagedHostAuth(
       method,
       params,
-      await resolveEndpoint(),
+      await resolveManagedEndpoint(),
       PLAIN_DISPATCH,
     );
   }
@@ -189,7 +193,7 @@ export async function callHostRpcFastFail<
     return requestWithManagedHostAuth(
       method,
       params,
-      await resolveEndpoint(),
+      await resolveManagedEndpoint(),
       FAIL_FAST_DISPATCH,
     );
   }
@@ -292,7 +296,7 @@ export async function callHostRpcWithDispatch<
     return requestWithManagedHostAuth(
       method,
       params,
-      await resolveEndpoint(),
+      await resolveManagedEndpoint(),
       dispatch,
     );
   }
@@ -821,10 +825,21 @@ async function requestWithManagedHostAuth<
   dispatch: HostRpcDispatch,
 ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
   if (!managedMethods.has(method)) throw managedSignInRefusal();
-  const token = await readManagedHostBearer(endpoint, dispatch.signal);
-  if (endpoint.websocketUrl === null) throw hostNotRunningCliError();
+  if (endpoint.websocketUrl === null) throw managedHostStopped();
+  const stored = await readManagedHostCredential(endpoint, dispatch.signal);
   const url = new URL(endpoint.websocketUrl);
   url.pathname = MANAGED_CLI_RPC_PATH;
+  const credential =
+    method === "worktree.listBindingsForEpic" && stored.identity.kind === "team"
+      ? readAgentCommandCredential(PROCESS_AGENT_ENVIRONMENT)
+      : null;
+  const open = encodeManagedCliOpen({
+    token: stored.token,
+    taskCapability:
+      credential?.kind === "capability"
+        ? credential.capability.bearer.getBearerToken()
+        : null,
+  });
   try {
     return await requestWithHostToken(
       method,
@@ -832,7 +847,7 @@ async function requestWithManagedHostAuth<
       { ...endpoint, websocketUrl: url.href },
       {
         identity: { userId: "managed-cli" },
-        getBearerToken: () => MANAGED_CLI_OPEN_PREFIX + token,
+        getBearerToken: () => open,
       },
       {
         revalidateExpectedBearer: async () => "rejected",
@@ -844,6 +859,14 @@ async function requestWithManagedHostAuth<
     );
   } catch (error) {
     const refusal = finalRefusalOf(error);
+    if (refusal instanceof HostRpcError) {
+      if (refusal.fatalDetails?.reason === MANAGED_CLI_REFUSAL)
+        throw managedSignInRefusal();
+      if (refusal.fatalDetails?.reason === MANAGED_CLI_WAITING)
+        throw managedWaiting();
+      if (refusal.fatalDetails?.retryable === true)
+        throw managedUnavailable(true);
+    }
     if (refusal instanceof HostTransportFailureError)
       throw managedUnavailable(true);
     if (refusal instanceof HostRpcError && refusal.code === "UNAUTHORIZED")
@@ -1033,6 +1056,19 @@ export async function resolveEndpoint(): Promise<HostTransportEndpoint> {
     pid: metadata.pid,
   });
   return { hostId: metadata.hostId, websocketUrl: metadata.websocketUrl };
+}
+
+async function resolveManagedEndpoint(): Promise<HostTransportEndpoint> {
+  try {
+    return await resolveEndpoint();
+  } catch (error) {
+    if (
+      error instanceof CliError &&
+      error.code === CLI_ERROR_CODES.HOST_NOT_RUNNING
+    )
+      throw managedHostStopped();
+    throw error;
+  }
 }
 
 function hostNotRunningCliError(): CliError {

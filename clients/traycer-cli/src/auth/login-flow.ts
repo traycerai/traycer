@@ -1,5 +1,5 @@
 import {
-  isManagedCliAuth,
+  isManagedSignIn,
   managedSignInRefusal,
 } from "../internal/managed-host-auth";
 import { spawn } from "node:child_process";
@@ -46,7 +46,7 @@ interface LoginSuccess {
 export async function runDeviceAuthFlow(
   ctx: CommandContext,
 ): Promise<LoginSuccess> {
-  if (await isManagedCliAuth()) throw managedSignInRefusal();
+  if (await isManagedSignIn()) throw managedSignInRefusal();
   const { authnBaseUrl } = config;
 
   const authorization = await startDeviceAuthorization(

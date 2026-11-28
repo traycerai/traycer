@@ -1,5 +1,5 @@
 import {
-  isManagedCliAuth,
+  isManagedSignIn,
   managedSignInRefusal,
 } from "../internal/managed-host-auth";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
@@ -27,7 +27,7 @@ import { forgetCliHostTokens } from "../internal/cli-host-tokens";
 // the old best-effort path that reported "Not logged in." even when the file was
 // still on disk.
 export const logoutCommand: CommandFn = async (ctx): Promise<CommandResult> => {
-  if (await isManagedCliAuth()) throw managedSignInRefusal();
+  if (await isManagedSignIn()) throw managedSignInRefusal();
   const { hadSession, signedOutUserId, signOut } = await runWithCliStore(
     async (store) => {
       const before = await store.read();

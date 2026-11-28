@@ -1,5 +1,6 @@
 import {
   isManagedCliAuth,
+  isManagedSignIn,
   managedAccountResult,
 } from "../internal/managed-host-auth";
 import {
@@ -46,7 +47,7 @@ import { readCredentials, type StoredCredentials } from "../store/credentials";
 //     `whoami` call does not have to infer it;
 //   - `--local` is the truly observational read for callers that want one.
 export const whoamiCommand: CommandFn = async (ctx): Promise<CommandResult> => {
-  if (await isManagedCliAuth()) return managedAccountResult(ctx, false);
+  if (await isManagedSignIn()) return managedAccountResult(ctx, false);
   const result = await validateStoredCredentials();
   if (result.kind === "network-error") {
     throw cliError({

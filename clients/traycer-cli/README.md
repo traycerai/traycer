@@ -135,6 +135,15 @@ Sign-in uses OAuth with PKCE on a local loopback callback. Credentials and CLI s
 
 Provider API keys are not configured through this CLI. Configure providers in Traycer Desktop under Settings > Providers.
 
+For `traycer whoami --json`, a `valid` status includes the verified personal
+`user` and the validating authority in `authnBaseUrl`. A managed team account
+returns `valid-team` and an account `identity`, with no `user` field. The local
+read returns `stored` for a personal sign-in or `stored-managed` for an
+unverified managed account claim. Ordinary signed-out and rejected results
+use `no-credentials` and `rejected`. Managed live checks can return `stopped`
+or `unconfirmed`. Transient managed checks return `E_HOST_UNREACHABLE` and
+exit 1.
+
 ## Troubleshooting
 
 Start with:
