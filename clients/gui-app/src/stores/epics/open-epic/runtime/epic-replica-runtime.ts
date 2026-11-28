@@ -866,8 +866,12 @@ export function createEpicReplicaRuntime(
             entityVersion: null,
           };
         } catch (error) {
-          if (!records.overlay.finishWriteSend(command.commandId)) throw error;
           const failure = classifyEpicWriteCommandFailure(error);
+          // Keep the send's observation until the queue has entered unknown
+          // delivery. The overlay reconciles once that transition is visible.
+          if (failure.kind === "unknown-outcome") throw error;
+          if (records.overlay.finishWriteSend(command.commandId) === null)
+            throw error;
           if (failure.kind === "rejected") return failure.resolution;
           return {
             kind: "superseded",

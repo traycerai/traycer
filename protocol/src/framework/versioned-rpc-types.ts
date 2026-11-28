@@ -126,10 +126,12 @@ export const RPC_ERROR_CODES = [
   // negotiated `unary.idempotencyKey` capability; changing it requires a new
   // capability name, never a reinterpretation of this code.
   "E_IDEMPOTENCY_CACHE_SATURATED",
-  // The original keyed unary exceeded the host's in-flight replay ceiling.
-  // The host will never dispatch the key again while that execution remains
-  // live, but it can no longer promise a committed or rejected answer to a
-  // later joiner. Clients reconcile this ambiguous outcome through echo/TTL.
+  // The authoritative write was or may have been dispatched, and its result
+  // cannot be confirmed. The peer will not dispatch the write again to find
+  // out. This includes a keyed unary that exceeds the in-flight replay
+  // ceiling. The answer implies neither a request key nor permission to
+  // replay. Clients reconcile through authoritative observation or present
+  // the outcome as uncertain.
   "E_IDEMPOTENCY_OUTCOME_UNKNOWN",
   // The original keyed unary SETTLED, and its response was too large for the
   // host to retain for replay. Distinct from E_IDEMPOTENCY_OUTCOME_UNKNOWN in

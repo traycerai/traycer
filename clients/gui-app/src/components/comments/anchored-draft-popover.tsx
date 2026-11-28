@@ -331,6 +331,7 @@ export function AnchoredDraftPopover(props: {
     useAnchoredDraftStore
       .getState()
       .updateDraft(epicId, draft.draftId, { submitting: true });
+    let outcomeUnknown = false;
     await prepareAnchor(draft)
       .then(async (anchor) => {
         if (anchor === null) return;
@@ -341,12 +342,16 @@ export function AnchoredDraftPopover(props: {
           content,
           quotedText: draft.quotedText,
           anchor,
+          onUnknownOutcome: () => {
+            outcomeUnknown = true;
+          },
         });
         useAnchoredDraftStore.getState().clearDraft(epicId, draft.draftId);
         onCreated(result.threadId);
         onClosed();
       })
       .catch((error: unknown) => {
+        if (outcomeUnknown) return;
         const poolCapabilityRefusal =
           error instanceof HostRpcError &&
           (error.code === "E_HOST_UNSUPPORTED" ||
