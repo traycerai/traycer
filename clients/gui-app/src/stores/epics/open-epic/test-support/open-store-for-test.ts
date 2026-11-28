@@ -50,6 +50,7 @@ import { createLateBoundProjectionTarget } from "../runtime/worker/late-bound-pr
 import type { EpicRuntimeStreamFactories } from "../runtime/worker/epic-runtime-composition";
 import type { EpicRuntimeProjection } from "../runtime/epic-runtime-projection";
 import {
+  classifyEpicWriteCommandFailure,
   readWriteCommandIntent,
   type EpicWriteCommandIntent,
 } from "../runtime/epic-write-command";
@@ -236,8 +237,14 @@ function openStoreOver(
           },
         };
       }
-      const sent = await options.writeCommand(commandId, narrowed);
-      return { ok: true, hostId: sent.hostId };
+      // A failed send is classified here, as main's handler classifies it: the
+      // worker receives the classifier's own union, never the thrown error.
+      try {
+        const sent = await options.writeCommand(commandId, narrowed);
+        return { ok: true, hostId: sent.hostId };
+      } catch (cause: unknown) {
+        return { ok: false, failure: classifyEpicWriteCommandFailure(cause) };
+      }
     },
     // UNREACHABLE in this harness, and answered rather than defaulted so it
     // stays that way. `main/lane-unary` is issued only by the factories

@@ -400,12 +400,60 @@ export interface ArtifactRoomsSlice {
 }
 
 /**
+ * Why the task's artifact index cannot be shown:
+ *
+ * - `host-outdated`: the index is at an epoch this app reads, but the host
+ *   serving the task predates it and serves only the legacy index.
+ * - `unsupported-epoch`: the index is at an epoch this app does not know.
+ * - `invalid-index`: the index is damaged.
+ */
+export type ArtifactIndexUnavailableReason =
+  | "host-outdated"
+  | "unsupported-epoch"
+  | "invalid-index";
+
+/**
+ * Whether the artifact slices describe the task's artifacts. While the index
+ * is `unavailable` the slices are empty, and that emptiness says nothing about
+ * any artifact: no surface may read an artifact's absence as its deletion.
+ */
+export type ArtifactIndexAvailability =
+  | { readonly state: "ready" }
+  | {
+      readonly state: "unavailable";
+      readonly reason: ArtifactIndexUnavailableReason;
+    };
+
+export const ARTIFACT_INDEX_READY: ArtifactIndexAvailability = Object.freeze({
+  state: "ready",
+});
+
+/** One shared value per reason, so an unchanged state keeps its reference. */
+export const ARTIFACT_INDEX_UNAVAILABLE: Readonly<
+  Record<ArtifactIndexUnavailableReason, ArtifactIndexAvailability>
+> = Object.freeze({
+  "host-outdated": Object.freeze({
+    state: "unavailable",
+    reason: "host-outdated",
+  }),
+  "unsupported-epoch": Object.freeze({
+    state: "unavailable",
+    reason: "unsupported-epoch",
+  }),
+  "invalid-index": Object.freeze({
+    state: "unavailable",
+    reason: "invalid-index",
+  }),
+});
+
+/**
  * Single projected snapshot of the entire Epic Y.Doc. Returned by
  * `projectFullState` on attach and on every `onSnapshot` so the store
  * can apply it as one atomic `setState` (no per-slice flicker).
  */
 export interface EpicProjectedSlices {
   readonly epic: EpicHeader;
+  readonly artifactIndex: ArtifactIndexAvailability;
   readonly artifacts: ArtifactsSlice;
   readonly deletedArtifacts: DeletedArtifactsSlice;
   /**
@@ -506,6 +554,7 @@ export const EMPTY_PROJECTED_SLICES: EpicProjectedSlices = Object.freeze({
     title: "",
     updatedAt: 0,
   }),
+  artifactIndex: ARTIFACT_INDEX_READY,
   artifacts: Object.freeze({
     byId: Object.freeze({} as Record<string, ArtifactProjection>),
     allIds: EMPTY_ARRAY,

@@ -9,7 +9,11 @@ import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 
-import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
+import {
+  anyTooltipHasText,
+  tooltipTextNear,
+} from "@/components/ui/__tests__/tooltip-probe";
+import type { ArtifactIndexAvailability } from "@/stores/epics/open-epic/types";
 type TestArtifactProjection = {
   readonly id: string;
   readonly kind: EpicArtifactKind;
@@ -25,6 +29,7 @@ type TestProjectionState = {
   artifacts: Record<string, TestArtifactProjection>;
   deleted: Record<string, TestDeletedArtifactProjection>;
   hostId: string | null;
+  artifactIndex: ArtifactIndexAvailability;
   // The tab `resolveTabIdForEpic` resolves to for the open epic (constraint
   // C1). `null` models "no open tab" - a defensively non-draggable card.
   resolvedTabId: string | null;
@@ -46,6 +51,7 @@ const projection = vi.hoisted<TestProjectionState>(() => ({
   artifacts: {},
   deleted: {},
   hostId: "host-1",
+  artifactIndex: { state: "ready" },
   resolvedTabId: "tab-1",
 }));
 
@@ -108,6 +114,7 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
   useOpenEpicHandle: () => ({ epicId: "epic-1" }),
 }));
 vi.mock("@/lib/epic-selectors", () => ({
+  useEpicArtifactIndex: () => projection.artifactIndex,
   useArtifactById: (id: string | null) => {
     hookCalls.artifactById += 1;
     return id !== null && Object.hasOwn(projection.artifacts, id)
@@ -185,6 +192,7 @@ describe("<ArtifactCardSegment />", () => {
     projection.artifacts = {};
     projection.deleted = {};
     projection.hostId = "host-1";
+    projection.artifactIndex = { state: "ready" };
     projection.resolvedTabId = "tab-1";
     dnd.draggables = [];
     hookCalls.openEpicHandle = 0;
@@ -481,6 +489,29 @@ describe("<ArtifactCardSegment />", () => {
     expect(title.className).toContain("line-through");
     expect(tooltipTextNear(title)).toBe("This artifact was deleted.");
     expect(screen.queryByText("deleted")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Open/ })).toBeNull();
+  });
+
+  it("does not call an absent titled artifact deleted while the artifact index cannot be read", () => {
+    projection.artifactIndex = {
+      state: "unavailable",
+      reason: "host-outdated",
+    };
+    render(
+      <ArtifactCardSegment
+        findUnitId={null}
+        operation="update"
+        artifactKind="spec"
+        artifactId="unreadable"
+        title="Unreadable Spec"
+        change={null}
+      />,
+    );
+
+    expect(screen.getByText("Unreadable Spec").className).not.toContain(
+      "line-through",
+    );
+    expect(anyTooltipHasText("This artifact was deleted.")).toBe(false);
     expect(screen.queryByRole("button", { name: /Open/ })).toBeNull();
   });
 

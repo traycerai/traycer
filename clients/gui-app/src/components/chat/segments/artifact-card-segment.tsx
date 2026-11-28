@@ -26,6 +26,7 @@ import {
 } from "@/lib/artifacts/node-display";
 import {
   useArtifactById,
+  useEpicArtifactIndex,
   useEpicDeletedArtifact,
   useEpicFileArtifactViewer,
   useOpenEpicId,
@@ -465,11 +466,19 @@ function ArtifactTitle(props: {
 }
 
 function isUnavailableDeletedArtifact(input: {
+  readonly indexReady: boolean;
   readonly hasLiveArtifact: boolean;
   readonly hasTombstone: boolean;
   readonly title: string | null;
 }): boolean {
-  return !input.hasLiveArtifact && !input.hasTombstone && input.title !== null;
+  // Absence counts only while the index can be read: an unavailable index
+  // projects no artifacts and no tombstones at all.
+  return (
+    input.indexReady &&
+    !input.hasLiveArtifact &&
+    !input.hasTombstone &&
+    input.title !== null
+  );
 }
 
 function isArtifactCardDeleted(input: {
@@ -822,6 +831,7 @@ function ArtifactCardSegmentContent(props: MarkdownArtifactCardSegmentProps) {
   const { operation, artifactKind, artifactId } = props;
   const live = useArtifactById(artifactId);
   const tombstone = useEpicDeletedArtifact(artifactId);
+  const indexReady = useEpicArtifactIndex().state === "ready";
   const epicId = useOpenEpicId();
   const activeHostId = useTabHostId();
   const { openTile } = useEpicTileNavigation();
@@ -839,6 +849,7 @@ function ArtifactCardSegmentContent(props: MarkdownArtifactCardSegmentProps) {
   const hasLiveArtifact = live !== null;
   const hasTombstone = tombstone !== null;
   const unavailableWithTitle = isUnavailableDeletedArtifact({
+    indexReady,
     hasLiveArtifact,
     hasTombstone,
     title,

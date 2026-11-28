@@ -548,49 +548,69 @@ export function pendingMutationCount(overlay: PendingMetadataOverlay): number {
 /** The pre-overlay union slices a chain's authoritative value is read from. */
 export interface PendingOverlayAuthoritativeState {
   readonly artifacts: ArtifactsSlice;
+  /**
+   * Whether {@link artifacts} describes the task's artifacts. While the
+   * artifact index cannot be read the slice is empty, and a chain that only
+   * an artifact row could judge is left alone rather than read as deleted.
+   */
+  readonly artifactsAuthoritative: boolean;
   readonly chats: ChatsSlice;
   readonly tuiAgents: TerminalAgentsSlice;
   readonly epicTitle: string | null;
 }
+
+/** What the slices say about the row a chain patches. */
+type AuthoritativeReading =
+  | { readonly kind: "found"; readonly value: PendingMetadataValue }
+  | { readonly kind: "vanished"; readonly needsArtifactAuthority: boolean }
+  | { readonly kind: "unknown" };
 
 /** The row field a chain patches, read from whichever slice holds the node. */
 function authoritativeValueFor(
   state: PendingOverlayAuthoritativeState,
   kind: PendingMetadataMutation["kind"],
   nodeId: string | null,
-): { readonly found: boolean; readonly value: PendingMetadataValue } {
-  if (kind === "epic-title") return { found: true, value: state.epicTitle };
-  if (nodeId === null) return { found: false, value: null };
+): AuthoritativeReading {
+  if (kind === "epic-title") return { kind: "found", value: state.epicTitle };
+  if (nodeId === null) {
+    return { kind: "vanished", needsArtifactAuthority: false };
+  }
+  const artifacts = state.artifactsAuthoritative ? state.artifacts.byId : null;
   if (kind === "delete") {
-    return {
-      found: true,
-      value: Object.hasOwn(state.artifacts.byId, nodeId),
-    };
+    if (artifacts === null) return { kind: "unknown" };
+    return { kind: "found", value: Object.hasOwn(artifacts, nodeId) };
   }
   if (kind === "status") {
-    if (!Object.hasOwn(state.artifacts.byId, nodeId)) {
-      return { found: false, value: null };
+    if (artifacts === null) return { kind: "unknown" };
+    if (!Object.hasOwn(artifacts, nodeId)) {
+      return { kind: "vanished", needsArtifactAuthority: false };
     }
-    return { found: true, value: state.artifacts.byId[nodeId].status };
+    return { kind: "found", value: artifacts[nodeId].status };
   }
-  for (const byId of [
-    state.artifacts.byId,
-    state.chats.byId,
-    state.tuiAgents.byId,
-  ]) {
+  const tables =
+    artifacts === null
+      ? [state.chats.byId, state.tuiAgents.byId]
+      : [artifacts, state.chats.byId, state.tuiAgents.byId];
+  for (const byId of tables) {
     if (!Object.hasOwn(byId, nodeId)) continue;
     const row = byId[nodeId];
     return {
-      found: true,
+      kind: "found",
       value: kind === "reparent" ? row.parentId : row.title,
     };
   }
-  return { found: false, value: null };
+  return { kind: "vanished", needsArtifactAuthority: artifacts === null };
 }
 
 export interface DeadPendingMutation {
   readonly requestId: string;
   readonly outcome: "echo" | "superseded";
+  /**
+   * The node was found in no slice while the artifact slice was not
+   * authoritative, so it may be an artifact this projection cannot see. Only
+   * a chain the record plane is known to serve may act on such a verdict.
+   */
+  readonly needsArtifactAuthority: boolean;
 }
 
 /**
@@ -601,7 +621,9 @@ export interface DeadPendingMutation {
  * intent can neither resurrect when the row revisits its old value nor hold
  * `baselineFor` hostage for the next begin; the in-flight entry's later
  * retire simply finds nothing), and any chain whose node no longer exists in
- * any slice.
+ * any slice. While `artifactsAuthoritative` is false, a delete or status chain
+ * is not reported, and a rename or move whose node is in no slice is reported
+ * with `needsArtifactAuthority`.
  *
  * Pure. The projector seam calls this with the PRE-overlay slices each full
  * projection and deletes the reported ids from the retained map - no
@@ -640,17 +662,26 @@ export function collectDeadPendingMutationOutcomes(
     const chainKey = `${mutation.kind}:${nodeId ?? ""}`;
     if (seen.has(chainKey)) continue;
     seen.add(chainKey);
-    const chain = chainFor(overlay, mutation.kind, nodeId);
     const authoritative = authoritativeValueFor(state, mutation.kind, nodeId);
-    const resolved = authoritative.found
-      ? resolvePendingChain(authoritative.value, chain)
-      : null;
+    if (authoritative.kind === "unknown") continue;
+    const chain = chainFor(overlay, mutation.kind, nodeId);
+    const resolved =
+      authoritative.kind === "found"
+        ? resolvePendingChain(authoritative.value, chain)
+        : null;
     // A vanished node is dead the same way a caught-up one is: there is no
     // row left for the patch to apply to, and no RPC outcome still owed.
     if (resolved === null || resolved.dead) {
       const outcome = resolved?.deadReason ?? "superseded";
+      const needsArtifactAuthority =
+        authoritative.kind === "vanished" &&
+        authoritative.needsArtifactAuthority;
       for (const entry of chain) {
-        dead.push({ requestId: entry.requestId, outcome });
+        dead.push({
+          requestId: entry.requestId,
+          outcome,
+          needsArtifactAuthority,
+        });
       }
     }
   }

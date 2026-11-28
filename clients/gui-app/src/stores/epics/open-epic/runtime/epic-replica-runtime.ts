@@ -118,6 +118,7 @@ import {
 import { planEpicAdapterTransition } from "./epic-adapter-lifecycle";
 import {
   classifyEpicWriteCommandFailure,
+  EpicArtifactIndexUnavailableError,
   EpicWriteCommandTransportUnavailableError,
   type EpicWriteCommandIntent,
   type EpicWriteCommandSender,
@@ -828,6 +829,15 @@ export function createEpicReplicaRuntime(
         const hostId = writeCommandSender.currentHostId();
         if (hostId === null) {
           throw new EpicWriteCommandTransportUnavailableError();
+        }
+        // Read after the transport gate, so the availability comes from this
+        // cycle's own snapshot rather than one a reconnect may replace.
+        const artifactIndex = recordsSink.read().artifactIndex;
+        if (
+          command.intent.kind !== "update-epic-title" &&
+          artifactIndex.state === "unavailable"
+        ) {
+          throw new EpicArtifactIndexUnavailableError(artifactIndex.reason);
         }
         attemptedHostByCommandId.set(command.commandId, hostId);
         const result = await writeCommandSender.send(

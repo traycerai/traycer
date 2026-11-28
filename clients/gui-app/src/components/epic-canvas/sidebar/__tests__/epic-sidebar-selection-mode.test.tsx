@@ -15,9 +15,16 @@ import {
   RetryableTransportError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { domMax, LazyMotion } from "motion/react";
-import { forwardRef, type ReactElement, type ReactNode } from "react";
+import {
+  forwardRef,
+  type ComponentProps,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import { userEvent } from "@testing-library/user-event";
 import type { Mock } from "vitest";
+import { ARTIFACT_INDEX_UNAVAILABLE_COPY } from "@/lib/artifacts/artifact-index-unavailable-copy";
+import type { ArtifactIndexAvailability } from "@/stores/epics/open-epic/types";
 import type { ChatSearchMessageHitsStatus } from "@/hooks/chats/use-chat-search-message-hits";
 import type { ProviderId } from "@/components/home/data/landing-options";
 import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
@@ -127,6 +134,7 @@ interface TestState {
   readonly pruneRecoveryTiles: Mock;
   sessionReady: boolean;
   snapshotLoaded: boolean;
+  artifactIndex: ArtifactIndexAvailability;
   /**
    * Whether `epic.listChatRecords` has answered. While false a persisted
    * nested row can still be absent from the tree, so the delete disclosure
@@ -264,6 +272,7 @@ const testState = vi.hoisted<TestState>(() => ({
   pruneRecoveryTiles: vi.fn(),
   sessionReady: true,
   snapshotLoaded: true,
+  artifactIndex: { state: "ready" },
   chatRecordListAuthoritative: true,
   chatRecordListFailed: false,
   chatPublicationRedirectRevision: null,
@@ -366,11 +375,33 @@ vi.mock("@/components/epic-canvas/snapshots/snapshot-loading-context", () => ({
   SnapshotGate: (props: { readonly children: ReactNode }) => props.children,
 }));
 
-vi.mock("@/components/epic-canvas/add-node-dropdown", () => ({
-  AddNodeDropdown: (props: { readonly children: ReactNode }) => props.children,
-}));
+// The real dropdown only for a case about its disabled trigger and reason; every
+// other case needs the trigger alone.
+const addNodeDropdownMode = vi.hoisted(() => ({ real: false }));
+
+vi.mock(
+  "@/components/epic-canvas/add-node-dropdown",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/epic-canvas/add-node-dropdown")
+      >();
+    return {
+      AddNodeDropdown: (
+        props: ComponentProps<typeof actual.AddNodeDropdown>,
+      ) =>
+        addNodeDropdownMode.real ? (
+          <actual.AddNodeDropdown {...props} />
+        ) : (
+          props.children
+        ),
+    };
+  },
+);
 
 vi.mock("@/components/epic-canvas/add-node-options", () => ({
+  // Read by the real dropdown, which no case here opens.
+  ADDABLE_TYPES: [],
   CHAT_PANEL_EXCLUDED_TYPES: [],
   ARTIFACT_PANEL_EXCLUDED_TYPES: [],
 }));
@@ -1169,6 +1200,7 @@ vi.mock("@/hooks/epics/use-epic-collaborators-query", () => ({
 
 vi.mock("@/lib/epic-selectors", () => ({
   useAncestorIds: () => new Set<string>(),
+  useEpicArtifactIndex: () => testState.artifactIndex,
   useChildIds: (parentId: string) =>
     testState.tree.childrenByParent[parentId] ?? [],
   useEpicActiveAgentIds: () => testState.activeAgentIds,
@@ -1292,6 +1324,7 @@ function fakeEpicStoreState() {
   );
   return {
     snapshotLoaded: testState.snapshotLoaded,
+    artifactIndex: testState.artifactIndex,
     // Whether each record list has answered. True in every fixture that
     // predates the delete disclosure's readiness read, which is the settled
     // state every count assertion here is about.
@@ -1541,6 +1574,8 @@ describe("epic sidebar selection mode", () => {
     vi.clearAllMocks();
     testState.sessionReady = true;
     testState.snapshotLoaded = true;
+    testState.artifactIndex = { state: "ready" };
+    addNodeDropdownMode.real = false;
     testState.chatRecordListAuthoritative = true;
     testState.chatRecordListFailed = false;
     testState.publicationTargetArgs.mockClear();
@@ -2638,6 +2673,21 @@ describe("epic sidebar selection mode", () => {
     expect(screen.queryByText("No artifacts match the filter.")).toBeNull();
   });
 
+  it("says why the artifact panel is empty while the artifact index cannot be read", () => {
+    testState.activePanelId = "artifacts";
+    testState.artifactIndex = {
+      state: "unavailable",
+      reason: "invalid-index",
+    };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(screen.queryByTestId("epic-artifact-sidebar-empty")).toBeNull();
+    expect(
+      screen.getByTestId("epic-artifact-sidebar-unavailable").textContent,
+    ).toBe(ARTIFACT_INDEX_UNAVAILABLE_COPY["invalid-index"]);
+  });
+
   it("shows the filtered artifact empty state when no artifacts match the filter", () => {
     seedArtifactTree();
     testState.activePanelId = "artifacts";
@@ -3471,6 +3521,35 @@ describe("epic sidebar selection mode", () => {
     seedArtifactTree();
     testState.activePanelId = "artifacts";
     testState.snapshotLoaded = false;
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(seedEpicArtifacts).not.toHaveBeenCalled();
+  });
+
+  it("disables the artifact add control with the reason while the artifact index cannot be read", () => {
+    addNodeDropdownMode.real = true;
+    testState.activePanelId = "artifacts";
+    testState.artifactIndex = {
+      state: "unavailable",
+      reason: "unsupported-epoch",
+    };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    const add = screen.getByRole("button", { name: "Add artifact" });
+    expect(add.getAttribute("aria-disabled")).toBe("true");
+    expect(tooltipTextIn(add)).toBe(
+      ARTIFACT_INDEX_UNAVAILABLE_COPY["unsupported-epoch"],
+    );
+  });
+
+  it("does not seed the read baseline while the artifact index cannot be read", () => {
+    testState.activePanelId = "artifacts";
+    testState.artifactIndex = {
+      state: "unavailable",
+      reason: "host-outdated",
+    };
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
 

@@ -6,6 +6,10 @@ import {
   type ArtifactHead,
   type ArtifactObjectRef,
 } from "@traycer/protocol/persistence/epic/artifacts";
+import {
+  EPIC_ROOT_MAP_NAME,
+  readArtifactIndexSelection,
+} from "@traycer/protocol/persistence/epic/artifact-index-selection";
 /**
  * Pure projection + Y.Doc-mutation helpers shared between the projector
  * and the store's mutation actions. No React, no zustand, no module
@@ -60,6 +64,7 @@ import {
   collectDeadPendingMutationOutcomes,
 } from "./pending-metadata-overlay";
 import type {
+  ArtifactIndexAvailability,
   ArtifactProjection,
   AgentRolesSlice,
   ArtifactsSlice,
@@ -77,6 +82,8 @@ import type {
   TuiAgentProjection,
 } from "./types";
 import {
+  ARTIFACT_INDEX_READY,
+  ARTIFACT_INDEX_UNAVAILABLE,
   EMPTY_AGENT_ROLES_SLICE,
   EMPTY_ARRAY,
   EMPTY_CHATS_SLICE,
@@ -91,15 +98,41 @@ import type { OpenMessage } from "@traycer/protocol/host/agent/gui/open-harness-
 // ─── Type-narrow Y.Doc readers ────────────────────────────────────────────
 
 export function getEpicMap(doc: Y.Doc): Y.Map<unknown> {
-  return doc.getMap("epic");
+  return doc.getMap(EPIC_ROOT_MAP_NAME);
 }
 
+/**
+ * What the root doc's artifact index lets this head show. The `@1` head reads
+ * the legacy index only, so every selection other than epoch 0 is
+ * unavailable here, epoch 1 included: the host serving the doc over `@1`
+ * predates that index.
+ */
+export function readLegacyArtifactIndexAvailability(
+  doc: Y.Doc,
+): ArtifactIndexAvailability {
+  const selection = readArtifactIndexSelection(doc);
+  if (selection.state === "ready") {
+    return selection.epoch === 0
+      ? ARTIFACT_INDEX_READY
+      : ARTIFACT_INDEX_UNAVAILABLE["host-outdated"];
+  }
+  return ARTIFACT_INDEX_UNAVAILABLE[selection.state];
+}
+
+/**
+ * The legacy live-entry map, or null when the doc has none or its index is
+ * not selected. Every read and every write of the legacy index goes through
+ * this and {@link getDeletedArtifactsMap}, so an unselected index is neither
+ * shown nor written.
+ */
 export function getArtifactsMap(doc: Y.Doc): Y.Map<unknown> | null {
+  if (readLegacyArtifactIndexAvailability(doc).state !== "ready") return null;
   const value = getEpicMap(doc).get("artifacts");
   return value instanceof Y.Map ? (value as Y.Map<unknown>) : null;
 }
 
 export function getDeletedArtifactsMap(doc: Y.Doc): Y.Map<unknown> | null {
+  if (readLegacyArtifactIndexAvailability(doc).state !== "ready") return null;
   const value = getEpicMap(doc).get("deletedArtifacts");
   return value instanceof Y.Map ? (value as Y.Map<unknown>) : null;
 }
@@ -1661,6 +1694,8 @@ export interface ProjectionInputs {
  * what the equivalence test compares.
  */
 export interface EpicRawProjectionSources {
+  /** Whether {@link artifacts} and {@link deletedArtifacts} were read at all. */
+  readonly artifactIndex: ArtifactIndexAvailability;
   readonly artifacts: ArtifactsSlice;
   readonly deletedArtifacts: DeletedArtifactsSlice;
   /**
@@ -1683,6 +1718,7 @@ export function readEpicRawProjectionSources(
   currentUserId: string | null,
 ): EpicRawProjectionSources {
   return {
+    artifactIndex: readLegacyArtifactIndexAvailability(doc),
     artifacts: projectArtifactsSlice(doc),
     deletedArtifacts: projectDeletedArtifactsSlice(doc),
     docChats: projectChatsSlice(doc, currentUserId),
@@ -1759,6 +1795,7 @@ export function composeEpicProjection(
   if (reportDeadMutations !== null && pendingOverlay.size > 0) {
     const dead = collectDeadPendingMutationOutcomes(pendingOverlay, {
       artifacts,
+      artifactsAuthoritative: raw.artifactIndex.state === "ready",
       chats,
       tuiAgents,
       epicTitle: epicHeader.title,
@@ -1795,6 +1832,7 @@ export function composeEpicProjection(
   );
   return {
     epic: applyPendingOverlayToEpicHeader(epicHeader, pendingOverlay),
+    artifactIndex: raw.artifactIndex,
     artifacts: overlaidArtifacts,
     deletedArtifacts,
     docChats,

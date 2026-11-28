@@ -65,6 +65,7 @@ vi.mock("@/lib/epic-selectors", async (importOriginal) => ({
   useEpicChatRetraction: () => null,
   useEpicPermissionRole: () => "owner",
   useEpicSnapshotLoaded: () => true,
+  useEpicArtifactIndex: () => ({ state: "ready" }),
   useEpicChatRecordListAuthoritative: () => true,
   useEpicTuiAgentRecordListAuthoritative: () => true,
   useEpicTuiAgentRetraction: () => null,

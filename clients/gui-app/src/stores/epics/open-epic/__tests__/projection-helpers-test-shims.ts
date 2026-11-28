@@ -105,6 +105,20 @@ export function createArtifactInDocForTests(
   return id;
 }
 
+/**
+ * The update a host would send for `write`, made on its own replica of `doc`.
+ * Delivered through the stream callbacks, it lands with the stream's origin.
+ */
+export function hostDeltaForTests(
+  doc: Y.Doc,
+  write: (host: Y.Doc) => void,
+): Uint8Array {
+  const host = new Y.Doc();
+  Y.applyUpdate(host, Y.encodeStateAsUpdate(doc));
+  write(host);
+  return Y.encodeStateAsUpdate(host, Y.encodeStateVector(doc));
+}
+
 export function projectTerminalAgentsSliceForTests(
   doc: Y.Doc,
   currentUserId: string | null,

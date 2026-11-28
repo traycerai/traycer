@@ -54,6 +54,7 @@ function liveness(
     isCloudKnown: () => false,
     recordListAuthorizesChatAbsence: true,
     recordListAuthorizesTuiAgentAbsence: true,
+    artifactIndexAuthorizesArtifactAbsence: true,
     ...overrides,
   };
 }
@@ -80,6 +81,17 @@ describe("isTileRefRecordLive", () => {
     expect(
       isTileRefRecordLive(specTile("art-1"), new Set(), liveness({}), null),
     ).toBe(false);
+  });
+
+  it("keeps an artifact ref with no record while the artifact index cannot be read", () => {
+    expect(
+      isTileRefRecordLive(
+        specTile("art-1"),
+        new Set(),
+        liveness({ artifactIndexAuthorizesArtifactAbsence: false }),
+        null,
+      ),
+    ).toBe(true);
   });
 
   it("exempts a CHAT ref bound to another host from projection policing", () => {

@@ -79,6 +79,7 @@ import type { CommandRecord } from "@traycer-clients/shared/replica-runtime";
 import { basePersistOptions, openEpicKey } from "@/lib/persist";
 import type {
   AgentRolesSlice,
+  ArtifactIndexAvailability,
   ArtifactsSlice,
   ArtifactRoomsSlice,
   ChatsSlice,
@@ -343,6 +344,13 @@ export interface OpenEpicState {
 
   // ── Projected slices (owned by the runtime's records plane) ───────────
   readonly epic: EpicHeader;
+  /**
+   * Whether {@link OpenEpicState.artifacts} and
+   * {@link OpenEpicState.deletedArtifacts} describe the task's artifacts.
+   * While `unavailable` both are empty, and an artifact's absence from them is
+   * no evidence about it.
+   */
+  readonly artifactIndex: ArtifactIndexAvailability;
   readonly artifacts: ArtifactsSlice;
   /**
    * Deleted-artifact tombstones (`epic.deletedArtifacts`). Lets the chat's

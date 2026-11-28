@@ -56,8 +56,10 @@ import {
 } from "@/stores/epics/canvas/store";
 import { PaneEmphasis } from "@/components/epic-canvas/canvas/pane-emphasis";
 import { PaneOpener } from "@/components/epic-canvas/canvas/pane-opener";
+import { ARTIFACT_INDEX_UNAVAILABLE_COPY } from "@/lib/artifacts/artifact-index-unavailable-copy";
 import {
   useEpicArtifact,
+  useEpicArtifactIndex,
   useEpicChatRecordListAuthoritative,
   useEpicTuiAgentRecordListAuthoritative,
   useEpicChatRetraction,
@@ -1029,6 +1031,7 @@ export function ActiveTabBody(props: ActiveTabBodyProps) {
   const chatRecordListAuthoritative = useEpicChatRecordListAuthoritative();
   const tuiAgentRecordListAuthoritative =
     useEpicTuiAgentRecordListAuthoritative();
+  const artifactIndex = useEpicArtifactIndex();
   const liveArtifact = useEpicArtifact(activeTab.id);
   // The projection feeding `liveArtifact` is served by the EPIC SESSION's
   // host - NOT the app-wide active one, which is what this comment used to
@@ -1090,6 +1093,7 @@ export function ActiveTabBody(props: ActiveTabBodyProps) {
         cloudListAuthorizesChatAbsence,
         recordListAuthorizesChatAbsence: chatRecordListAuthoritative,
         recordListAuthorizesTuiAgentAbsence: tuiAgentRecordListAuthoritative,
+        artifactIndexAuthorizesArtifactAbsence: artifactIndex.state === "ready",
         retractedAsDeleted: tabRetraction === "deleted",
       });
   const isActive = role !== null && props.selected && props.globallyActive;
@@ -1166,6 +1170,28 @@ export function ActiveTabBody(props: ActiveTabBodyProps) {
             );
           }}
         />
+      </>
+    );
+  }
+
+  // An artifact tab while the task's index cannot be read: the projection
+  // holds no artifacts, so this says why instead of rendering a missing one.
+  if (
+    artifactIndex.state === "unavailable" &&
+    isTileRefRecordBacked(activeTab) &&
+    !isHostAuthoritativeRef(activeTab)
+  ) {
+    return (
+      <>
+        <MobileDrawerVisibleTilePaintReporter ready />
+        <div
+          data-testid="artifact-index-unavailable-body"
+          className="flex h-full min-h-0 w-full items-center justify-center"
+        >
+          <p className="text-ui-sm text-muted-foreground">
+            {ARTIFACT_INDEX_UNAVAILABLE_COPY[artifactIndex.reason]}
+          </p>
+        </div>
       </>
     );
   }
@@ -1324,6 +1350,8 @@ interface ComputeIsRemoteDeletedArgs {
   readonly recordListAuthorizesChatAbsence: boolean;
   /** The terminal-agent twin: `epic.listTuiAgents` has answered. */
   readonly recordListAuthorizesTuiAgentAbsence: boolean;
+  /** The artifact twin: the task's artifact index is readable. */
+  readonly artifactIndexAuthorizesArtifactAbsence: boolean;
   /**
    * The record plane said this chat or terminal agent was DELETED (a `remove`
    * or `tuiRemove` delta whose reason is `deleted`), as opposed to merely
@@ -1348,7 +1376,7 @@ function recordListsAnsweredFor(
   if (ref.type === "terminal-agent") {
     return args.recordListAuthorizesTuiAgentAbsence;
   }
-  return true;
+  return args.artifactIndexAuthorizesArtifactAbsence;
 }
 
 function computeIsRemoteDeleted(args: ComputeIsRemoteDeletedArgs): boolean {

@@ -1,6 +1,8 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SwitcherArtifactsList } from "@/components/epic-canvas/mobile/switcher-artifacts-list";
+import { ARTIFACT_INDEX_UNAVAILABLE_COPY } from "@/lib/artifacts/artifact-index-unavailable-copy";
+import type { ArtifactIndexAvailability } from "@/stores/epics/open-epic/types";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
 import { SORT_FIELD } from "@/lib/epic-sort";
 import type { ArtifactSearchResults } from "@/components/epic-canvas/sidebar/use-artifact-search-results";
@@ -63,6 +65,7 @@ interface TestHolder {
     readonly byId: Readonly<Record<string, TestArtifact>>;
   };
   role: string;
+  artifactIndex: ArtifactIndexAvailability;
   search: ArtifactSearchResults;
 }
 
@@ -80,6 +83,7 @@ const holder = vi.hoisted((): TestHolder => ({
   records: [],
   artifacts: { allIds: [], byId: {} },
   role: "owner",
+  artifactIndex: { state: "ready" },
   search: {
     searchActive: false,
     results: [],
@@ -92,6 +96,7 @@ const holder = vi.hoisted((): TestHolder => ({
 }));
 
 vi.mock("@/lib/epic-selectors", () => ({
+  useEpicArtifactIndex: () => holder.artifactIndex,
   useEpicArtifactRecords: () => holder.records,
   useEpicPermissionRole: () => holder.role,
   useEpicNodeHostId: () => null,
@@ -199,6 +204,7 @@ beforeEach(() => {
   holder.records = [];
   holder.artifacts = { allIds: [], byId: {} };
   holder.role = "owner";
+  holder.artifactIndex = { state: "ready" };
   holder.search = INACTIVE_SEARCH;
   // The store is persisted and app-wide; a view left set by one case would
   // narrow the next one's list for reasons that case never states.
@@ -251,6 +257,27 @@ describe("switcher Artifacts narrowing", () => {
   it("keeps the plain empty state when no filter is on", () => {
     render(<SwitcherArtifactsList {...PROPS} />);
     expect(screen.getByText("No artifacts yet.")).toBeDefined();
+  });
+
+  it("says why the category is empty while the artifact index cannot be read", () => {
+    holder.artifactIndex = { state: "unavailable", reason: "host-outdated" };
+
+    render(<SwitcherArtifactsList {...PROPS} />);
+
+    expect(screen.queryByText("No artifacts yet.")).toBeNull();
+    expect(
+      screen.getByTestId("epic-artifact-sidebar-unavailable").textContent,
+    ).toBe(ARTIFACT_INDEX_UNAVAILABLE_COPY["host-outdated"]);
+  });
+
+  it("withdraws the new-artifact menu once the artifact index cannot be read", () => {
+    const view = render(<SwitcherArtifactsList {...PROPS} />);
+    expect(screen.getByTestId("new-artifact-action")).toBeDefined();
+
+    holder.artifactIndex = { state: "unavailable", reason: "host-outdated" };
+    view.rerender(<SwitcherArtifactsList {...PROPS} />);
+
+    expect(screen.queryByTestId("new-artifact-action")).toBeNull();
   });
 
   it("orders by the epic's artifact sort", () => {

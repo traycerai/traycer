@@ -1024,7 +1024,9 @@ export function createEpicRecordsReplica(
     // SEEDED rather than skipped when absent: an epic whose doc has never
     // carried a tombstone has no `deletedArtifacts` container, and returning
     // here dropped the tombstone for the very first delete in that epic - the
-    // one case the cloud-delete sync above cannot recover from.
+    // one case the cloud-delete sync above cannot recover from. `artifactsMap`
+    // came from the selection-gated accessor in this same transaction, so a
+    // null here means absent, never an index that is not selected.
     let deletedArtifactsMap = getDeletedArtifactsMap(doc);
     if (deletedArtifactsMap === null) {
       deletedArtifactsMap = new Y.Map<unknown>();

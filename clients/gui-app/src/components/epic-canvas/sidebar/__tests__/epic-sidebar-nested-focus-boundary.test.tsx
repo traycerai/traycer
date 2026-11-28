@@ -40,6 +40,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { Mock } from "vitest";
+import type { ArtifactIndexAvailability } from "@/stores/epics/open-epic/types";
 import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
 import { closeTab } from "@/stores/epics/canvas/actions";
 import type { EpicCanvasState } from "@/stores/epics/canvas/types";
@@ -104,6 +105,7 @@ interface TestState {
   };
   records: readonly TestRecord[];
   permissionRole: "owner" | "editor" | "viewer" | null;
+  artifactIndex: ArtifactIndexAvailability;
 }
 
 const testState = vi.hoisted<TestState>(() => ({
@@ -150,6 +152,7 @@ const testState = vi.hoisted<TestState>(() => ({
     nodeById: {},
   },
   records: [],
+  artifactIndex: { state: "ready" },
   permissionRole: "owner",
 }));
 
@@ -605,6 +608,7 @@ vi.mock("@/stores/epics/left-panel-store", () => ({
 
 vi.mock("@/lib/epic-selectors", () => ({
   useAncestorIds: () => new Set<string>(),
+  useEpicArtifactIndex: () => testState.artifactIndex,
   useChildIds: (parentId: string) =>
     testState.tree.childrenByParent[parentId] ?? [],
   useEpicActiveAgentIds: () => new Set<string>(),
@@ -661,6 +665,7 @@ function fakeEpicStoreState() {
     chatRecordListAuthoritative: true,
     tuiAgentRecordListAuthoritative: true,
     snapshotLoaded: true,
+    artifactIndex: testState.artifactIndex,
     // The tree index, because the row-level tree reads subscribe HERE now
     // rather than through `useEpicTreeIndex`. A row that used to take the
     // whole slice re-rendered on every record change; it now selects its own
@@ -804,6 +809,7 @@ describe("sidebar navigation boundary (back/forward regression fixes)", () => {
     testState.openArtifactByKey.clear();
     testState.canvasByTabId = {};
     testState.createdArtifactId = "new-spec-1";
+    testState.artifactIndex = { state: "ready" };
   });
 
   it("routes root-create-then-open through navigateNested + prepareOpenTileInTabFocusTargetFromSource", () => {
@@ -842,6 +848,17 @@ describe("sidebar navigation boundary (back/forward regression fixes)", () => {
       }),
       "direct_ui",
     );
+  });
+
+  it("creates nothing for a chosen kind while the artifact index cannot be read", () => {
+    testState.artifactIndex = { state: "unavailable", reason: "invalid-index" };
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    // The stub hands the panel a chosen kind, as a menu already open when the
+    // index became unreadable would.
+    fireEvent.click(screen.getByTestId("epic-sidebar-add-artifact-root-spec"));
+
+    expect(testState.createArtifactMutate).not.toHaveBeenCalled();
   });
 
   it("routes single artifact delete-close through navigateNested + prepareCloseCanvasTabFocusTarget", async () => {

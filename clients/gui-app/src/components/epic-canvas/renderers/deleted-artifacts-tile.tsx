@@ -5,11 +5,16 @@ import type { DeletedArtifactEntry } from "@traycer/protocol/host/epic/artifact-
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { Button } from "@/components/ui/button";
 import { useDeletedArtifactsAvailable } from "@/hooks/epic/use-deleted-artifacts-available";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { ARTIFACT_INDEX_UNAVAILABLE_COPY } from "@/lib/artifacts/artifact-index-unavailable-copy";
 import { isEditableRole } from "@/lib/epic-permissions";
-import { useEpicPermissionRole } from "@/lib/epic-selectors";
+import {
+  useEpicArtifactIndex,
+  useEpicPermissionRole,
+} from "@/lib/epic-selectors";
 import { epicMutationKeys } from "@/lib/query-keys";
 import { cn } from "@/lib/utils";
 import { TraycerMarkdown } from "@/markdown/traycer-markdown";
@@ -43,6 +48,24 @@ export function DeletedArtifactsTile(props: {
 }): ReactNode {
   const hostId = useTabHostId();
   const available = useDeletedArtifactsAvailable(hostId);
+  const artifactIndex = useEpicArtifactIndex();
+
+  // Listing and restoring read and write the index this app cannot read, so
+  // neither is offered: a restore would land where the task does not show it.
+  if (artifactIndex.state === "unavailable") {
+    return (
+      <section
+        aria-label="Deleted artifacts"
+        data-testid="deleted-artifacts-tile"
+        className="flex h-full min-h-0 flex-col bg-background"
+      >
+        <DeletedArtifactsHeader />
+        <p className="p-5 text-muted-foreground">
+          {ARTIFACT_INDEX_UNAVAILABLE_COPY[artifactIndex.reason]}
+        </p>
+      </section>
+    );
+  }
 
   if (!available) {
     return (
@@ -66,7 +89,12 @@ function DeletedArtifactsTileContent(props: {
   readonly node: DeletedArtifactsTileRef;
 }): ReactNode {
   const client = useTabHostClient();
-  const canRestore = isEditableRole(useEpicPermissionRole());
+  // The index availability this session knows is its own host's. A tile bound
+  // to another host restores into an index no one here has read, so it does
+  // not offer to.
+  const restoresIntoReadIndex = useTabHostId() === useEpicSessionHostId();
+  const canRestore =
+    isEditableRole(useEpicPermissionRole()) && restoresIntoReadIndex;
   const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(
     null,
   );

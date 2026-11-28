@@ -128,6 +128,9 @@ vi.mock("@/lib/epic-selectors", async (importOriginal) => ({
   useArtifactById: (
     await importOriginal<typeof import("@/lib/epic-selectors")>()
   ).useArtifactById,
+  useEpicArtifactIndex: (
+    await importOriginal<typeof import("@/lib/epic-selectors")>()
+  ).useEpicArtifactIndex,
   useEpicArtifactRecords: () => holder.records,
   useEpicActiveAgentIds: () => holder.workingAgentIds,
   useEpicAgentActivityTiers: () => holder.activityTiers,

@@ -90,6 +90,7 @@ import {
 } from "@/stores/epics/artifact-read-state-store";
 import {
   useAncestorIds,
+  useEpicArtifactIndex,
   useEpicArtifactStatus,
   useEpicConnectionStatus,
   useEpicFileArtifactViewer,
@@ -98,6 +99,7 @@ import {
 } from "@/lib/epic-selectors";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { ArtifactIndexUnavailableState } from "@/components/epic-canvas/sidebar/artifact-index-unavailable-state";
 import {
   Check,
   FileDown,
@@ -489,6 +491,7 @@ export function ArtifactReadLifecycleBridge(props: {
 }) {
   const { epicId, tabId } = props;
   const snapshotLoaded = useEpicStore((s) => s.snapshotLoaded);
+  const indexReady = useEpicStore((s) => s.artifactIndex.state === "ready");
   const artifacts = useEpicStore((s) => s.artifacts);
   const activeArtifactId = useActiveEpicArtifactId(tabId);
   // Only real artifacts may clear unread state. `useActiveEpicArtifactId` can
@@ -503,6 +506,9 @@ export function ArtifactReadLifecycleBridge(props: {
 
   useEffect(() => {
     if (!snapshotLoaded) return;
+    // An unavailable index projects no artifacts; seeding from that would
+    // mark every artifact unread once the index can be read.
+    if (!indexReady) return;
     // Seed exactly once per epic per device. The store action is itself
     // idempotent, but checking the guard here avoids rebuilding the full seed
     // array (O(artifacts)) on every later projection for the epic's lifetime.
@@ -514,7 +520,7 @@ export function ArtifactReadLifecycleBridge(props: {
     useArtifactReadStateStore
       .getState()
       .seedEpicArtifacts(epicId, artifactsForReadSeed(artifacts));
-  }, [artifacts, epicId, snapshotLoaded]);
+  }, [artifacts, epicId, indexReady, snapshotLoaded]);
 
   useEffect(() => {
     if (activeArtifact === null) return;
@@ -539,6 +545,7 @@ export function ArtifactTreePanelBody(props: ArtifactTreePanelBodyProps) {
     [sort],
   );
   const allRootIds = usePanelRootIds(comparator);
+  const artifactIndex = useEpicArtifactIndex();
   const filteredVisibleIds = useArtifactVisibleIds(epicId);
   const tree = useEpicTreeIndex();
   const revealRequest = useSidebarNodeRevealRequest(tabId);
@@ -705,7 +712,11 @@ export function ArtifactTreePanelBody(props: ArtifactTreePanelBodyProps) {
     visibleIds === null && allRootIds.length === 0 && !hasPendingRootRows;
 
   let panelContent: ReactNode;
-  if (showEmptyState) {
+  if (artifactIndex.state === "unavailable") {
+    panelContent = (
+      <ArtifactIndexUnavailableState reason={artifactIndex.reason} />
+    );
+  } else if (showEmptyState) {
     panelContent = (
       <SidebarPanelEmptyState
         icon={FileText}

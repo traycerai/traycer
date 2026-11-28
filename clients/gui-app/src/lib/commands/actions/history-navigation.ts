@@ -216,6 +216,8 @@ export function preservedTileRecordIsLive(
     recordState?.chatRecordListAuthoritative ?? false;
   const recordListAuthorizesTuiAgentAbsence =
     recordState?.tuiAgentRecordListAuthoritative ?? false;
+  const artifactIndexAuthorizesArtifactAbsence =
+    recordState?.artifactIndex.state === "ready";
   return isTileRefRecordLive(
     preserved.node,
     pendingCreateArtifactIds,
@@ -224,6 +226,7 @@ export function preservedTileRecordIsLive(
       isCloudKnown: cloudKnownPredicate(activeHostId, epicId),
       recordListAuthorizesChatAbsence,
       recordListAuthorizesTuiAgentAbsence,
+      artifactIndexAuthorizesArtifactAbsence,
     },
     activeHostId,
   );

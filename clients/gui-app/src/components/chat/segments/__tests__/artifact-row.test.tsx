@@ -40,11 +40,13 @@ import type { SandboxFrameProps } from "@/components/sandbox/sandbox-frame";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { SandboxStatus } from "@/lib/sandbox/bridge-host";
 import type {
+  ArtifactIndexAvailability,
   ArtifactProjection,
   ArtifactsSlice,
   DeletedArtifactsSlice,
 } from "@/stores/epics/open-epic/types";
 import { ArtifactRow } from "@/components/chat/segments/artifact-row";
+import { ARTIFACT_INDEX_UNAVAILABLE_COPY } from "@/lib/artifacts/artifact-index-unavailable-copy";
 import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 
 const STAMP_SHA = "a".repeat(64);
@@ -134,9 +136,24 @@ const storeMocks = vi.hoisted(() => {
   return state;
 });
 
+const artifactIndexMock = vi.hoisted(
+  (): { current: ArtifactIndexAvailability } => ({
+    current: { state: "ready" },
+  }),
+);
+
 vi.mock("@/hooks/use-epic-store", () => ({
-  useEpicStore: (selector: (state: FakeEpicRowState) => unknown) =>
-    selector(storeMocks.current),
+  useEpicStore: (
+    selector: (
+      state: FakeEpicRowState & {
+        readonly artifactIndex: ArtifactIndexAvailability;
+      },
+    ) => unknown,
+  ) =>
+    selector({
+      ...storeMocks.current,
+      artifactIndex: artifactIndexMock.current,
+    }),
 }));
 
 const expandMocks = vi.hoisted(() => ({
@@ -420,6 +437,7 @@ beforeEach(() => {
   sandboxFrameMocks.mounts = 0;
   expandMocks.openTile.mockClear();
   expandMocks.coarsePointer.current = false;
+  artifactIndexMock.current = { state: "ready" };
   historyMocks.page = null;
   commentsFlag.enabled = true;
 });
@@ -512,6 +530,21 @@ describe("<ArtifactRow />", () => {
     expect(screen.getByText("Loading artifact")).toBeTruthy();
     expect(screen.queryByTestId("sandbox-frame-mock")).toBeNull();
     expect(screen.queryByText("This artifact was deleted.")).toBeNull();
+    expect(sandboxFrameMocks.mounts).toBe(0);
+  });
+
+  it("says why, instead of loading, while the artifact index cannot be read", () => {
+    artifactIndexMock.current = {
+      state: "unavailable",
+      reason: "unsupported-epoch",
+    };
+
+    renderRow(scopeWithClient(makeArtifactReadClient(neverRespond)), STAMP);
+
+    expect(screen.queryByText("Loading artifact")).toBeNull();
+    expect(
+      screen.getByText(ARTIFACT_INDEX_UNAVAILABLE_COPY["unsupported-epoch"]),
+    ).toBeTruthy();
     expect(sandboxFrameMocks.mounts).toBe(0);
   });
 

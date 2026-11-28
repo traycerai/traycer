@@ -189,6 +189,7 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => {
 
 vi.mock("@/lib/epic-selectors", () => ({
   epicNodeRecency: () => ({}),
+  useEpicArtifactIndex: () => ({ state: "ready" }),
   useEpicArtifactRecords: (): ReadonlyArray<TestRecord> =>
     useSyncExternalStore(recordsStore.subscribe, recordsStore.get),
   useEpicChatRecordListAuthoritative: () => true,

@@ -10,6 +10,7 @@ import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { appLogger } from "@/lib/logger";
+import { ARTIFACT_INDEX_UNAVAILABLE_COPY } from "@/lib/artifacts/artifact-index-unavailable-copy";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
@@ -17,8 +18,39 @@ import type { CommandRecord } from "@traycer-clients/shared/replica-runtime";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { EpicWriteCommandIntent } from "@/stores/epics/open-epic/runtime/epic-write-command";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
+import type { ArtifactIndexUnavailableReason } from "@/stores/epics/open-epic/types";
 import { toast } from "sonner";
 import { useStore } from "zustand";
+
+/**
+ * An artifact write this app refused because the task's artifact index cannot
+ * be read on this session: the host serving it would apply the write where
+ * this app never shows it. Its message is the reason the task already shows.
+ * A `HostRpcError`, so the host mutation boundary passes it through as it is
+ * and a handler can tell it from a failure the host reported.
+ */
+class ArtifactIndexUnavailableRefusal extends HostRpcError {
+  constructor(reason: ArtifactIndexUnavailableReason, method: string) {
+    super({
+      code: "RPC_ERROR",
+      message: ARTIFACT_INDEX_UNAVAILABLE_COPY[reason],
+      requestId: "client-refused",
+      method,
+      fatalDetails: null,
+    });
+    this.name = "ArtifactIndexUnavailableRefusal";
+  }
+}
+
+function throwIfArtifactIndexUnavailable(
+  handle: OpenEpicStoreHandle,
+  method: string,
+): void {
+  const artifactIndex = handle.store.getState().artifactIndex;
+  if (artifactIndex.state === "unavailable") {
+    throw new ArtifactIndexUnavailableRefusal(artifactIndex.reason, method);
+  }
+}
 
 interface CommandMutationCallbacks<Response, Variables> {
   readonly onSuccess?: (response: Response, variables: Variables) => void;
@@ -47,6 +79,8 @@ async function enqueueAndWait(
   // `waitForWriteCommand` as if it were an id.
   const commandId = await state.enqueueWriteCommand(intent);
   if (commandId === null) {
+    // An unreadable index projects no artifact for the stamp to find; say why.
+    throwIfArtifactIndexUnavailable(handle, method);
     throw new Error("The write was refused by the current epic projection");
   }
   const command = await state.waitForWriteCommand(commandId);
@@ -119,6 +153,7 @@ async function enqueueAndWait(
  */
 export function useEpicCreateArtifact() {
   const client = useEpicSessionHostClient();
+  const handle = useOpenEpicHandle();
   return useHostMutation({
     client,
     method: "epic.createArtifact",
@@ -128,11 +163,17 @@ export function useEpicCreateArtifact() {
       isMarkdownArtifactKind(variables.artifactType)
         ? null
         : { method: "epic.createArtifact", version: { major: 1, minor: 1 } },
+    // Read when the mutation runs, not when the control rendered: a create
+    // chosen while the index was readable must not reach a host whose index
+    // this app can no longer read.
     mapVariables: (
       variables: CreateArtifactRequest & {
         artifactType: CreatableArtifactKind;
       },
-    ) => variables,
+    ) => {
+      throwIfArtifactIndexUnavailable(handle, "epic.createArtifact");
+      return variables;
+    },
     options: {
       onSuccess: (_data, variables) => {
         Analytics.getInstance().track(AnalyticsEvent.ArtifactCreated, {
@@ -140,6 +181,13 @@ export function useEpicCreateArtifact() {
         });
       },
       onError: (error) => {
+        // A refusal this app made itself, with a reason the person can act on.
+        if (error instanceof ArtifactIndexUnavailableRefusal) {
+          toast.error("Couldn't create artifact.", {
+            description: error.message,
+          });
+          return;
+        }
         toastFromHostError(error, "Couldn't create artifact.");
       },
     },

@@ -87,6 +87,7 @@ import type {
   EpicHeader,
 } from "../types";
 import {
+  ARTIFACT_INDEX_READY,
   EMPTY_ARRAY,
   EMPTY_CHATS_SLICE,
   EMPTY_COMMENT_THREADS_SLICE,
@@ -470,6 +471,9 @@ export function laneRawProjectionSources(
   slices: EpicLaneStateSlices,
 ): EpicRawProjectionSources {
   return {
+    // The records lane does not state index availability, so its rows are
+    // taken as the task's artifacts.
+    artifactIndex: ARTIFACT_INDEX_READY,
     artifacts: slices.artifacts,
     deletedArtifacts: slices.deletedArtifacts,
     docChats: EMPTY_CHATS_SLICE,

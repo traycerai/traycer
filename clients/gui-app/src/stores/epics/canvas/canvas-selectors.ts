@@ -154,6 +154,12 @@ export interface TileRefLivenessCheck {
    * nothing about the agent.
    */
   readonly recordListAuthorizesTuiAgentAbsence: boolean;
+  /**
+   * Whether the task's artifact index is readable, so an artifact's absence is
+   * evidence. While it is unavailable the projection holds no artifacts at
+   * all, and a missing row says nothing about the artifact.
+   */
+  readonly artifactIndexAuthorizesArtifactAbsence: boolean;
 }
 
 /**
@@ -163,7 +169,8 @@ export interface TileRefLivenessCheck {
  * The two populations answer "my projection does not have this row"
  * differently, and that is the whole distinction the cross-host exemption
  * turns on. A doc-shared record (an artifact) is replicated to every
- * participant, so its absence is evidence of deletion wherever it is observed.
+ * participant, so its absence is evidence of deletion wherever it is observed,
+ * provided the task's artifact index can be read.
  * A host-authoritative record is only ever complete on its OWN host, so its
  * absence from another device's projection is evidence of nothing at all.
  *
@@ -214,7 +221,9 @@ export function isTileRefRecordLive(
   if (ref.type === "terminal-agent") {
     return !liveness.recordListAuthorizesTuiAgentAbsence;
   }
-  if (ref.type !== "chat") return false;
+  if (ref.type !== "chat") {
+    return !liveness.artifactIndexAuthorizesArtifactAbsence;
+  }
   if (isCloudKnown(ref.id)) return true;
   return !liveness.recordListAuthorizesChatAbsence;
 }

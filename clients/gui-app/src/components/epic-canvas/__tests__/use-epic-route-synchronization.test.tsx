@@ -28,6 +28,7 @@ import {
   registerCommentEditor,
 } from "@/lib/comments/comment-editor-registry";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
+import type { ArtifactIndexAvailability } from "@/stores/epics/open-epic/types";
 import {
   DEFAULT_LAYOUT_SNAPSHOT,
   useLayoutStore,
@@ -100,6 +101,7 @@ interface TestState {
   cloudCollaboratorChatIds: ReadonlySet<string>;
   chatRecordListAuthoritative: boolean;
   tuiAgentRecordListAuthoritative: boolean;
+  artifactIndex: ArtifactIndexAvailability;
   /**
    * The verdict `useCloudChatHasCloudAuthorization()` answers - whether this session
    * may SPEND the account's cloud capability. `false` models `unverified`: the
@@ -136,6 +138,7 @@ const testState = vi.hoisted<TestState>(() => ({
   cloudCollaboratorChatIds: new Set<string>(),
   chatRecordListAuthoritative: true,
   tuiAgentRecordListAuthoritative: true,
+  artifactIndex: { state: "ready" },
   cloudAuthorized: true,
   canvasStore: {
     renameTab: vi.fn(),
@@ -261,6 +264,7 @@ vi.mock("@/stores/epics/canvas/store", async (importOriginal) => {
 
 vi.mock("@/lib/epic-selectors", () => ({
   epicNodeRecency: () => ({}),
+  useEpicArtifactIndex: () => testState.artifactIndex,
   useEpicArtifactRecords: () => testState.records,
   useEpicChatRecordListAuthoritative: () =>
     testState.chatRecordListAuthoritative,
@@ -472,6 +476,7 @@ function resetStores(): void {
   testState.cloudCollaboratorChatIds = new Set();
   testState.chatRecordListAuthoritative = true;
   testState.tuiAgentRecordListAuthoritative = true;
+  testState.artifactIndex = { state: "ready" };
   testState.cloudAuthorized = true;
   vi.mocked(testState.canvasStore.renameTab).mockClear();
   tileNavigationMocks.openTile.mockClear();
@@ -2418,6 +2423,55 @@ describe("useEpicRouteSynchronization", () => {
       "group-1",
       restoredChat.instanceId,
     );
+  });
+
+  it("keeps an absent artifact's tile open while the artifact index cannot be read", async () => {
+    testState.autoOpenTarget = null;
+    testState.records = [];
+    testState.artifactIndex = { state: "unavailable", reason: "host-outdated" };
+    const artifact = specTile(
+      "absent-artifact",
+      "inst-absent-artifact",
+      "Spec",
+    );
+    // Deleted per its answered record list, so the sweep that spares the
+    // artifact has something to close.
+    const removedChat: EpicCanvasTileRef = {
+      id: "removed-chat",
+      instanceId: "inst-removed-chat",
+      type: "chat",
+      name: "Removed chat",
+      hostId: "host-1",
+    };
+    setSinglePaneCanvas(
+      "group-1",
+      [artifact, removedChat],
+      artifact.instanceId,
+    );
+
+    renderHook(
+      (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+      {
+        initialProps: {
+          epicId: EPIC_ID,
+          tabId: TAB_ID,
+          focusedAt: undefined,
+          focusArtifactId: undefined,
+          focusThreadId: undefined,
+          focusPaneId: undefined,
+          focusTileInstanceId: undefined,
+        },
+      },
+    );
+
+    await waitFor(() => {
+      expect(testState.canvasStore.closeCanvasTab).toHaveBeenCalledWith(
+        TAB_ID,
+        "group-1",
+        removedChat.instanceId,
+      );
+    });
+    expect(testState.canvasStore.closeCanvasTab).toHaveBeenCalledTimes(1);
   });
 
   // A COLLABORATOR's row with the same host-minted chatId is not evidence the
