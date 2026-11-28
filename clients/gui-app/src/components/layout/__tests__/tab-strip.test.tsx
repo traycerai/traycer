@@ -56,6 +56,7 @@ import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-reg
 import { __getChatSessionRegistryForTests } from "@/lib/registries/chat-session-registry";
 import type { PermissionRole } from "@/lib/epic-collaborator-roles";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
+import { idleWriteAdmission } from "@/stores/epics/open-epic/test-support/write-admission-fixture";
 import { EMPTY_PROJECTED_SLICES } from "@/stores/epics/open-epic/types";
 import { createChatSessionStore } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
@@ -507,6 +508,7 @@ function buildHeaderEpicHandle(
   );
   const state = {
     ...EMPTY_PROJECTED_SLICES,
+    ...idleWriteAdmission,
     epic: {
       title: tab.name,
       updatedAt: 1,
