@@ -320,6 +320,32 @@ function fallbackScope(
   };
 }
 
+/**
+ * The same computer, now shown from its account row: no route, no client and
+ * no maintenance fallback, as `useHostScope` projects it while Settings waits.
+ */
+function accountRowScope(
+  fixture: OverviewHostFixture,
+  management: IHostManagement,
+): Record<string, unknown> {
+  const placed = fallbackScope(fixture, management);
+  return {
+    ...placed,
+    host: hostScopeOptionFixture({
+      hostId: HOST_ID,
+      name: HOST_NAME,
+      isLocalMachine: true,
+      connectable: false,
+      platform: "darwin-arm64",
+      version: "1.1.11",
+    }),
+    status: "unreachable",
+    client: null,
+    localMaintenanceFallback: false,
+    shownFromRow: true,
+  };
+}
+
 function renderOverview(input: {
   readonly management: IHostManagement;
   readonly queryClient: QueryClient;
@@ -742,6 +768,72 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
     await waitFor(() => {
       expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
     });
+  });
+
+  it("a bridge-route Restart confirm closes when this computer's page turns into its account-row view, and nothing restarts", async () => {
+    const { management, fixture, rerender } = mountFallbackOverview({
+      installOutcome: {
+        kind: "ok",
+        value: { installedVersion: "1.2.0", runningActivated: true },
+      },
+      rpcCheckCalls: { count: 0 },
+      restartHostIfIdle: () => Promise.resolve({ kind: "restarted" as const }),
+      extraHandshakeMethods: undefined,
+      extra: undefined,
+    });
+
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-restart"));
+    await screen.findByTestId("confirm-destructive-dialog");
+
+    scopeOverrides.current = accountRowScope(fixture, management);
+    rerender();
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    });
+    expect(management.restartHostIfIdle).not.toHaveBeenCalled();
+    expect(management.restartHost).not.toHaveBeenCalled();
+    expect(fixture.restartCalls()).toBe(0);
+  });
+
+  it("an open Doctor sheet closes when this computer's page turns into its account-row view, with no log read or repair after", async () => {
+    const { management, fixture, rerender } = mountFallbackOverview({
+      installOutcome: {
+        kind: "ok",
+        value: { installedVersion: "1.2.0", runningActivated: true },
+      },
+      rpcCheckCalls: { count: 0 },
+      restartHostIfIdle: undefined,
+      extraHandshakeMethods: undefined,
+      extra: undefined,
+    });
+    vi.mocked(management.maintenanceDoctor).mockResolvedValue({
+      status: "ok",
+      issues: [RECENT_CRASH_MARKERS, SERVICE_STOPPED],
+    });
+
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-run-doctor"));
+    await screen.findByTestId("host-doctor-fix-RECENT_CRASH_MARKERS");
+    expect(
+      screen.getByTestId(`host-doctor-fix-${SERVICE_STOPPED.code}`),
+    ).toBeTruthy();
+
+    scopeOverrides.current = accountRowScope(fixture, management);
+    rerender();
+
+    await waitFor(() => {
+      expect(screen.queryByText("Host doctor")).toBeNull();
+    });
+    expect(
+      screen.queryByTestId("host-doctor-fix-RECENT_CRASH_MARKERS"),
+    ).toBeNull();
+    expect(
+      screen.queryByTestId(`host-doctor-fix-${SERVICE_STOPPED.code}`),
+    ).toBeNull();
+    expect(management.getHostLogs).not.toHaveBeenCalled();
+    expect(management.runDoctorRepairIfIdle).not.toHaveBeenCalled();
   });
 
   it("a cooperative confirm CLOSES when the handshake re-routes Restart to the bridge under it, and the re-opened confirm dispatches over the bridge", async () => {

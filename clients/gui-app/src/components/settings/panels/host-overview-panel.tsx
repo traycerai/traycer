@@ -309,6 +309,12 @@ export function HostOverviewPanel(props: {
     !props.shownFromRow;
 
   const [doctorOpen, setDoctorOpen] = useState(false);
+  // A sheet opened before the page turned into a computer's account-row view
+  // closes, with any repair it had open: its logs and fixes reach the host.
+  // Adjust-during-render, like the restart confirm's closes below.
+  if (doctorOpen && props.shownFromRow) {
+    setDoctorOpen(false);
+  }
   // The status read the offline notice's "Try again" started, still in flight.
   const offlineRetryPending = useHostStatusReading(scope.hostId);
   // Which dispatch leg the open restart confirm is armed for - captured at
@@ -351,11 +357,15 @@ export function HostOverviewPanel(props: {
   // One value rather than a boolean gate beside an id, because the two must
   // never disagree - the id IS the reason the route exists, and reading them
   // apart is how an offer ends up pinned to a host the gate already refused.
+  // None for a computer shown from its account row: the page can turn into
+  // that view without remounting, and the null id closes a confirm or offer
+  // armed before it did.
   const forceRestartLocalHostId =
     host !== null &&
     host.isLocalMachine &&
     props.hasLocalBridge &&
-    management !== null
+    management !== null &&
+    !props.shownFromRow
       ? host.hostId
       : null;
 

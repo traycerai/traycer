@@ -1501,9 +1501,12 @@ client, listed once with the picked environment's members. The Overview shows
 its About and Danger zone; for this computer it is not "down" (`localDown`
 reads `shownFromRow`), so the header offers no Run doctor or Reinstall, and the
 environment section reads no owner. Its other bridge reads stay: the
-Command-line tools hint and its tab dot. The restart confirm and the Doctor
-sheet have no opener on this view, since every one needs a usable scope or
-`localDown`. The wait itself is unchanged: when the entry places
+Command-line tools hint and its tab dot. The page can turn into this view
+without remounting (a named entry for the computer already placed), so what
+was open is withdrawn: the force-restart id is null on this view, which closes
+a bridge restart confirm and the force offer, and the Doctor sheet closes,
+with any repair confirm inside it. Every other dialog closes on `!usable` or
+fails closed on the null client. The wait itself is unchanged: when the entry places
 or abandons the computer, or the default resolves, the scope is the usual one
 again. A rail pick of another computer is the way out; re-picking the shown
 one does nothing, and returning to the active host only ends the named entry
