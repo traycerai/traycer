@@ -66,7 +66,7 @@ export function appendImageAttachmentAtoms(
     readonly fileName: string;
     readonly mimeType: string;
     readonly size: number | null;
-    readonly b64content: string;
+    readonly b64content: string | null;
     readonly hash: string;
   }>,
 ): JsonContent {

@@ -280,7 +280,7 @@ function demotionChain(value: PermissionMode): ReadonlyArray<PermissionMode> {
   }
 }
 
-async function readProviderProfiles(
+export async function readProviderProfiles(
   client: HostClient<HostRpcRegistry>,
   providerId: ProviderId,
 ): Promise<ReadonlyArray<ProviderProfile> | null> {

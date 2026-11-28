@@ -25,6 +25,7 @@ import {
   returnPendingSandboxSend,
   returnPendingSandboxSendToSandbox,
 } from "@/lib/sandboxes/pending-sandbox-send";
+import { setMobileApp } from "@/lib/mobile-app";
 import { takeReturnedSandboxRestored } from "@/lib/sandboxes/returned-sandbox";
 import {
   newConversationSurfaceKey,
@@ -1057,10 +1058,48 @@ describe("returnPendingSandboxSend for a message to an existing chat", () => {
     return owner.release;
   }
 
+  /** The native app's local return needs a file it can still read. */
+  const FILE_MESSAGE = {
+    type: "doc" as const,
+    content: [
+      {
+        type: "paragraph" as const,
+        content: [{ type: "text" as const, text: "fix the login bug" }],
+      },
+      {
+        type: "paragraph" as const,
+        content: [
+          {
+            type: "fileAttachment" as const,
+            attrs: {
+              id: "file-1",
+              hash: "f".repeat(64),
+              fileName: "notes.txt",
+              mediaType: "text/plain",
+              size: 3,
+            },
+          },
+        ],
+      },
+    ],
+  };
+
+  async function ownedFileMessageSend(): Promise<() => void> {
+    const release = await ownedMessageSend();
+    usePendingSandboxSendStore.setState((state) => ({
+      sends: {
+        ...state.sends,
+        "send-1": { ...state.sends["send-1"], content: FILE_MESSAGE },
+      },
+    }));
+    return release;
+  }
+
   const EMPTY_DOC = { type: "doc" as const, content: [] };
   const originalLocks = Object.getOwnPropertyDescriptor(navigator, "locks");
 
   beforeEach(() => {
+    setMobileApp(true);
     // Sibling suites leave a replacement draft in the modal store: this one
     // asserts the return touches none, so it starts from a clean one.
     useNewConversationModalStore.getState().resetForTests();
@@ -1078,6 +1117,7 @@ describe("returnPendingSandboxSend for a message to an existing chat", () => {
   });
 
   afterEach(() => {
+    setMobileApp(false);
     // A case's overrides (the image byte resolver) end with it.
     vi.restoreAllMocks();
     if (originalLocks === undefined) {
@@ -1115,7 +1155,7 @@ describe("returnPendingSandboxSend for a message to an existing chat", () => {
       ],
     };
     useComposerDraftStore.getState().replaceDraft(CHAT_ID, newer, null);
-    const release = await ownedMessageSend();
+    const release = await ownedFileMessageSend();
 
     const returned = await returnPendingSandboxMessage("send-1", false, true);
 
@@ -1187,6 +1227,7 @@ describe("returnPendingSandboxSend for a message to an existing chat", () => {
               },
             ],
           },
+          FILE_MESSAGE.content[1],
         ],
       };
     }
@@ -1194,7 +1235,7 @@ describe("returnPendingSandboxSend for a message to an existing chat", () => {
     async function ownedMessageOnItsSandbox(
       stopRequested: boolean,
     ): Promise<() => void> {
-      const release = await ownedMessageSend();
+      const release = await ownedFileMessageSend();
       const surfaceKey = pendingSendSurfaceKey("send-1");
       const staged = useStagedSandboxStore.getState();
       staged.stage(surfaceKey, CHAT_SANDBOX);

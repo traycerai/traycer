@@ -4,6 +4,9 @@ import {
   defineUpgradePath,
 } from "@traycer/protocol/framework/index";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
+import { draftComposerHeadSchemaV11 } from "@traycer/protocol/persistence/draft/schemas";
+import { z } from "zod";
 import {
   draftsDeleteRequestSchemaV20,
   draftsDeleteResponseSchemaV20,
@@ -63,6 +66,35 @@ export const draftsUpsertV10 = defineRpcContract({
   // Frozen at the document the 1.5.0 tags shipped. The REQUEST stays live: it
   // is a client→host slot.
   responseSchema: draftsUpsertResponseSchemaV10,
+});
+
+export const wholeDraftMutationSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.strictObject({
+      kind: z.literal("save"),
+      draftId: z.uuid(),
+      head: draftComposerHeadSchemaV11,
+    }),
+    z.strictObject({ kind: z.literal("delete"), draftId: z.uuid() }),
+  ]),
+);
+export type WholeDraftMutation = z.infer<typeof wholeDraftMutationSchema>;
+
+export const wholeDraftMutationResultSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.strictObject({ kind: z.literal("saved"), draftId: z.uuid() }),
+    z.strictObject({ kind: z.literal("deleted"), draftId: z.uuid() }),
+  ]),
+);
+export type WholeDraftMutationResult = z.infer<
+  typeof wholeDraftMutationResultSchema
+>;
+
+export const draftsMutateWholeV10 = defineRpcContract({
+  method: "drafts.mutateWhole",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: wholeDraftMutationSchema,
+  responseSchema: wholeDraftMutationResultSchema,
 });
 
 // The LIVE line: the echo carries the live document.

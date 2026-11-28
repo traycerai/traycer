@@ -29,6 +29,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
 import { v5 as uuidv5 } from "uuid";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { isAnnotatedCreateFloorRefusal } from "@/lib/epic-create-admission";
+import { retireSentWholeDraft } from "@/lib/drafts/save-unsent-whole-draft";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -138,6 +140,7 @@ import {
   planAttachmentsByHash,
 } from "@/lib/composer/attachments-by-hash";
 import { inlineHashOnlyImageBytes } from "@/lib/composer/image-atoms";
+import { appendAnnotationCropReferences } from "@/lib/composer/annotation-image-atoms";
 import { resolveSeededProfileId } from "@/lib/composer/resolve-seeded-profile-id";
 import {
   removedProfilesForProvider,
@@ -1449,8 +1452,21 @@ function prepareAndDeliverSend(input: {
   const { send, hostId, settings } = input;
   const surfaceKey = pendingSendSurfaceKey(send.id);
   if (deliveriesPreparing.has(send.id)) return;
+  const annotations =
+    send.request.kind === "chat" ? (send.request.browserAnnotations ?? []) : [];
+  if (annotations.length > 0) {
+    const version = readNegotiatedMethodVersion(hostId, "epic.createChat");
+    if (!version || version.major !== 1 || version.minor < 5) {
+      notSent(surfaceKey);
+      return;
+    }
+  }
   deliveriesPreparing.add(send.id);
-  void contentForHost(hostId, input.client, send.content)
+  void contentForHost(
+    hostId,
+    input.client,
+    appendAnnotationCropReferences(send.content, annotations),
+  )
     .then((prepared) => {
       if (!preparingSendCurrent(send)) return;
       if (prepared === null) {
@@ -1636,6 +1652,10 @@ function deliverPendingSend(input: {
             settings,
             accountContext: useAccountContextStore.getState().accountContext,
             sentFromHostId: readLocalHostIdSnapshot(),
+            ...(send.request.kind === "chat" &&
+            send.request.browserAnnotations?.length
+              ? { browserAnnotations: [...send.request.browserAnnotations] }
+              : {}),
             ...(input.attachmentsByHash
               ? { attachmentsByHash: true as const }
               : {}),
@@ -2241,8 +2261,9 @@ async function runPendingDispatch(
     finishDispatchUi(send, dispatch, response, navigateNestedFocus);
   } catch (error: unknown) {
     if (
-      error instanceof HostRpcError &&
-      error.code === "E_FORK_BOUNDARY_NOT_PUBLISHED"
+      isAnnotatedCreateFloorRefusal(error) ||
+      (error instanceof HostRpcError &&
+        error.code === "E_FORK_BOUNDARY_NOT_PUBLISHED")
     ) {
       refusePendingDispatch(send, dispatch);
     } else if (
@@ -2275,6 +2296,10 @@ function registerDispatchHandoff(
     epicId: send.epicId,
     chatId: dispatch.input.chatId,
     content: initialMessage.content,
+    sourceWholeDraftId: send.request.sourceWholeDraftId,
+    ...(initialMessage.browserAnnotations?.length
+      ? { browserAnnotations: initialMessage.browserAnnotations }
+      : {}),
     settings: dispatch.input.settings,
     worktreeIntent: null,
     placement: send.request.placement,
@@ -2334,14 +2359,21 @@ function finishDispatchUi(
 ): void {
   if (send.request.kind === "chat") {
     if (response.initialTurnStarted === true) {
-      useInitialChatHandoffStore.getState().markInitialTurnStarted(
-        {
-          hostId: dispatch.input.hostId,
-          userId: send.userId,
-          epicId: send.epicId,
-        },
-        dispatch.input.chatId,
-      );
+      const started = useInitialChatHandoffStore
+        .getState()
+        .markInitialTurnStarted(
+          {
+            hostId: dispatch.input.hostId,
+            userId: send.userId,
+            epicId: send.epicId,
+          },
+          dispatch.input.chatId,
+        );
+      if (started)
+        void retireSentWholeDraft(send.request.sourceWholeDraftId, {
+          ...send,
+          browserAnnotations: send.request.browserAnnotations,
+        });
     }
     return;
   }

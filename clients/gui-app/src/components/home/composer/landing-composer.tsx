@@ -20,6 +20,7 @@ import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe
 
 import { v4 as uuidv4 } from "uuid";
 import { AttachmentStrip } from "@/components/chat/composer/attachments/attachment-strip";
+import { BrowserAnnotationCard } from "@/components/chat/composer/browser-annotation-card";
 import { useLandingImageFetcher } from "@/hooks/composer/use-landing-image-fetcher";
 import { useComposerPendingImageIngest } from "@/hooks/composer/use-composer-pending-image-ingest";
 import {
@@ -90,6 +91,7 @@ import {
 } from "@/stores/workspace/workspace-folders-store";
 import {
   isOpenLandingDraft,
+  landingDraftAnnotations,
   landingRowIsForeign,
   useLandingDraftNamedHostId,
   useLandingDraftStore,
@@ -549,7 +551,15 @@ export function LandingComposer(props: LandingComposerProps) {
   const isSubmitting = runtimeState.isSubmitting || actions.isPending;
   const mutationsDisabled = isSubmitting;
 
-  const hasSubmittableContent = contentIsSubmittable(runtimeState.content);
+  const hasSubmittableContent = useLandingDraftStore(
+    (state) =>
+      contentIsSubmittable(runtimeState.content) ||
+      Boolean(
+        landingDraftAnnotations(
+          state.drafts.find((draft) => draft.id === draftId),
+        )?.length,
+      ),
+  );
   const draftWorkspace = useLandingDraftStore((state) => {
     if (draftId === null) return null;
     return (
@@ -1012,6 +1022,11 @@ export function LandingComposer(props: LandingComposerProps) {
       const account = signedInUserId();
       const settings = pickedRunSettings(toolbarStore.getState());
       const settingsKey = JSON.stringify(settings);
+      const browserAnnotations = landingDraftAnnotations(
+        useLandingDraftStore
+          .getState()
+          .drafts.find((draft) => draft.id === draftId),
+      );
       const generation = captureComposerSubmitGeneration(
         () => runtimeStore.getState().contentRevision,
       );
@@ -1023,6 +1038,11 @@ export function LandingComposer(props: LandingComposerProps) {
         stagedSubmitAttempt.current === attempt &&
         readStagedSandbox(composerSurfaceKey) === staged &&
         signedInUserId() === account &&
+        landingDraftAnnotations(
+          useLandingDraftStore
+            .getState()
+            .drafts.find((draft) => draft.id === draftId),
+        ) === browserAnnotations &&
         JSON.stringify(pickedRunSettings(toolbarStore.getState())) ===
           settingsKey &&
         generation.stillCurrent();
@@ -1067,6 +1087,8 @@ export function LandingComposer(props: LandingComposerProps) {
                 text,
                 settings,
                 now: Date.now(),
+                browserAnnotations,
+                sourceDraftId: draftId ?? createdUnboundDraftIdRef.current,
               }),
           });
           raiseHostNotice(
@@ -1132,6 +1154,11 @@ export function LandingComposer(props: LandingComposerProps) {
       // draft and strand the one already holding the user's content.
       draftId: draftId ?? createdUnboundDraftIdRef.current,
       editor: editorRef.current,
+      browserAnnotations: landingDraftAnnotations(
+        useLandingDraftStore
+          .getState()
+          .drafts.find((draft) => draft.id === draftId),
+      ),
       slashCatalog: pickerStore.getState().knownSlashCommands,
       toolbar: {
         selection: toolbar.selection,
@@ -1374,6 +1401,8 @@ export function LandingComposer(props: LandingComposerProps) {
         attachmentsStrip={
           <LandingComposerAttachmentStrip
             content={runtimeState.content}
+            draftId={draftId}
+            annotationsReadOnly={mutationsDisabled}
             onRemoveImage={handleRemoveImage}
             hostId={resolvedHostId}
           />
@@ -1487,6 +1516,8 @@ function noopSwitchProfileForTask(): void {}
  */
 export function LandingComposerAttachmentStrip(props: {
   readonly content: JsonContent;
+  readonly draftId?: string | null;
+  readonly annotationsReadOnly?: boolean;
   readonly onRemoveImage: (id: string) => void;
   readonly hostId: string | null;
 }): ReactNode {
@@ -1503,12 +1534,32 @@ export function LandingComposerAttachmentStrip(props: {
     useLandingImageFetcher(),
     props.hostId,
   );
+  const { draftId } = props;
+  const annotations = useLandingDraftStore((state) =>
+    landingDraftAnnotations(state.drafts.find((draft) => draft.id === draftId)),
+  );
+  const onRemoveAnnotation =
+    typeof draftId !== "string" || props.annotationsReadOnly
+      ? null
+      : (id: string) =>
+          useLandingDraftStore
+            .getState()
+            .removeWholeDraftAnnotation(draftId, id);
   return (
     <AttachmentStrip
       content={props.content}
       onRemoveImage={props.onRemoveImage}
       fetcher={fetcher}
       sessionObjectUrl={sessionObjectUrl}
+      leadingAttachments={annotations?.map((record) => (
+        <BrowserAnnotationCard
+          key={record.annotationId}
+          record={record}
+          onRemove={onRemoveAnnotation}
+          imageFetcher={fetcher}
+          sessionObjectUrl={sessionObjectUrl}
+        />
+      ))}
     />
   );
 }

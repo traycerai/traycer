@@ -33,6 +33,7 @@ import {
 } from "@/lib/chats/next-handoff-transition";
 
 import type { UserMessageSender } from "@traycer/protocol/persistence/epic/schemas";
+import { retireSentWholeDraft } from "@/lib/drafts/save-unsent-whole-draft";
 
 /**
  * Single owner for the chat-tile's initial-chat handoff lifecycle.
@@ -388,6 +389,7 @@ function applyInitialChatHandoffStep(
         sender,
         settings: input.handoff.settings,
         worktreeIntent: input.handoff.worktreeIntent,
+        browserAnnotations: input.handoff.browserAnnotations,
       });
       if (sent === null) return;
       useInitialChatHandoffStore
@@ -401,6 +403,7 @@ function applyInitialChatHandoffStep(
       return;
     }
     case "consume": {
+      retireAcceptedWholeDraft(input.scope, input.nodeId);
       useInitialChatHandoffStore.getState().consume(input.scope);
       if (input.step.clientActionId !== null) {
         input.state.ackAcceptedAction(input.step.clientActionId);
@@ -462,4 +465,16 @@ function applyInitialChatHandoffStep(
       return;
     }
   }
+}
+
+function retireAcceptedWholeDraft(
+  scope: InitialChatHandoffScope,
+  chatId: string,
+): void {
+  const current = selectInitialChatHandoff(
+    useInitialChatHandoffStore.getState(),
+    scope,
+  );
+  if (current?.chatId === chatId)
+    void retireSentWholeDraft(current.sourceWholeDraftId, current);
 }

@@ -65,6 +65,7 @@ import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
 import {
   useLandingDraftStore,
+  closeOrDeleteSubmittedLandingDraft,
   type LandingDraftWorkspaceSnapshot,
 } from "@/stores/home/landing-draft-store";
 import {
@@ -102,6 +103,12 @@ import {
   inlineHashOnlyImageBytes,
 } from "@/lib/composer/image-atoms";
 import { containsFileAttachments } from "@/lib/composer/file-attachments";
+import { appendAnnotationCropReferences } from "@/lib/composer/annotation-image-atoms";
+import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
+import {
+  wholeLandingDraft,
+  retireSentWholeDraft,
+} from "@/lib/drafts/save-unsent-whole-draft";
 import { sessionImageBytes } from "@/lib/composer/landing-image-store";
 import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
 import { openLandingDraft } from "@/lib/drafts/open-landing-draft";
@@ -178,6 +185,7 @@ export interface LandingComposerSubmitArgs {
   /** The caller-owned draft; null creates one before the exact attempt starts. */
   readonly draftId: string | null;
   readonly editor: ComposerPromptEditorHandle | null;
+  readonly browserAnnotations?: ReadonlyArray<BrowserAnnotationRecord>;
   /**
    * The composer's loaded command catalog, or null when it has not loaded.
    * Submit-time chip conversion resolves a written `/command` / `$skill`
@@ -313,6 +321,19 @@ export interface LandingPlacementRefusal {
 type LandingEpicCreateResult = CreateEpicResponseV12 & {
   readonly createdOwner: EpicCreateOwner | null;
 };
+
+function landingMessageHasContent(
+  text: string,
+  content: JsonContent,
+  annotations: ReadonlyArray<BrowserAnnotationRecord> | undefined,
+): boolean {
+  return (
+    text.trim().length > 0 ||
+    Boolean(annotations?.length) ||
+    containsImageAtoms(content) ||
+    containsFileAttachments(content)
+  );
+}
 
 interface FinalizeLandingSubmissionInput {
   /** What the HOST receives: image hashes inlined back to base64. */
@@ -799,6 +820,7 @@ export function useLandingComposerActions(
               // reads it, so the first turn's browser is placed by the same
               // fact as every later one.
               sentFromHostId: readLocalHostIdSnapshot(),
+              browserAnnotations: args.browserAnnotations?.slice(),
               // Spread rather than a `false` literal, like the sibling opt-in
               // below: absent and `false` read identically on the host, and a
               // request that names the key only when it is asking for something
@@ -824,12 +846,18 @@ export function useLandingComposerActions(
         .getState()
         .setEpicRunSettings(epicId, activeHostId, lastRunSettings, now);
       rememberLandingWorktreeIntent(workspaceContext, epicId, now);
+      const sourceWholeDraftId = wholeDraftSubmission(
+        attempt.draftId,
+        args.browserAnnotations,
+      );
       useInitialChatHandoffStore.getState().register({
         hostId: activeHostId,
         userId,
         epicId,
         chatId,
         content: handoffContent,
+        browserAnnotations: args.browserAnnotations,
+        sourceWholeDraftId,
         settings,
         worktreeIntent: workspaceContext.worktreeIntent,
         placement: null,
@@ -904,7 +932,7 @@ export function useLandingComposerActions(
         // the sent text stays as a draft alongside the new epic.
         placeCreatedEpicInBackground(epicId, epicTitle);
         if (settlement.kind === "closed") {
-          useLandingDraftStore.getState().deleteDraft(attempt.draftId);
+          closeOrDeleteSubmittedLandingDraft(attempt.draftId);
         }
       };
 
@@ -1008,12 +1036,19 @@ export function useLandingComposerActions(
           // re-send. (Re-sends are harmless - the host dedupes on
           // `messageId` - but skipping the round-trip is cheaper.)
           if (response.initialTurnStarted === true) {
-            useInitialChatHandoffStore
+            const started = useInitialChatHandoffStore
               .getState()
               .markInitialTurnStarted(
                 { hostId: activeHostId, userId, epicId },
                 chatId,
               );
+            if (started)
+              void retireSentWholeDraft(sourceWholeDraftId, {
+                content: attempt.content,
+                settings,
+                userId,
+                browserAnnotations: args.browserAnnotations,
+              });
           }
           placeLandedEpic(settlement);
           draftRuntimeRegistry.complete(attempt);
@@ -1309,15 +1344,18 @@ export function useLandingComposerActions(
         editor.getJSON(),
         null,
       );
-      const editorContent = normalized.content;
-      const text = extractPlainTextFromComposerJSONContent(editorContent);
-      const hasAttachments =
-        containsImageAtoms(editorContent) ||
-        containsFileAttachments(editorContent);
-      if (text.trim().length === 0 && !hasAttachments) return false;
+      const editorContent = appendAnnotationCropReferences(
+        normalized.content,
+        args.browserAnnotations,
+      );
+      const text = extractPlainTextFromComposerJSONContent(normalized.content);
+      if (
+        !landingMessageHasContent(text, editorContent, args.browserAnnotations)
+      )
+        return false;
       const draftId = ensureSubmissionDraft(
         args.draftId,
-        editorContent,
+        normalized.content,
         hostId,
         args.toolbar.accountChosen,
       );
@@ -1331,7 +1369,10 @@ export function useLandingComposerActions(
       // a cheap structural flag, not a document comparison, so this never
       // walks/serializes the (possibly multi-megabyte inline-image) content.
       if (normalized.changed) {
-        runtime.setSnapshot(editorContent, runtime.store.getState().selection);
+        runtime.setSnapshot(
+          normalized.content,
+          runtime.store.getState().selection,
+        );
       }
       const attempt = runtime.startSubmission(
         captureSubmissionPlacement(draftId),
@@ -1673,6 +1714,18 @@ export function useLandingComposerActions(
       if (args.teamSandboxHarnessBlocked) {
         return { message: TEAM_SANDBOX_HARNESS_UNAVAILABLE };
       }
+      if (args.browserAnnotations?.length) {
+        const version = readNegotiatedMethodVersion(
+          placement.hostId,
+          "epic.create",
+        );
+        if (!version || version.major !== 1 || version.minor < 5) {
+          return {
+            message:
+              "This needs a newer Traycer host. Update the host to continue.",
+          };
+        }
+      }
       const ownerRefusal = refuseTeamOwner(args.owner, placement.hostId);
       if (ownerRefusal !== null) return ownerRefusal;
       const workspaceContext = readLandingWorkspaceContext(
@@ -1768,10 +1821,10 @@ export function useLandingComposerActions(
       // creates its own. Any other refusal keeps it: the task may have reached
       // the cloud, where an agent on another host can't be ruled out. So does
       // a message that didn't come back: its send still names the task.
-      const giveBack = (): LandingGiveBack | null => {
+      const giveBack = async (): Promise<LandingGiveBack | null> => {
         if (!sameAccount() || !handed.isCurrent()) return null;
-        const returned = handed.giveBack();
-        if (returned === null) return null;
+        const returned = await handed.giveBack();
+        if (returned === null || !sameAccount()) return null;
         const { draftId } = returned;
         if (returned.kind === "opened") {
           openLandingDraft(navigate, draftId);
@@ -1786,16 +1839,17 @@ export function useLandingComposerActions(
         });
         return returned;
       };
-      const refused = (): void => {
+      const refused = async (): Promise<void> => {
         if (!sameAccount()) return;
         unmarkEpicCreatedThisSession(epicId);
-        giveBack();
+        await giveBack();
       };
-      const attachRefused = (error: unknown): void => {
+      const attachRefused = async (error: unknown): Promise<void> => {
         // The account moved on, or the person took the message back: nothing
         // here is theirs to hear about.
         if (!sameAccount() || !handed.isCurrent()) return;
-        const returned = giveBack();
+        const returned = await giveBack();
+        if (!sameAccount()) return;
         const line = landingAttachRefusalLine(
           classifySendRefusal(error),
           returned,
@@ -1826,7 +1880,7 @@ export function useLandingComposerActions(
           if (!sameAccount()) return;
           // A refusal resolves; `useEpicCreateForClient` says why.
           if (response.refusal !== undefined) {
-            refused();
+            await refused();
             return;
           }
           markEpicCreatedThisSession(epicId, hostId);
@@ -1849,7 +1903,7 @@ export function useLandingComposerActions(
               });
             } catch (error) {
               if (!isAttachEnvironmentUnsupported(error)) {
-                attachRefused(error);
+                await attachRefused(error);
                 return;
               }
             }
@@ -1966,7 +2020,7 @@ function openEpicBeforeCreate(
     // A draft with no tab to replace is still the message being sent: the
     // replace is what removes a draft's row, so it is removed here.
     if (input.draftId !== null) {
-      useLandingDraftStore.getState().deleteDraft(input.draftId);
+      closeOrDeleteSubmittedLandingDraft(input.draftId);
     }
     activateTabIntent(
       navigate,
@@ -2056,7 +2110,7 @@ function placeCreatedDraftEpic(input: {
   if (replaced === null) {
     // No tab of the draft was there to replace, so nothing removed its row:
     // what it holds is the text just sent, and it must not stay a draft.
-    useLandingDraftStore.getState().deleteDraft(input.draftId);
+    closeOrDeleteSubmittedLandingDraft(input.draftId);
     input.editor.clear();
     useEpicCanvasStore
       .getState()
@@ -2075,6 +2129,14 @@ function placeCreatedEpicInBackground(epicId: string, epicTitle: string): void {
   scheduleLandingImageReconcile();
   useEpicCanvasStore.getState().openEpicTabInBackground(epicId, epicTitle);
   toast.info("Epic created in the background.");
+}
+
+function wholeDraftSubmission(
+  draftId: string,
+  annotations: ReadonlyArray<BrowserAnnotationRecord> | undefined,
+) {
+  const row = wholeLandingDraft(draftId);
+  return row?.wholeDraftAnnotations === annotations ? row?.id : undefined;
 }
 
 function placementOwnedFocusedRoute(

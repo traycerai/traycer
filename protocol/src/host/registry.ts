@@ -813,6 +813,7 @@ import {
   draftsListV20,
   draftsListUpgradeV10ToV20,
   draftsListDowngradeV20ToV10,
+  draftsMutateWholeV10,
   draftsPutBlobUpgradeV10ToV11,
   draftsPutBlobUpgradeV11ToV12,
   draftsPutBlobV10,
@@ -14332,6 +14333,16 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
  * methods, none on the released floor.
  */
 const HOST_RPC_DRAFTS_REGISTRY_DEFINITION = {
+  "drafts.mutateWhole": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: draftsMutateWholeV10, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "drafts.upsert": {
     degrade: { kind: "unsupported" },
     1: {

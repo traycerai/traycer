@@ -85,6 +85,11 @@ import {
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
 import { isEmptyLandingDraftContent } from "@/lib/composer/landing-draft-empty";
 import { runSettingsFromDraftEcho } from "@/lib/drafts/draft-write-codec";
+import {
+  parseBrowserAnnotationRecords,
+  type BrowserAnnotationRecord,
+} from "@/lib/browser-view/annotation/browser-annotation-record";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 
@@ -95,6 +100,9 @@ const SHA256_HEX = /^[0-9a-f]{64}$/;
  */
 export interface LandingDraftTab {
   readonly id: string;
+  /** Present only on the app's projection of a whole cloud draft, even if empty. */
+  readonly wholeDraftAnnotations?: ReadonlyArray<BrowserAnnotationRecord>;
+  readonly localAnnotations?: ReadonlyArray<BrowserAnnotationRecord>;
   /**
    * Full editor JSON - the persisted source of truth for the draft. Replaces
    * the former lossy `prompt: string`; the tab title is derived from it and the
@@ -194,6 +202,8 @@ export type LandingDraftDurability = "saved" | "in-memory";
 /** The row {@link LandingDraftStoreState.installLandingDraft} writes. */
 export interface InstallLandingDraftInput {
   readonly id: string;
+  readonly wholeDraftAnnotations?: ReadonlyArray<BrowserAnnotationRecord>;
+  readonly localAnnotations?: ReadonlyArray<BrowserAnnotationRecord>;
   readonly content: JsonContent;
   readonly selection: DraftSelection | null;
   readonly lastTouchedAt: number;
@@ -271,6 +281,7 @@ interface LandingDraftStoreState {
    * empty content and the real content.
    */
   installLandingDraft: (input: InstallLandingDraftInput) => boolean;
+  removeWholeDraftAnnotation: (draftId: string, annotationId: string) => void;
   /**
    * Put a start-task draft away. A non-empty draft is retained (`closed:
    * true`) and leaves the tab strip; an empty one is deleted so stray Cmd-N
@@ -391,9 +402,17 @@ export function setLandingDraftDesktopProjectionBridge(
 export function applyLandingDraftDesktopProjection(
   snapshot: DesktopPerWindowSnapshot,
 ): void {
-  const drafts = uniqueLandingDrafts(readProjectedDrafts(snapshot));
-  const activeDraftId = readProjectedActiveDraftId(snapshot, drafts);
   const currentState = useLandingDraftStore.getState();
+  const projected = readProjectedDrafts(snapshot);
+  const whole = currentState.drafts.filter(
+    (draft) => draft.wholeDraftAnnotations !== undefined,
+  );
+  const drafts = uniqueLandingDrafts([...projected, ...whole]);
+  const activeDraftId = whole.some(
+    (draft) => draft.id === currentState.activeDraftId,
+  )
+    ? currentState.activeDraftId
+    : readProjectedActiveDraftId(snapshot, drafts);
   // [B1] Empty-inbound clobber guard. The FIRST desktop projection is always
   // authoritative, even when empty: pre-hydration in-memory drafts may be stale
   // localStorage state from an earlier web-mode run. After that hydrate, landing
@@ -406,8 +425,10 @@ export function applyLandingDraftDesktopProjection(
   // roots are wrong).
   if (
     hasAppliedDesktopProjection &&
-    drafts.length === 0 &&
-    currentState.drafts.length > 0
+    projected.length === 0 &&
+    currentState.drafts.some(
+      (draft) => draft.wholeDraftAnnotations === undefined,
+    )
   ) {
     projectLandingDraftsToDesktop(currentState);
     return;
@@ -441,7 +462,7 @@ export function applyLandingDraftDesktopProjection(
   // IndexedDB read that lost to a transient error must be retried on the next
   // projection, otherwise a moved draft's images stay unavailable for the rest
   // of the session even though the handoff is still sitting there.
-  for (const draft of drafts) {
+  for (const draft of projected) {
     if (imageAdoptionAttemptedDraftIds.has(draft.id)) continue;
     imageAdoptionAttemptedDraftIds.add(draft.id);
     void adoptDraftImageHandoff(
@@ -476,6 +497,10 @@ function readProjectedDrafts(
     return [
       {
         id: draft.id,
+        localAnnotations:
+          draft.localAnnotations === undefined
+            ? undefined
+            : parseBrowserAnnotationRecords(draft.localAnnotations),
         content,
         selection: parseLandingDraftSelection(draft.selection),
         lastTouchedAt: parseLandingDraftLastTouchedAt(draft.lastTouchedAt),
@@ -569,6 +594,10 @@ function parsePersistedLandingDrafts(
       return [
         {
           id,
+          localAnnotations:
+            raw.localAnnotations === undefined
+              ? undefined
+              : parseBrowserAnnotationRecords(raw.localAnnotations),
           content,
           selection: parseLandingDraftSelection(raw.selection),
           lastTouchedAt: parseLandingDraftLastTouchedAt(raw.lastTouchedAt),
@@ -672,7 +701,24 @@ function destroyLandingDraft(
  * draft is real content - discarding or replacing it would drop the image.
  */
 export function isLandingDraftEmpty(draft: LandingDraftTab): boolean {
-  return isEmptyLandingDraftContent(draft.content);
+  return (
+    !landingDraftAnnotations(draft)?.length &&
+    isEmptyLandingDraftContent(draft.content)
+  );
+}
+
+export function closeOrDeleteSubmittedLandingDraft(draftId: string): void {
+  const drafts = useLandingDraftStore.getState();
+  if (
+    drafts.drafts.find((draft) => draft.id === draftId)
+      ?.wholeDraftAnnotations !== undefined
+  )
+    drafts.closeDraft(draftId);
+  else drafts.deleteDraft(draftId);
+}
+
+export function landingDraftAnnotations(draft: LandingDraftTab | undefined) {
+  return draft?.wholeDraftAnnotations ?? draft?.localAnnotations;
 }
 
 /**
@@ -814,6 +860,7 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
         const next: LandingDraftTab = {
           id: nextId,
           content: source.content,
+          localAnnotations: source.localAnnotations,
           selection: source.selection,
           lastTouchedAt: Date.now(),
           settings: copyChatRunSettings(source.settings),
@@ -849,6 +896,10 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
         if (get().drafts.some((draft) => draft.id === input.id)) return false;
         const next: LandingDraftTab = {
           id: input.id,
+          localAnnotations: input.localAnnotations,
+          ...(input.wholeDraftAnnotations === undefined
+            ? {}
+            : { wholeDraftAnnotations: input.wholeDraftAnnotations }),
           content: input.content,
           selection: input.selection,
           lastTouchedAt: input.lastTouchedAt,
@@ -888,9 +939,37 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
           }
           throw error;
         }
-        notifyDraftLocalEdit(input.id);
+        if (input.wholeDraftAnnotations === undefined)
+          notifyDraftLocalEdit(input.id);
         scheduleLandingImageReconcile();
         return true;
+      },
+
+      removeWholeDraftAnnotation: (draftId, annotationId) => {
+        const draft = get().drafts.find((entry) => entry.id === draftId);
+        const records = landingDraftAnnotations(draft);
+        if (
+          records === undefined ||
+          !records.some((record) => record.annotationId === annotationId)
+        )
+          return;
+        set((state) => ({
+          drafts: state.drafts.map((entry) =>
+            entry.id === draftId
+              ? {
+                  ...entry,
+                  [entry.wholeDraftAnnotations === undefined
+                    ? "localAnnotations"
+                    : "wholeDraftAnnotations"]: records.filter(
+                    (record) => record.annotationId !== annotationId,
+                  ),
+                  lastTouchedAt: Date.now(),
+                  generation: entry.generation + 1,
+                }
+              : entry,
+          ),
+        }));
+        scheduleLandingImageReconcile();
       },
 
       closeDraft: (id) => {
@@ -900,7 +979,7 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
         draftRuntimeRegistry.close(id);
         const closing = get().drafts.find((d) => d.id === id);
         if (closing === undefined) return;
-        if (isEmptyLandingDraftContent(closing.content)) {
+        if (isLandingDraftEmpty(closing)) {
           // An empty foreign row is dropped locally only: the owner's row
           // is the owner's to keep, and nothing here was edited (an edit
           // would have forked it first).
@@ -914,7 +993,9 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
         // A row this host does not own closes as local view state only: the
         // owner keeps its own tab state, and dirtying a foreign row would
         // leave an edit bound to a host session that never writes it.
-        const local = landingRowIsForeign(closing);
+        const local =
+          closing.wholeDraftAnnotations !== undefined ||
+          landingRowIsForeign(closing);
         set((state) => ({
           drafts: state.drafts.map((d) =>
             d.id === id
@@ -962,7 +1043,9 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
         // Reopening a replica is local view state, like closing one: looking
         // at a draft another host owns must not write to that host's row or
         // leave a dirty replica behind. The first substantive edit forks.
-        const local = landingRowIsForeign(draft);
+        const local =
+          draft.wholeDraftAnnotations !== undefined ||
+          landingRowIsForeign(draft);
         set((state) => ({
           drafts: state.drafts.map((d) =>
             d.id === id
@@ -1189,14 +1272,19 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
       // document one node shorter than the one those positions were measured
       // in.
       partialize: (state) => ({
-        drafts: state.drafts.map((draft) => ({
-          ...draft,
-          settings:
-            draft.settings === null
-              ? null
-              : chatRunSettingsSchemaPreUltracode.parse(draft.settings),
-          ...stripBase64ImageNodesWithSelection(draft.content, draft.selection),
-        })),
+        drafts: state.drafts
+          .filter((draft) => draft.wholeDraftAnnotations === undefined)
+          .map((draft) => ({
+            ...draft,
+            settings:
+              draft.settings === null
+                ? null
+                : chatRunSettingsSchemaPreUltracode.parse(draft.settings),
+            ...stripBase64ImageNodesWithSelection(
+              draft.content,
+              draft.selection,
+            ),
+          })),
         activeDraftId: state.activeDraftId,
         resumeDraftId: state.resumeDraftId,
       }),
@@ -1210,13 +1298,17 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
           ? persistedState
           : {};
         const drafts = parsePersistedLandingDrafts(persisted.drafts);
+        const whole = currentState.drafts.filter(
+          (draft) => draft.wholeDraftAnnotations !== undefined,
+        );
         return {
           ...currentState,
-          drafts,
-          activeDraftId: parsePersistedActiveDraftId(
-            persisted.activeDraftId,
-            drafts,
-          ),
+          drafts: uniqueLandingDrafts([...drafts, ...whole]),
+          activeDraftId: whole.some(
+            (draft) => draft.id === currentState.activeDraftId,
+          )
+            ? currentState.activeDraftId
+            : parsePersistedActiveDraftId(persisted.activeDraftId, drafts),
           resumeDraftId:
             typeof persisted.resumeDraftId === "string"
               ? persisted.resumeDraftId
@@ -1255,6 +1347,31 @@ draftRuntimeRegistry.configure({
 // this registration instead.
 registerLandingDraftRootSource({
   drafts: () => useLandingDraftStore.getState().drafts,
+});
+
+// These rows are loaded with the viewer's pool credential. Ordinary device
+// drafts stay available locally across account changes.
+useAuthStore.subscribe((next, previous) => {
+  if (next.profile?.userId === previous.profile?.userId) return;
+  const state = useLandingDraftStore.getState();
+  const whole = state.drafts.filter(
+    (draft) => draft.wholeDraftAnnotations !== undefined,
+  );
+  if (whole.length === 0) return;
+  const retired = new Set(whole.map((draft) => draft.id));
+  useLandingDraftStore.setState({
+    drafts: state.drafts.filter((draft) => !retired.has(draft.id)),
+    activeDraftId:
+      state.activeDraftId !== null && retired.has(state.activeDraftId)
+        ? null
+        : state.activeDraftId,
+    resumeDraftId:
+      state.resumeDraftId !== null && retired.has(state.resumeDraftId)
+        ? null
+        : state.resumeDraftId,
+  });
+  for (const id of retired) draftRuntimeRegistry.close(id);
+  scheduleLandingImageReconcile();
 });
 /**
  * Render-stable projection of the active draft for the landing-page shell
@@ -1323,6 +1440,11 @@ function areLandingDraftsEqual(
     if (!sameJsonContent(left[index].content, right[index].content)) {
       return false;
     }
+    if (
+      JSON.stringify(left[index].localAnnotations) !==
+      JSON.stringify(right[index].localAnnotations)
+    )
+      return false;
     if (!sameDraftSelection(left[index].selection, right[index].selection)) {
       return false;
     }
@@ -1377,9 +1499,24 @@ function uniqueLandingDrafts(
 function projectLandingDraftsToDesktop(state: LandingDraftStoreState): void {
   if (desktopProjectionBridge === null) return;
   void desktopProjectionBridge.update({
-    landingDrafts: state.drafts.map(projectLandingDraftForDesktop),
-    activeLandingDraftId: state.activeDraftId,
+    landingDrafts: state.drafts
+      .filter((draft) => draft.wholeDraftAnnotations === undefined)
+      .map(projectLandingDraftForDesktop),
+    activeLandingDraftId: state.drafts.some(
+      (draft) =>
+        draft.id === state.activeDraftId &&
+        draft.wholeDraftAnnotations !== undefined,
+    )
+      ? null
+      : state.activeDraftId,
   });
+}
+
+export async function persistLandingDraftDesktopProjection(): Promise<void> {
+  const bridge = desktopProjectionBridge;
+  if (bridge === null) return;
+  projectLandingDraftsToDesktop(useLandingDraftStore.getState());
+  await bridge.flush();
 }
 
 useLandingDraftStore.subscribe((state) => {
@@ -1404,6 +1541,9 @@ function projectLandingDraftForDesktop(
   );
   return {
     id: draft.id,
+    ...(draft.localAnnotations === undefined
+      ? {}
+      : { localAnnotations: toDesktopJsonValue(draft.localAnnotations) }),
     // `content` is plain JSON already; the walker reproduces it as a
     // `DesktopJsonValue` without a cast (`JsonContent`'s `unknown`-valued attrs
     // are not structurally assignable to `DesktopJsonValue`).
@@ -2203,8 +2343,11 @@ function keptAccountFollowsDefault(
  * A host document never names the draft's machine: only a gesture on this
  * device does, and a named row is never adopted, so the row here keeps it.
  */
-function keptNamedHostId(existing: LandingDraftTab | undefined): string | null {
-  return existing?.namedHostId ?? null;
+function keptLocalLandingFields(existing: LandingDraftTab | undefined) {
+  return {
+    namedHostId: existing?.namedHostId ?? null,
+    localAnnotations: existing?.localAnnotations,
+  };
 }
 
 /**
@@ -2289,7 +2432,7 @@ export function applyLandingHostDocument(
     ),
     returnedSandbox: keptReturnedSandbox(existing),
     accountFollowsDefault: keptAccountFollowsDefault(existing, document),
-    namedHostId: keptNamedHostId(existing),
+    ...keptLocalLandingFields(existing),
   };
   useLandingDraftStore.setState((state) => {
     const without = state.drafts.filter((draft) => draft.id !== next.id);
@@ -2323,6 +2466,7 @@ export function collectLandingDirtyWrites(hostId: string): ReadonlyArray<{
   return useLandingDraftStore
     .getState()
     .drafts.filter((draft) => {
+      if (draft.wholeDraftAnnotations !== undefined) return false;
       if (draft.generation <= draft.syncedGeneration) return false;
       if (draft.adoption.state === "unadopted") return false;
       // A replica is never written through the owner's session: an edit
@@ -2337,6 +2481,7 @@ export function collectUnadoptedLandingDrafts(): ReadonlyArray<LandingDraftTab> 
   return useLandingDraftStore.getState().drafts.filter(
     (draft) =>
       draft.adoption.state === "unadopted" &&
+      draft.wholeDraftAnnotations === undefined &&
       // A named draft stays on this device: another device would open it
       // without its host and place it wherever that window points.
       draft.namedHostId === null &&

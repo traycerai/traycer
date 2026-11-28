@@ -13,7 +13,7 @@ import type { BrowserAnnotationRecord } from "@traycer/protocol/persistence/epic
 import type { ChatQueueDeliveryPolicy } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type {
-  CreateChatRequestV14,
+  CreateChatRequestV15,
   CreateChatForkSourceV11,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
@@ -73,6 +73,8 @@ export type PendingSandboxSendRequest =
       readonly kind: "chat";
       readonly parentId: string | null;
       readonly placement: ExplicitTilePlacement | null;
+      readonly browserAnnotations?: readonly BrowserAnnotationRecord[];
+      readonly sourceWholeDraftId?: string;
     }
   /**
    * A terminal on the sandbox, in place of an agent (`Open terminal
@@ -103,7 +105,7 @@ export interface PendingSandboxSendDelivery {
 
 /** The exact request remains replayable even after the account's stage is cleared. */
 export interface PendingSandboxSendDispatch {
-  readonly input: CreateChatRequestV14 & { readonly settings: ChatRunSettings };
+  readonly input: CreateChatRequestV15 & { readonly settings: ChatRunSettings };
   readonly delivery: PendingSandboxSendDelivery;
   /** A transport failure cannot say whether the host accepted the request. */
   readonly status: "sending" | "uncertain";
@@ -148,6 +150,7 @@ export interface PendingSandboxSend {
    */
   readonly returnRequested?: {
     readonly saveInDrafts: boolean;
+    readonly wholeDraft?: true;
     readonly destination?: ReturnedSandbox | null;
   };
   /** Absent on legacy records; once claimed, only the original request may retry. */
@@ -181,6 +184,7 @@ interface PendingSandboxSendStoreState {
     id: string,
     saveInDrafts: boolean,
     destination: ReturnedSandbox | null,
+    wholeDraft: boolean,
   ) => boolean;
   readonly holdObservation: (
     id: string,
@@ -744,7 +748,7 @@ export const usePendingSandboxSendStore =
               sends: { ...state.sends, [id]: { ...send, epicConfirmed: true } },
             };
           }),
-        beginReturn: (id, saveInDrafts, destination) => {
+        beginReturn: (id, saveInDrafts, destination, wholeDraft) => {
           const { sends } = get();
           if (!Object.hasOwn(sends, id)) return false;
           const send = sends[id];
@@ -763,6 +767,7 @@ export const usePendingSandboxSendStore =
             return true;
           const requested = {
             saveInDrafts,
+            ...(wholeDraft ? { wholeDraft: true as const } : {}),
             destination:
               send.returnRequested === undefined
                 ? destination
@@ -1132,7 +1137,8 @@ registerExtraImageRootSource({
         send.delivery === null
           ? [
               ...blobHashesFromContent(send.content),
-              ...(send.request.kind === "message"
+              ...(send.request.kind === "message" ||
+              send.request.kind === "chat"
                 ? collectAnnotationImageHashes(
                     send.request.browserAnnotations ?? [],
                   )

@@ -56,7 +56,10 @@ export async function readCloudDraft(
       resolvedOwnerUserId: outcome.resolvedOwnerUserId,
     };
   }
-  const documentDigest = await options.sha256Hex(utf8Bytes(outcome.head));
+  const documentDigest = await hashCloudDraftHead(
+    outcome.head,
+    options.sha256Hex,
+  );
   if (documentDigest !== outcome.headSha256) {
     return {
       kind: "corrupt",
@@ -82,4 +85,11 @@ export async function readCloudDraft(
     };
   }
   return { kind: "ok", record: decoded.record };
+}
+
+export function hashCloudDraftHead(
+  head: string,
+  sha256Hex: Sha256Hex,
+): Promise<string> {
+  return sha256Hex(utf8Bytes(head));
 }

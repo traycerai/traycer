@@ -8,6 +8,7 @@ import {
   composerCanvasAnnotationsKey,
   composerCanvasAnnotationsKeyPrefix,
 } from "@/lib/persist";
+import { isMobileApp } from "@/lib/mobile-app";
 
 type CanvasAnnotationsByChat = Partial<
   Record<string, ReadonlyArray<CanvasAnnotationRecord>>
@@ -32,6 +33,12 @@ function windowStorage(): {
 } | null {
   if (typeof window === "undefined") return null;
   try {
+    if (isMobileApp()) {
+      return {
+        storage: window.localStorage,
+        key: composerCanvasAnnotationsKey("mobile"),
+      };
+    }
     const runnerHost: unknown = Reflect.get(globalThis, "runnerHost");
     const windows: unknown = isRecord(runnerHost) ? runnerHost.windows : null;
     if (
@@ -79,9 +86,9 @@ export function persistWindowCanvasAnnotations(
       { readonly browserAnnotations: ReadonlyArray<BrowserAnnotationRecord> }
     >
   >,
-): void {
+): boolean {
   const target = windowStorage();
-  if (target === null) return;
+  if (target === null) return false;
   const entries = Object.entries(drafts).flatMap(([chatId, draft]) => {
     const records =
       draft === undefined ? [] : canvasAnnotations(draft.browserAnnotations);
@@ -94,8 +101,13 @@ export function persistWindowCanvasAnnotations(
         target.key,
         JSON.stringify(Object.fromEntries(entries)),
       );
+    if (isMobileApp()) {
+      window.sessionStorage.removeItem(composerCanvasAnnotationsKey("session"));
+    }
+    return true;
   } catch {
     // Storage may be unavailable or full; the in-memory draft remains sendable.
+    return false;
   }
 }
 
@@ -103,7 +115,11 @@ export function readWindowCanvasAnnotations(): CanvasAnnotationsByChat {
   const target = windowStorage();
   if (target === null) return {};
   try {
-    return parseCanvasAnnotations(target.storage.getItem(target.key));
+    const raw = target.storage.getItem(target.key);
+    if (raw !== null || !isMobileApp()) return parseCanvasAnnotations(raw);
+    return parseCanvasAnnotations(
+      window.sessionStorage.getItem(composerCanvasAnnotationsKey("session")),
+    );
   } catch {
     return {};
   }

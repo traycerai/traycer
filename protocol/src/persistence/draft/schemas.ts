@@ -129,7 +129,7 @@ export type DraftComposerPortableWrite = z.infer<
   typeof draftComposerPortableWriteSchema
 >;
 
-function isHostPathMention(node: JsonContent): boolean {
+export function isHostPathMention(node: JsonContent): boolean {
   switch (node.attrs?.contextType) {
     case ContextType.File:
     case ContextType.Folder:

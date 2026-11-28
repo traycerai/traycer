@@ -1729,6 +1729,11 @@ export const HOST_METHOD_POLL_TABLE = {
   // applies an upsert as a whole-document LWW, so an older body arriving last
   // would win.
   "drafts.upsert": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "drafts.mutateWhole": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "drafts.delete": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "drafts.retract": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // `bot.*` (Tracy Bots): cloud-backed reads and writes. The reads take the

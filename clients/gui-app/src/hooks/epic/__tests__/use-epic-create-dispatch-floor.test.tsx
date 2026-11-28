@@ -11,6 +11,12 @@ import type {
   CreateEpicRequestV14,
   CreateEpicResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
+import type { SchemaVersion } from "@traycer/protocol/framework/index";
+import type { CreateChatRequestV15 } from "@traycer/protocol/host/epic/unary-schemas";
+import { canvasAnnotationRecordSchema } from "@traycer/protocol/persistence/epic/schemas";
+import { FloorEnforcingMessenger } from "@/hooks/config/__tests__/floor-enforcing-messenger";
+import { useEpicCreateChatForHostClient } from "@/hooks/epic/use-epic-chat-mutations";
+import { isAnnotatedCreateFloorRefusal } from "@/lib/epic-create-admission";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { useEpicCreateForClient } from "@/hooks/epic/use-epic-create-mutation";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -146,4 +152,154 @@ describe("useEpicCreateForClient's dispatch-time version floor", () => {
 
     expect(fixture.messenger.calls[0]?.requiredHostMethodVersion).toBeNull();
   });
+});
+
+describe("annotated creates carry epic.create/createChat@1.5 to a floor-enforcing transport", () => {
+  const SETTINGS = {
+    harnessId: "codex" as const,
+    model: "gpt-5.4",
+    permissionMode: "supervised" as const,
+    reasoningEffort: "high",
+    serviceTier: null,
+    agentMode: "epic" as const,
+    profileId: null,
+    ultracode: false,
+  };
+  const CARD = canvasAnnotationRecordSchema.parse({
+    kind: "browser-annotation",
+    annotationId: "annotation-1",
+    source: {
+      kind: "canvas",
+      artifactId: "canvas-1",
+      artifactTitle: "Checkout",
+      boardPath: "boards/checkout.html",
+      canvasPage: null,
+    },
+    capturedAt: 1,
+    comment: "",
+    counts: { elements: 1, regions: 0, strokes: 0 },
+    elements: [],
+    imageFileName: "crop.png",
+    imageHash: "a".repeat(64),
+  });
+  const initialMessage = (annotated: boolean) => ({
+    messageId: "message-1",
+    clientActionId: "action-1",
+    content: { type: "doc" as const, content: [] },
+    sender: { type: "user" as const, userId: USER_ID },
+    settings: SETTINGS,
+    accountContext: { type: "PERSONAL" as const },
+    sentFromHostId: null,
+    ...(annotated ? { browserAnnotations: [CARD] } : {}),
+  });
+  const CHAT_ID = "chat-1";
+  const annotatedEpic = (annotated: boolean): CreateEpicRequestV14 => ({
+    ...CREATE_VARIABLES,
+    chat: {
+      chatId: CHAT_ID,
+      parentId: null,
+      hostId: HOST_ID,
+      title: "Chat",
+      worktreeIntent: null,
+      initialMessage: initialMessage(annotated),
+    },
+  });
+  const annotatedChat = (annotated: boolean): CreateChatRequestV15 => ({
+    epicId: "epic-1",
+    chatId: CHAT_ID,
+    parentId: null,
+    hostId: HOST_ID,
+    title: "Chat",
+    worktreeIntent: null,
+    initialMessage: initialMessage(annotated),
+  });
+
+  function enforcingFixture(handshake: Map<string, SchemaVersion>) {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const messenger = new FloorEnforcingMessenger<HostRpcRegistry>(
+      {
+        registry: hostRpcRegistry,
+        requestId: () => "req-annotated-floor",
+        handlers: {
+          "epic.create": () => CREATE_RESPONSE,
+          "epic.createChat": () => ({ chatId: CHAT_ID }),
+        },
+      },
+      handshake,
+    );
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) =>
+        hostId === HOST_ID ? mockLocalHostEntry : null,
+      messenger,
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({
+        identity: { userId: USER_ID, username: USER_ID, providerHandle: null },
+        origin: "renderer",
+      }),
+    );
+    const wrapper = (props: { readonly children: ReactNode }): ReactNode =>
+      createElement(
+        QueryClientProvider,
+        { client: queryClient },
+        props.children,
+      );
+    return {
+      messenger,
+      client: spine.createRequester(mockLocalHostEntry),
+      wrapper,
+    };
+  }
+
+  it.each([
+    ["epic.create", "create"],
+    ["epic.createChat", "chat"],
+  ] as const)(
+    "%s is sent on a 1.5 host, then refused with nothing dispatched after a reconnect to 1.4, while an unannotated one still goes",
+    async (method, kind) => {
+      useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
+      const handshake = new Map<string, SchemaVersion>([
+        [method, { major: 1, minor: 5 }],
+      ]);
+      const fixture = enforcingFixture(handshake);
+      const send = async (annotated: boolean) => {
+        if (kind === "create") {
+          const rendered = renderHook(
+            () => useEpicCreateForClient(fixture.client),
+            { wrapper: fixture.wrapper },
+          );
+          return rendered.result.current.mutateAsync(annotatedEpic(annotated));
+        }
+        const rendered = renderHook(
+          () => useEpicCreateChatForHostClient(fixture.client),
+          { wrapper: fixture.wrapper },
+        );
+        return rendered.result.current.mutateAsync(annotatedChat(annotated));
+      };
+
+      await send(true);
+      expect(fixture.messenger.dispatched).toEqual([method]);
+      expect(fixture.messenger.calls[0]?.requiredHostMethodVersion).toEqual({
+        method,
+        version: { major: 1, minor: 5 },
+      });
+
+      handshake.set(method, { major: 1, minor: 4 });
+      const refusal: unknown = await send(true).catch(
+        (error: unknown) => error,
+      );
+      expect(isAnnotatedCreateFloorRefusal(refusal)).toBe(true);
+      expect(fixture.messenger.dispatched).toEqual([method]);
+
+      await send(false);
+      expect(fixture.messenger.dispatched).toEqual([method, method]);
+    },
+  );
 });
