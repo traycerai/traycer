@@ -801,7 +801,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   // (`CHAT_INDEX_UNAVAILABLE` on `chat.subscribe`).
   "epic.readCloudChatPart": "target-host-live-pool-at-rest",
   "epic.readCloudChatPayload": "target-host",
-  "epic.recordViewed": "target-host",
+  "epic.recordViewed": "addressed-peer",
   "epic.removeRepo": "target-host",
   "epic.renameArtifact": "addressed-peer",
   "epic.renameChat": "target-host",

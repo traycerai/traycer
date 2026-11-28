@@ -34,6 +34,23 @@ function matchingFiles(pattern: RegExp): readonly string[] {
 }
 
 describe("epic tab architecture contracts", () => {
+  it("observes the accepted requester row before deciding task recency", () => {
+    const epicRoute = productionSourceEntries().find(([filePath]) =>
+      filePath.endsWith("epic-tab-route-components.tsx"),
+    );
+    expect(epicRoute, "epic route component source").toBeDefined();
+    if (epicRoute === undefined) {
+      throw new Error("missing epic route adapter source");
+    }
+    expect(epicRoute[1]).toContain(
+      "useRequesterHostId(session.sessionHostClient)",
+    );
+    expect(epicRoute[1]).toContain(
+      "readReadyRecencyHost(session, requesterHostId)",
+    );
+    expect(epicRoute[1]).toContain("revalidateRecencyHost(current, hostId)");
+  });
+
   // Route render adapters must not re-assert layout via
   // synchronizeExternalRef; missing/stale Epic resolution must go through the
   // enveloped activateTabIntent seam (not a raw un-enveloped navigate).
