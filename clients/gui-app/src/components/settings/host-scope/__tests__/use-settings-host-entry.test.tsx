@@ -747,19 +747,24 @@ describe("Settings entry host resolution", () => {
       useSettingsHostScopeStore.getState().abandonHostEntry;
     const abandon = vi.fn(abandonHostEntry);
     useSettingsHostScopeStore.setState({ abandonHostEntry: abandon });
-    harness.answeredStatusHostIds = [target.hostId];
-    harness.resolvedBindingHostIds = [target.hostId];
-    clearHostDoorState(target.hostId);
-    harness.membershipState = "ready";
-    act(() => rendered.rerender());
+    try {
+      harness.answeredStatusHostIds = [target.hostId];
+      harness.resolvedBindingHostIds = [target.hostId];
+      clearHostDoorState(target.hostId);
+      harness.membershipState = "ready";
+      act(() => rendered.rerender());
 
-    await waitFor(() =>
-      expect(useSettingsHostScopeStore.getState().pendingHostId).toBeNull(),
-    );
-    expect(abandon).toHaveBeenCalledWith(target.hostId);
-    expect(useSettingsHostScopeStore.getState().hostByEnvironment).toEqual({});
-    expect(rendered.result.current.hostId).toBeNull();
-    useSettingsHostScopeStore.setState({ abandonHostEntry });
+      await waitFor(() =>
+        expect(useSettingsHostScopeStore.getState().pendingHostId).toBeNull(),
+      );
+      expect(abandon).toHaveBeenCalledWith(target.hostId);
+      expect(useSettingsHostScopeStore.getState().hostByEnvironment).toEqual(
+        {},
+      );
+      expect(rendered.result.current.hostId).toBeNull();
+    } finally {
+      useSettingsHostScopeStore.setState({ abandonHostEntry });
+    }
   });
 
   it("keeps another pin when returning from a projected named entry", async () => {
@@ -867,7 +872,6 @@ describe("Settings entry host resolution", () => {
     harness.answeredStatusHostIds = [target.hostId];
     harness.resolvedBindingHostIds = [target.hostId];
     harness.membershipState = "failed";
-    harness.listsFailed = true;
     act(() => {
       noteHostDoorState({
         hostId: target.hostId,

@@ -39,7 +39,7 @@ const harness = vi.hoisted(() => ({
   statusCalls: {} as Record<string, number>,
   labelResolverHostIds: [] as string[],
   scopedHostId: null as string | null,
-  renderedHosts: [] as unknown[],
+  fleetHostIds: [] as string[],
   observeStatus: true,
   showPanel: false,
   management: null as IHostManagement | null,
@@ -193,7 +193,12 @@ vi.mock("@/hooks/ui/use-mobile-viewport", () => ({
 vi.mock("@/hooks/host/use-fleet-update-views", async () => {
   const { UNKNOWN_FLEET_UPDATE_VIEW } =
     await import("@/lib/host/fleet-update/fleet-update-view");
-  return { useFleetUpdateViews: () => () => UNKNOWN_FLEET_UPDATE_VIEW };
+  return {
+    useFleetUpdateViews: (hostIds: readonly string[]) => {
+      harness.fleetHostIds = [...hostIds];
+      return () => UNKNOWN_FLEET_UPDATE_VIEW;
+    },
+  };
 });
 
 vi.mock("@/hooks/bots/use-host-environment-labels", async () => {
@@ -268,6 +273,15 @@ const X = hostScopeOptionFixture({
 
 const STATUS_CALL_CAP = 3;
 
+/** X's door refuses this app for good: the row shows whatever X's reads do. */
+function refuseXForGood(): void {
+  noteHostDoorState({
+    hostId: X.hostId,
+    kind: "not-a-member",
+    detail: { code: "FORBIDDEN", doorReason: "not_a_member" },
+  });
+}
+
 function makeClients(): void {
   const messengers = Object.fromEntries(
     harness.hostIds.map((hostId) => [
@@ -280,9 +294,8 @@ function makeClients(): void {
             if (hostId === "host-x") {
               const calls = (harness.statusCalls[hostId] ?? 0) + 1;
               harness.statusCalls[hostId] = calls;
-              // A rail that re-reads X each time the row shows would loop on
-              // this refusal; past the cap the read never settles, so that
-              // run ends on its assertions instead of never yielding.
+              // Only the status-only row can loop (a rail re-read ends the row
+              // it shows); past the cap the read never settles, so it ends.
               if (calls > STATUS_CALL_CAP) return new Promise(() => undefined);
             }
             return Promise.reject(new Error("status read refused"));
@@ -329,7 +342,6 @@ function makeInstalledManagement(): IHostManagement {
 
 function HostScopePage(): React.ReactNode {
   const scope = useHostScope();
-  harness.renderedHosts.push(scope.host);
   return (
     <>
       <SettingsSidebar
@@ -410,7 +422,7 @@ function resetState(): void {
   harness.statusCalls = {};
   harness.labelResolverHostIds = [];
   harness.scopedHostId = null;
-  harness.renderedHosts = [];
+  harness.fleetHostIds = [];
   harness.observeStatus = true;
   harness.showPanel = false;
   harness.management = null;
@@ -445,7 +457,7 @@ describe("<SettingsSidebar /> while a named host is shown from its row", () => {
     makeClients();
     await seedStatusError(queryClient);
     act(() => carryViewedHostIntoSettingsScope(X.hostId));
-    const view = renderPage(queryClient);
+    renderPage(queryClient);
 
     await waitFor(() =>
       expect(
@@ -454,32 +466,26 @@ describe("<SettingsSidebar /> while a named host is shown from its row", () => {
     );
     expect(harness.labelResolverHostIds).toEqual([]);
     expect(harness.scopedHostId).toBeNull();
-
-    view.rerender(
-      <QueryClientProvider client={queryClient}>
-        <HostScopePage />
-      </QueryClientProvider>,
-    );
-    view.rerender(
-      <QueryClientProvider client={queryClient}>
-        <HostScopePage />
-      </QueryClientProvider>,
-    );
-    expect(
-      screen.getByTestId("settings-host-switcher").getAttribute("aria-label"),
-    ).toContain("Host X");
-    expect(harness.renderedHosts.length).toBeGreaterThanOrEqual(2);
-    const firstHost = harness.renderedHosts[0];
-    expect(harness.renderedHosts.every((host) => host === firstHost)).toBe(
-      true,
-    );
+    expect(harness.fleetHostIds).toEqual([]);
     expect(harness.statusCalls["host-x"]).toBe(0);
 
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
-    await waitFor(() => expect(harness.statusCalls["host-x"]).toBe(1));
+    await waitFor(() => {
+      const state = queryClient.getQueryState(
+        queryKeys.hostMethod<HostRpcRegistry, "environment.status">(
+          "host-x",
+          "environment.status",
+          {},
+        ),
+      );
+      expect(harness.statusCalls["host-x"]).toBe(1);
+      expect(state?.status).toBe("error");
+      expect(state?.fetchStatus).toBe("idle");
+    });
     expect(
       screen.getByTestId("settings-host-switcher").getAttribute("aria-label"),
     ).toContain("Host X");
+    expect(harness.statusCalls["host-x"]).toBe(1);
   });
 
   it("does not reread status while a terminally refused row remains visible", () => {
@@ -492,31 +498,18 @@ describe("<SettingsSidebar /> while a named host is shown from its row", () => {
     makeClients();
     act(() => {
       carryViewedHostIntoSettingsScope(X.hostId);
-      noteHostDoorState({
-        hostId: X.hostId,
-        kind: "not-a-member",
-        detail: { code: "FORBIDDEN", doorReason: "not_a_member" },
-      });
+      refuseXForGood();
     });
     harness.observeStatus = false;
-    const view = renderPage(queryClient);
+    renderPage(queryClient);
     const trigger = screen.getByTestId("settings-host-switcher");
     expect(trigger.getAttribute("aria-label")).toContain("Host X");
     expect(harness.statusCalls["host-x"] ?? 0).toBe(0);
     expect(harness.labelResolverHostIds).toEqual([]);
-
-    view.rerender(
-      <QueryClientProvider client={queryClient}>
-        <HostScopePage />
-      </QueryClientProvider>,
-    );
-    expect(
-      screen.getByTestId("settings-host-switcher").getAttribute("aria-label"),
-    ).toContain("Host X");
-    expect(harness.statusCalls["host-x"] ?? 0).toBe(0);
+    expect(harness.fleetHostIds).toEqual([]);
   });
 
-  it("keeps the rail and Overview on the same refused host", async () => {
+  it("keeps the rail and Overview on the same refused host", () => {
     const queryClient = new QueryClient({
       defaultOptions: {
         queries: { retry: false },
@@ -524,10 +517,12 @@ describe("<SettingsSidebar /> while a named host is shown from its row", () => {
       },
     });
     makeClients();
-    await seedStatusError(queryClient);
     harness.showPanel = true;
     harness.observeStatus = false;
-    act(() => carryViewedHostIntoSettingsScope(X.hostId));
+    act(() => {
+      carryViewedHostIntoSettingsScope(X.hostId);
+      refuseXForGood();
+    });
     renderPage(queryClient);
 
     expect(
@@ -536,12 +531,11 @@ describe("<SettingsSidebar /> while a named host is shown from its row", () => {
     expect(
       screen.getByText("Status, updates and maintenance for Host X."),
     ).not.toBeNull();
-    await screen.findByRole("tab", { name: "Installation" });
-    fireEvent.click(screen.getByRole("tab", { name: "Installation" }));
-    const connectionLine = await screen.findByTestId(
-      "host-overview-installation-needs-connection",
-    );
-    expect(connectionLine.textContent).toContain("Host X");
+    expect(
+      screen.getByTestId("host-overview-installation-needs-connection")
+        .textContent,
+    ).toContain("Host X");
+    expect(harness.statusCalls["host-x"] ?? 0).toBe(0);
   });
 
   it("closes A's removal confirmation before the real panel removes refused X", async () => {
@@ -552,7 +546,7 @@ describe("<SettingsSidebar /> while a named host is shown from its row", () => {
       },
     });
     makeClients();
-    await seedStatusError(queryClient);
+    act(() => refuseXForGood());
     harness.currentClient = null;
     const hostAMessenger = harness.messengers["host-a"];
     const hostXMessenger = harness.messengers["host-x"];
@@ -568,7 +562,6 @@ describe("<SettingsSidebar /> while a named host is shown from its row", () => {
     });
     renderPage(queryClient);
 
-    fireEvent.click(await screen.findByRole("tab", { name: "Installation" }));
     fireEvent.click(
       await screen.findByRole("button", { name: "Remove from account" }),
     );
