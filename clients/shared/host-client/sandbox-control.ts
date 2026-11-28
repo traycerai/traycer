@@ -234,8 +234,8 @@ async function call(
   // bounds.
   const abort = composeRequestAbort(null, init.timeoutMs);
   // A request without a payload must not leave its content type to the
-  // platform: the phone's native HTTP sends an untyped one as a form post,
-  // which the server refuses with 415.
+  // platform: on the Android phone such a request is refused with 415 before
+  // the route runs.
   const sent: CallInit =
     init.body === null && init.method !== "GET" && init.method !== "HEAD"
       ? { ...init, body: "{}" }

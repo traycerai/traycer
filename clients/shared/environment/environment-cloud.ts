@@ -220,8 +220,8 @@ async function sendWithHeaders(
     ? cloud.authnBaseUrl
     : `${cloud.authnBaseUrl}/`;
   // A request without a payload must not leave its content type to the
-  // platform: the phone's native HTTP sends an untyped one as a form post,
-  // which authn refuses with 415. Decided here, so every transport sends it.
+  // platform: on the Android phone such a request is refused with 415 before
+  // the route runs. Decided here, so every transport sends it.
   const sentBody = body === null && method !== "GET" ? {} : body;
   const abort = composeRequestAbort(null, ENVIRONMENT_REQUEST_TIMEOUT_MS);
   try {

@@ -746,9 +746,10 @@ export async function mintHostTokenViaHttp(
   const answer = await postHostRoute(
     hostRouteUrl(authnBaseUrl, hostId, "session-grant"),
     signInToken,
-    // The route reads no body, but a POST that declares no type is sent by
-    // the phone's native HTTP as a form post, which authn refuses with 415;
-    // and a JSON type with an empty body is refused as empty JSON.
+    // The route reads no body, but a request without a payload must not leave
+    // its content type to the platform: on the Android phone such a request
+    // is refused with 415 before the route runs. A JSON type with an empty
+    // body is refused as empty JSON, so the empty object is sent.
     "{}",
     signal,
   );
