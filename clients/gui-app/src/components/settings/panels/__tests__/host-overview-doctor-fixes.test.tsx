@@ -88,6 +88,7 @@ import {
   ExternalHostRestartTrigger,
   openHostOverviewMenu,
   buildOverviewHostFixture,
+  overviewHostDirectoryFixture,
   buildOverviewManagement,
   makeInstalledRecord,
   type OverviewHostFixture,
@@ -203,11 +204,7 @@ const SERVICE_NOT_REGISTERED: HostDoctorIssue = {
 function bindingWith(hostClient: unknown): HostBindingMock {
   return {
     hostClient,
-    directory: {
-      list: () => Promise.resolve([]),
-      onChange: () => ({ dispose: () => undefined }),
-      getLocalEntry: () => null,
-    },
+    directory: overviewHostDirectoryFixture(),
   };
 }
 

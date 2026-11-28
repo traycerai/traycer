@@ -85,6 +85,7 @@ import { HostSettingsPanel } from "@/components/settings/panels/host-settings-pa
 import { HostDoctorCard } from "@/components/settings/panels/host-doctor-card";
 import {
   buildOverviewHostFixture,
+  overviewHostDirectoryFixture,
   buildOverviewManagement,
   openHostOverviewMenu,
   type OverviewHostFixture,
@@ -161,11 +162,7 @@ function buildLifecycleHost(initial: HostLifecycleView): IHostLifecycleHost {
 function bindingWith(hostClient: unknown): HostBindingMock {
   return {
     hostClient,
-    directory: {
-      list: () => Promise.resolve([]),
-      onChange: () => ({ dispose: () => undefined }),
-      getLocalEntry: () => null,
-    },
+    directory: overviewHostDirectoryFixture(),
   };
 }
 

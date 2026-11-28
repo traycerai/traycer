@@ -97,6 +97,7 @@ import { runnerMutationKeys } from "@/lib/query-keys/runner-mutation-keys";
 import {
   ExternalHostRestartTrigger,
   buildOverviewHostFixture,
+  overviewHostDirectoryFixture,
   buildOverviewManagement,
   openHostOverviewMenu,
   selectHostOverviewTab,
@@ -269,12 +270,11 @@ function bindingWith(hostClient: unknown): HostBindingMock {
   return {
     hostClient,
     directory: {
+      ...overviewHostDirectoryFixture(),
       getLocalEntry: () =>
         localHostIdMock.current === null
           ? null
           : { hostId: localHostIdMock.current },
-      list: () => Promise.resolve([]),
-      onChange: () => ({ dispose: () => undefined }),
     },
   };
 }

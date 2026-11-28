@@ -77,6 +77,7 @@ import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
 import {
   buildOverviewHostFixture,
+  overviewHostDirectoryFixture,
   selectHostOverviewTab,
   type OverviewHostFixture,
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
@@ -179,11 +180,7 @@ function mountPanel(options: MountOptions): Mounted {
   recordNegotiatedHostMethods("host-a", options.methods);
   hostBindingMock.current = {
     hostClient: fixture.client,
-    directory: {
-      getLocalEntry: () => null,
-      list: () => Promise.resolve([]),
-      onChange: () => ({ dispose: () => undefined }),
-    },
+    directory: overviewHostDirectoryFixture(),
   };
   const restarting = options.health === "restarting";
   scopeOverrides.current = {

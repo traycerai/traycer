@@ -82,6 +82,7 @@ import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
 import {
   buildOverviewHostFixture,
+  overviewHostDirectoryFixture,
   buildOverviewManagement,
   openHostOverviewMenu,
   selectHostOverviewTab,
@@ -172,11 +173,7 @@ function buildLifecycleHost(initial: HostLifecycleView): LifecycleFixture {
 function bindingWith(hostClient: unknown): HostBindingMock {
   return {
     hostClient,
-    directory: {
-      list: () => Promise.resolve([]),
-      onChange: () => ({ dispose: () => undefined }),
-      getLocalEntry: () => null,
-    },
+    directory: overviewHostDirectoryFixture(),
   };
 }
 

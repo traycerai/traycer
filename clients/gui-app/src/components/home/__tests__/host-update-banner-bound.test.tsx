@@ -26,6 +26,7 @@ vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
 interface HostBindingFixture {
   readonly directory: {
     readonly getLocalEntry: () => HostDirectoryEntry | null;
+    readonly findById: (hostId: string) => HostDirectoryEntry | null;
     readonly getLocalHostId: () => string | null;
     readonly onChange: (cb: () => void) => { dispose: () => void };
   };
@@ -172,6 +173,7 @@ import {
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import {
   buildOverviewHostFixture,
+  overviewHostDirectoryFixture,
   openHostOverviewMenu,
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
 import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
@@ -282,9 +284,10 @@ function bindLocalHost(
   });
   hostBindingMock.current = {
     directory: {
+      ...overviewHostDirectoryFixture(),
+      findById: (hostId) => (hostId === LOCAL_HOST_ID ? localEntry() : null),
       getLocalEntry: () => localEntry(),
       getLocalHostId: () => LOCAL_HOST_ID,
-      onChange: () => ({ dispose: () => undefined }),
     },
     hostClient: fixture.client,
   };

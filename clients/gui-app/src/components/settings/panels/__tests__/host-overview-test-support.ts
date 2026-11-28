@@ -487,3 +487,13 @@ export function updateCheckManifest(version: string): HostAvailableManifest {
     ],
   };
 }
+
+export function overviewHostDirectoryFixture() {
+  return {
+    findById: (_hostId: string): HostDirectoryEntry | null => null,
+    getLocalEntry: () => null,
+    list: () => Promise.resolve([] as const),
+    onChange: () => ({ dispose: () => undefined }),
+    refresh: () => Promise.resolve([] as const),
+  };
+}

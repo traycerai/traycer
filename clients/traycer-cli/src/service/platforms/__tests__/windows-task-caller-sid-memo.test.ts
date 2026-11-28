@@ -54,7 +54,7 @@ function whoamiOutput(sid: string): string {
   return `"HOST\\someone","${sid}"\r\n`;
 }
 
-const TASK_XML = `<Task><Principals><Principal id="Author"><UserId>${CALLER_SID}</UserId></Principal></Principals><Actions Context="Author"><Exec><Command>x</Command></Exec></Actions></Task>`;
+const TASK_XML = `<Task><Principals><Principal id="Author"><UserId>${CALLER_SID}</UserId><LogonType>InteractiveToken</LogonType></Principal></Principals><Actions Context="Author"><Exec><Command>C:\\traycer.exe</Command><Arguments>host start</Arguments></Exec></Actions></Task>`;
 
 let queries = 0;
 

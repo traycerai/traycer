@@ -120,7 +120,7 @@ const noTimingDeps: WindowsControllerDeps = { now: () => 0 };
 // changes it and fails closed when it cannot tell whose it is: the task under
 // test is registered by the account these tests run as.
 const CALLER_SID = "S-1-5-21-1000-2000-3000-1001";
-const OWN_TASK_XML = `<Task><Principals><Principal id="Author"><UserId>${CALLER_SID}</UserId></Principal></Principals><Settings><Enabled>true</Enabled></Settings><Actions Context="Author"><Exec><Command>x</Command></Exec></Actions></Task>`;
+const OWN_TASK_XML = `<Task><Principals><Principal id="Author"><UserId>${CALLER_SID}</UserId><LogonType>InteractiveToken</LogonType></Principal></Principals><Settings><Enabled>true</Enabled></Settings><Actions Context="Author"><Exec><Command>C:\\traycer.exe</Command><Arguments>host start</Arguments></Exec></Actions></Task>`;
 
 beforeEach(() => {
   setWindowsTaskUserSidReaderForTests(() => CALLER_SID);

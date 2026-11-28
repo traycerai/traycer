@@ -85,6 +85,7 @@ import {
 } from "@/lib/host/host-lifecycle-copy";
 import {
   buildOverviewHostFixture,
+  overviewHostDirectoryFixture,
   buildOverviewManagement,
   openHostOverviewMenu,
   selectHostOverviewTab,
@@ -152,11 +153,7 @@ function buildLifecycleHost(initial: HostLifecycleView): IHostLifecycleHost {
 function bindingWith(hostClient: unknown): HostBindingMock {
   return {
     hostClient,
-    directory: {
-      list: () => Promise.resolve([]),
-      onChange: () => ({ dispose: () => undefined }),
-      getLocalEntry: () => null,
-    },
+    directory: overviewHostDirectoryFixture(),
   };
 }
 

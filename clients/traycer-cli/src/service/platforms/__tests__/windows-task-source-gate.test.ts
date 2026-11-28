@@ -161,15 +161,61 @@ function describeGateUse(
       identifierEscapes: true,
     };
   }
-  const name = parent.name.text;
   // The scope the name lives in: the nearest enclosing block or file.
   let scope: ts.Node = parent;
   while (!ts.isBlock(scope) && !ts.isSourceFile(scope)) scope = scope.parent;
+  const usage = scanGateBinding(scope, parent.name, (identifier) => {
+    const reference = identifier.parent;
+    if (
+      file !== "service/platforms/windows.ts" ||
+      !ts.isCallExpression(reference) ||
+      !ts.isIdentifier(reference.expression) ||
+      reference.expression.text !== "rewriteWindowsTaskAction" ||
+      reference.arguments.length !== 3 ||
+      reference.arguments[2] !== identifier
+    ) {
+      return null;
+    }
+    // This local helper owns the create execution. Follow the actual binding
+    // across the handoff, then apply the same use checks inside its body.
+    const helper = source.statements.find(
+      (statement): statement is ts.FunctionDeclaration =>
+        ts.isFunctionDeclaration(statement) &&
+        statement.name?.text === "rewriteWindowsTaskAction",
+    );
+    const parameter = helper?.parameters[2]?.name;
+    if (
+      helper?.body === undefined ||
+      parameter === undefined ||
+      !ts.isIdentifier(parameter)
+    ) {
+      return null;
+    }
+    const forwarded = scanGateBinding(helper.body, parameter, null);
+    return forwarded.properties.includes("exec") ? forwarded : null;
+  });
+  return { file, line, bound: parent.name.text, ...usage };
+}
+
+type GateBindingUsage = Pick<
+  GateResultUse,
+  "properties" | "execUsedAsCallee" | "identifierEscapes"
+>;
+
+function scanGateBinding(
+  scope: ts.Node,
+  binding: ts.Identifier,
+  follow: ((identifier: ts.Identifier) => GateBindingUsage | null) | null,
+): GateBindingUsage {
   const properties: string[] = [];
   let execUsedAsCallee = true;
   let identifierEscapes = false;
   const scan = (node: ts.Node): void => {
-    if (ts.isIdentifier(node) && node.text === name && node !== parent.name) {
+    if (
+      ts.isIdentifier(node) &&
+      node.text === binding.text &&
+      node !== binding
+    ) {
       const access = node.parent;
       if (ts.isPropertyAccessExpression(access) && access.expression === node) {
         properties.push(access.name.text);
@@ -180,20 +226,20 @@ function describeGateUse(
           }
         }
       } else if (!isNullComparison(access, node)) {
-        identifierEscapes = true;
+        const forwarded = follow?.(node) ?? null;
+        if (forwarded === null) {
+          identifierEscapes = true;
+        } else {
+          properties.push(...forwarded.properties);
+          execUsedAsCallee &&= forwarded.execUsedAsCallee;
+          identifierEscapes ||= forwarded.identifierEscapes;
+        }
       }
     }
     ts.forEachChild(node, scan);
   };
   scan(scope);
-  return {
-    file,
-    line,
-    bound: name,
-    properties,
-    execUsedAsCallee,
-    identifierEscapes,
-  };
+  return { properties, execUsedAsCallee, identifierEscapes };
 }
 
 describe("the Scheduled Task source gate: a mutating verb is spelled only in windows-task-gate.ts", () => {
@@ -296,6 +342,28 @@ describe("the Scheduled Task source gate: a mutating verb is spelled only in win
     );
     expect(passedOn[0]?.identifierEscapes).toBe(true);
   });
+  it("checks uses of the create gate inside the task action rewrite helper", () => {
+    const source = (helperBody: string) => `
+      async function refresh(label, run, deps) {
+        const create = await gateWindowsTaskVerb(label, "create", deps);
+        return rewriteWindowsTaskAction(label, run, create);
+      }
+      async function rewriteWindowsTaskAction(label, run, create) {
+        ${helperBody}
+      }
+    `;
+    const file = "service/platforms/windows.ts";
+    expect(
+      gateResultUses(file, source("return create.exec(run);"))[0],
+    ).toMatchObject({ identifierEscapes: false, execUsedAsCallee: true });
+    expect(
+      gateResultUses(file, source("create.exec(run); return create;"))[0],
+    ).toMatchObject({ identifierEscapes: true });
+    expect(
+      gateResultUses(file, source("create.exec(run); return create.exec;"))[0],
+    ).toMatchObject({ execUsedAsCallee: false });
+  });
+
   // The switch a task's owner set is theirs: only the explicit repair
   // (`host service install`) may write it back on, so no other command can
   // open the repair scope. `host install`, `host apply`, `host update` and

@@ -50,7 +50,10 @@ import type {
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
-import { buildOverviewHostFixture } from "@/components/settings/panels/__tests__/host-overview-test-support";
+import {
+  buildOverviewHostFixture,
+  overviewHostDirectoryFixture,
+} from "@/components/settings/panels/__tests__/host-overview-test-support";
 import { createFakeRunnerHost } from "../../../../../__tests__/create-fake-runner-host";
 
 const OVERVIEW_METHODS = [
@@ -120,11 +123,7 @@ function renderOverview(options: { readonly isLocalMachine: boolean }): {
   };
   hostBindingMock.current = {
     hostClient: fixture.client,
-    directory: {
-      list: () => Promise.resolve([]),
-      onChange: () => ({ dispose: () => undefined }),
-      getLocalEntry: () => null,
-    },
+    directory: overviewHostDirectoryFixture(),
   };
   // A real `hostLifecycle` on BOTH arms - the mode line's own suite
   // (`host-lifecycle-mode-line.test.tsx`) already pins its render logic
