@@ -13,8 +13,8 @@ import {
   useEpicArtifact,
   useEpicConnectionStatus,
   useEpicPermissionRole,
-  useEpicSnapshotMeta,
 } from "@/lib/epic-selectors";
+import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { cn } from "@/lib/utils";
@@ -37,8 +37,7 @@ function StatusPill(props: {
   artifactType: "ticket" | "story";
 }) {
   const { artifactId, artifactType } = props;
-  const meta = useEpicSnapshotMeta();
-  const epicId = meta?.epicLight?.id ?? "";
+  const { epicId } = useOpenEpicHandle();
   const liveArtifact = useEpicArtifact(artifactId);
   const role = useEpicPermissionRole();
   const canEdit = isEditableRole(role);
@@ -86,7 +85,7 @@ function StatusPill(props: {
       <DropdownMenuTrigger asChild disabled={updateStatus.isPending}>
         <button
           type="button"
-          disabled={updateStatus.isPending || !epicId}
+          disabled={updateStatus.isPending}
           data-testid="status-pill"
           // muted-fill-ok: tile chrome on bg-canvas, no bg-card ancestor; --canvas never equals --muted
           className="inline-flex items-center gap-1.5 rounded-md border border-border/50 bg-muted/30 px-2.5 py-1 text-ui-xs text-muted-foreground transition-colors hover:bg-muted/60 disabled:opacity-50"
