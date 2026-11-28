@@ -1,5 +1,17 @@
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
-import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import type {
+  HostListItem,
+  HostSandboxState,
+} from "@traycer/protocol/host/host-status";
+import {
+  buildHostScopeOptions,
+  type HostScopeOption,
+} from "@/components/settings/host-scope/host-scope-model";
+import {
+  sandboxHostEntryFixture,
+  sandboxHostListItemFixture,
+  sandboxSummaryFixture,
+} from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import type { HostOptions } from "@/components/settings/host-scope/use-host-options";
 
@@ -64,6 +76,53 @@ export function hostScopeOptionFixture(
     sandbox: null,
     ...overrides,
   };
+}
+
+/**
+ * An Automations host joined from its registry row and control plane summary,
+ * for card and row-word tests that need to preserve their split.
+ */
+export function buildAutomationHostScopeOptionFixture(input: {
+  readonly state: HostSandboxState;
+  readonly registryState: HostSandboxState;
+  readonly updating: boolean;
+  readonly connectivity: HostListItem["status"]["connectivity"];
+}): HostScopeOption {
+  const hostId = "sbx-host";
+  const registry = sandboxHostListItemFixture(
+    hostId,
+    input.registryState,
+    false,
+  );
+  const registryWithConnectivity = {
+    ...registry,
+    status: { ...registry.status, connectivity: input.connectivity },
+  };
+  const host = buildHostScopeOptions({
+    leases: [],
+    authorityAttached: false,
+    directory: [sandboxHostEntryFixture(hostId, input.registryState, false)],
+    registry: [registryWithConnectivity],
+    localHostId: null,
+    activeHostId: null,
+    localService: undefined,
+    localPlatform: null,
+    hasLiveSession: () => false,
+    localHostSettingUp: false,
+    localHostTerminalRunNote: null,
+    sandboxes: [
+      sandboxSummaryFixture({
+        id: "sbx-summary",
+        hostId,
+        kind: "automation",
+        state: input.state,
+        updating: input.updating,
+      }),
+    ],
+    nowMs: 0,
+  }).find((option) => option.hostId === hostId);
+  if (host === undefined) throw new Error("The sandbox host was not built");
+  return host;
 }
 
 /**

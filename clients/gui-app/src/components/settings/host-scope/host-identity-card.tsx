@@ -137,26 +137,37 @@ function HostIdentityState(props: {
   readonly host: HostScopeOption;
 }): ReactNode {
   const { host } = props;
+  if (host.sandbox !== null && sandboxCardUpdating(host.sandbox)) {
+    return (
+      <span data-testid="host-identity-sandbox-state">
+        {HOST_SANDBOX_UPDATING_WORD}
+      </span>
+    );
+  }
   if (host.sandbox === null || sandboxWordYieldsToHealth(host)) {
     return <HostIdentityHealth host={host} />;
   }
   return (
     <span data-testid="host-identity-sandbox-state">
-      {sandboxCardStateWord(host.sandbox)}
+      {sandboxStateWord(host.sandbox)}
     </span>
   );
 }
 
 /**
- * The card's word for its sandbox. An Automations pod stopping or starting to
- * move to the newest image reads Updating here only: the computer list and the
- * picker keep the shared `sandboxStateWord`.
+ * Whether the card reads Updating: the control plane's row is stopping or
+ * starting to move an Automations pod to the newest image. Read from the row,
+ * not the card's state, which keeps the registry's `released` while the pod
+ * stops and starts again, and ahead of the health word. The computer list and
+ * the picker keep the shared `sandboxStateWord`.
  */
-function sandboxCardStateWord(sandbox: HostScopeSandbox): string {
-  const moving = sandbox.state === "stopping" || sandbox.state === "starting";
-  return moving && sandbox.summary?.updating === true
-    ? HOST_SANDBOX_UPDATING_WORD
-    : sandboxStateWord(sandbox);
+function sandboxCardUpdating(sandbox: HostScopeSandbox): boolean {
+  const summary = sandbox.summary;
+  return (
+    summary !== null &&
+    summary.updating &&
+    (summary.state === "stopping" || summary.state === "starting")
+  );
 }
 
 function HostProvenanceFacts(props: {
