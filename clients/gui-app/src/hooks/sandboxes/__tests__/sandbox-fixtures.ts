@@ -31,6 +31,7 @@ export function sandboxSummaryFixture(
     diskMb: 20480,
     displayName: "build-box",
     state: "awake",
+    updating: false,
     frozen: false,
     failureCode: null,
     idleMinutes: null,
@@ -125,6 +126,34 @@ export function sandboxOperationFixture(
   };
 }
 
+/** One Automations host list row, in `state`, frozen or not. */
+export function sandboxHostListItemFixture(
+  hostId: string,
+  state: HostListItem["sandboxState"],
+  frozen: boolean,
+): HostListItem {
+  return {
+    hostId,
+    displayName: "build-box",
+    platform: "linux",
+    kind: "sandbox",
+    publicKey: "pk",
+    createdAt: "2026-10-01T00:00:00.000Z",
+    status: {
+      connectivity: "connectable",
+      viewerReachability: "unknown",
+      clientCloud: "ok",
+      updateState: "current",
+      appVersion: "1.5.0",
+      lastSeenAt: null,
+    },
+    updatePolicy: "manual",
+    sandboxState: state,
+    sandboxFrozen: frozen,
+    profile: "agent",
+  };
+}
+
 /** The host directory's entry for the sandbox behind `hostId`, in `state`, frozen or not. */
 export function sandboxHostEntryFixture(
   hostId: string,
@@ -132,26 +161,7 @@ export function sandboxHostEntryFixture(
   frozen: boolean,
 ): HostDirectoryEntry {
   return hostListItemToDirectoryEntry(
-    {
-      hostId,
-      displayName: "build-box",
-      platform: "linux",
-      kind: "sandbox",
-      publicKey: "pk",
-      createdAt: "2026-10-01T00:00:00.000Z",
-      status: {
-        connectivity: "connectable",
-        viewerReachability: "unknown",
-        clientCloud: "ok",
-        updateState: "current",
-        appVersion: "1.5.0",
-        lastSeenAt: null,
-      },
-      updatePolicy: "manual",
-      sandboxState: state,
-      sandboxFrozen: frozen,
-      profile: "agent",
-    },
+    sandboxHostListItemFixture(hostId, state, frozen),
     "wss://relay.example.test",
   );
 }

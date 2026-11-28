@@ -1096,6 +1096,34 @@ describe("<SandboxesSettingsPanel />", () => {
     }
   });
 
+  it.each(["stopping", "starting"] as const)(
+    "shows an updating %s automation badge",
+    (state) => {
+      const id = `updating-${state}`;
+      renderPanel([row(id, { kind: "automation", state, updating: true })]);
+
+      const element = within(rowOf(id)).getByTestId("sandboxes-row-state");
+      expect(element.textContent).toBe("Updating");
+      expect(element.getAttribute("data-variant")).toBe("info");
+    },
+  );
+
+  it("keeps the stopping state word and badge when an automation is not updating", () => {
+    renderPanel([
+      row("stopping-automation", {
+        kind: "automation",
+        state: "stopping",
+        updating: false,
+      }),
+    ]);
+
+    const badge = within(rowOf("stopping-automation")).getByTestId(
+      "sandboxes-row-state",
+    );
+    expect(badge.textContent).toBe("Stopping");
+    expect(badge.getAttribute("data-variant")).toBe("muted");
+  });
+
   it("offers no Add credits on a frozen row whose owner is not known", () => {
     renderPanel([
       row("frozen-unknown", {

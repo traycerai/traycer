@@ -6,6 +6,7 @@ import {
   HOST_FROZEN_WORD,
   HOST_SANDBOX_STATES,
   hostSandboxStateWord,
+  sandboxRowStateWord,
 } from "@traycer/protocol/host/host-status";
 import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
 import { activateTabIntent } from "@/lib/tab-navigation";
@@ -1102,10 +1103,12 @@ function SandboxRowIdentityBadges(props: {
   return (
     <div className="flex flex-wrap items-center gap-2">
       <Badge
-        variant={STATE_BADGE[props.publicState]}
+        variant={
+          props.summary.updating ? "info" : STATE_BADGE[props.publicState]
+        }
         data-testid="sandboxes-row-state"
       >
-        {hostSandboxStateWord(props.summary.state)}
+        {sandboxRowStateWord(props.summary)}
       </Badge>
       {props.summary.frozen ? (
         <Badge variant="warning">{HOST_FROZEN_WORD}</Badge>

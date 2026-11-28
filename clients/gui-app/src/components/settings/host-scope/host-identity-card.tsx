@@ -1,5 +1,8 @@
 import type { ReactNode } from "react";
-import { HOST_FROZEN_WORD } from "@traycer/protocol/host/host-status";
+import {
+  HOST_FROZEN_WORD,
+  HOST_SANDBOX_UPDATING_WORD,
+} from "@traycer/protocol/host/host-status";
 import type { HostBusyBreakdown } from "@traycer/protocol/host/status/index";
 import {
   describeHostBusy,
@@ -19,6 +22,7 @@ import {
   formatHostVersion,
   formatPlatform,
   type HostScopeOption,
+  type HostScopeSandbox,
 } from "@/components/settings/host-scope/host-scope-model";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { cn } from "@/lib/utils";
@@ -133,6 +137,13 @@ function HostIdentityState(props: {
   readonly host: HostScopeOption;
 }): ReactNode {
   const { host } = props;
+  if (host.sandbox !== null && sandboxCardUpdating(host.sandbox)) {
+    return (
+      <span data-testid="host-identity-sandbox-state">
+        {HOST_SANDBOX_UPDATING_WORD}
+      </span>
+    );
+  }
   if (host.sandbox === null || sandboxWordYieldsToHealth(host)) {
     return <HostIdentityHealth host={host} />;
   }
@@ -140,6 +151,22 @@ function HostIdentityState(props: {
     <span data-testid="host-identity-sandbox-state">
       {sandboxStateWord(host.sandbox)}
     </span>
+  );
+}
+
+/**
+ * Whether the card reads Updating: the control plane's row is stopping or
+ * starting to move an Automations pod to the newest image. Read from the row,
+ * not the card's state, which keeps the registry's `released` while the pod
+ * stops and starts again, and ahead of the health word. The computer list and
+ * the picker keep the shared `sandboxStateWord`.
+ */
+function sandboxCardUpdating(sandbox: HostScopeSandbox): boolean {
+  const summary = sandbox.summary;
+  return (
+    summary !== null &&
+    summary.updating &&
+    (summary.state === "stopping" || summary.state === "starting")
   );
 }
 

@@ -7,8 +7,11 @@ import type { HostBusyBreakdown } from "@traycer/protocol/host/status/index";
 import { HOST_FROZEN_WORD } from "@traycer/protocol/host/host-status";
 import { SandboxHeaderNotices } from "@/components/hosts/sandbox-card";
 import { HostIdentityCard } from "@/components/settings/host-scope/host-identity-card";
-import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
-import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import {
+  buildAutomationHostScopeOptionFixture,
+  hostScopeOptionFixture,
+} from "@/components/settings/host-scope/host-scope-fixture";
+import { type HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
@@ -134,6 +137,81 @@ function renderCard(host: HostScopeOption, extra: CardExtra | null): void {
 }
 
 describe("<HostIdentityCard /> a sandbox's state word against its health", () => {
+  it.each([
+    {
+      state: "stopping",
+      registryState: "released",
+      updating: true,
+      connectivity: "connectable",
+      expected: "Updating",
+      expectedHealth: "reported-reachable",
+    },
+    {
+      state: "starting",
+      registryState: "released",
+      updating: true,
+      connectivity: "connectable",
+      expected: "Updating",
+      expectedHealth: "reported-reachable",
+    },
+    {
+      state: "stopping",
+      registryState: "released",
+      updating: false,
+      connectivity: "connectable",
+      expected: "Not running",
+      expectedHealth: "reported-reachable",
+    },
+    {
+      state: "starting",
+      registryState: "released",
+      updating: false,
+      connectivity: "connectable",
+      expected: "Not running",
+      expectedHealth: "reported-reachable",
+    },
+    {
+      state: "starting",
+      registryState: "awake",
+      updating: true,
+      connectivity: "offline",
+      expected: "Updating",
+      expectedHealth: "offline",
+    },
+    {
+      state: "awake",
+      registryState: "awake",
+      updating: true,
+      connectivity: "connectable",
+      expected: "Awake",
+      expectedHealth: "reported-reachable",
+    },
+  ] as const)(
+    "shows $expected for $state with updating=$updating and registry $registryState",
+    ({
+      state,
+      registryState,
+      updating,
+      connectivity,
+      expected,
+      expectedHealth,
+    }) => {
+      const host = buildAutomationHostScopeOptionFixture({
+        state,
+        registryState,
+        updating,
+        connectivity,
+      });
+      expect(host.health.state).toBe(expectedHealth);
+      renderCard(host, null);
+
+      expect(
+        screen.getByTestId("host-identity-sandbox-state").textContent,
+      ).toBe(expected);
+      expect(screen.queryByTestId("host-identity-health")).toBeNull();
+    },
+  );
+
   it("shows the health, not Awake, for an awake sandbox that cannot be reached", () => {
     renderCard(sandboxHost("awake", "offline", false, "user"), null);
 

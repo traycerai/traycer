@@ -44,6 +44,7 @@ function summaryOf(overrides: Partial<SandboxSummary>): SandboxSummary {
     diskMb: 20480,
     displayName: "build-box",
     state: "awake",
+    updating: false,
     frozen: false,
     failureCode: null,
     idleMinutes: null,

@@ -17,7 +17,10 @@ import {
   sandboxWordYieldsToHealth,
 } from "@/components/settings/host-scope/host-option-model";
 import type { HostHealthState } from "@/components/settings/host-scope/host-health";
-import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import {
+  buildAutomationHostScopeOptionFixture,
+  hostScopeOptionFixture,
+} from "@/components/settings/host-scope/host-scope-fixture";
 import {
   UNKNOWN_FLEET_UPDATE_VIEW,
   type FleetUpdateView,
@@ -377,6 +380,20 @@ describe("hostOptionStatusWord - a sandbox's lifecycle word against its health",
         available,
       ),
     ).toBe("Awake");
+  });
+
+  it("keeps the registry word on computer list and picker rows for an updating split-state row", () => {
+    expect(
+      hostOptionStatusWord(
+        buildAutomationHostScopeOptionFixture({
+          state: "starting",
+          registryState: "released",
+          updating: true,
+          connectivity: "connectable",
+        }),
+        AVAILABLE_HOST_ROW_SURFACE_STATE,
+      ),
+    ).toBe("Not running");
   });
 });
 

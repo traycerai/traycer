@@ -465,6 +465,40 @@ describe("sandboxClockLine", () => {
     },
   );
 
+  it("keeps the ordinary stopping line for Automations while updating", () => {
+    const common = {
+      configuration: { kind: "personal" } as const,
+      credits: { kind: "personal" } as const,
+      cost: null,
+      wakeString: null,
+      viewerUserId: null,
+      reachability: { unreachable: false, lastContactAt: null },
+      now: NOW,
+    };
+    const stoppingLine = sandboxClockLine({
+      ...common,
+      summary: sandboxSummaryFixture({
+        state: "stopping",
+        kind: "automation",
+        updating: false,
+      }),
+    });
+
+    expect(stoppingLine).toBe(
+      "Stopping · files kept · the next shell starts it",
+    );
+    expect(
+      sandboxClockLine({
+        ...common,
+        summary: sandboxSummaryFixture({
+          state: "stopping",
+          kind: "automation",
+          updating: true,
+        }),
+      }),
+    ).toBe(stoppingLine);
+  });
+
   it("names whose settings did not apply and the support reference on an awake row", () => {
     expect(
       sandboxClockLine({

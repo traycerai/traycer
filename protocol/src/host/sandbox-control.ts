@@ -196,6 +196,13 @@ export interface SandboxSummary {
   readonly grows?: SandboxGrowth;
   readonly displayName: string;
   readonly state: HostSandboxState;
+  /**
+   * Whether an Automations pod is moving to the newest image: the Sandboxes
+   * views say `Updating` in place of `state`'s word
+   * (`sandboxRowStateWord`). Words only; what a verb may do still follows
+   * `state`. `false` from a server before the field.
+   */
+  readonly updating: boolean;
   readonly frozen: boolean;
   /** The vendor's or the lifecycle's code on a `failed` row, else `null`. */
   readonly failureCode: string | null;
@@ -504,6 +511,9 @@ export const sandboxSummarySchema: z.ZodType<SandboxSummary> = lazySchema(() =>
     grows: sandboxGrowthSchema.optional().catch(undefined),
     displayName: z.string(),
     state: z.enum(HOST_SANDBOX_STATES),
+    // Read as `false` when absent or unreadable: a server before the field
+    // still parses, and the row reads its state's word.
+    updating: z.boolean().default(false).catch(false),
     frozen: z.boolean(),
     failureCode: z.string().nullable(),
     rateLimit: z
