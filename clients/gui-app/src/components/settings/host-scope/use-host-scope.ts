@@ -240,6 +240,7 @@ export function useHostScope(): SettingsHostScope {
   const demotion = hostRowDemotion({
     host: waited,
     readRefused: refusal.refused,
+    outdated: refusal.outdated,
   });
   const fromRow = useMemo(
     () =>

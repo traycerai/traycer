@@ -4,6 +4,7 @@
  */
 import type { ComponentProps, ReactNode } from "react";
 import { Info } from "lucide-react";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { HostUpdateDrainGateRow } from "@/components/settings/host-scope/host-registry-updates";
 import { HostOverviewOperationCard } from "@/components/settings/panels/host-overview-operation-card";
@@ -35,6 +36,8 @@ export interface HostOverviewNoticesProps {
    * failed status read is why Settings shows the host from its row alone.
    */
   readonly offlineRetry: (() => void) | null;
+  /** That status read is in flight: the retry waits for it. */
+  readonly offlineRetryPending: boolean;
   /**
    * The update operation the host reports, or `null` for none. A QUIET view
    * is `null` too: the card is for an operation, and when there is none the
@@ -68,8 +71,17 @@ export function HostOverviewNotices(
         variant="outline"
         size="sm"
         onClick={props.offlineRetry}
+        disabled={props.offlineRetryPending}
         data-testid="host-overview-offline-retry"
       >
+        {props.offlineRetryPending ? (
+          <AgentSpinningDots
+            className={undefined}
+            testId="host-overview-offline-retry-pending"
+            variant={undefined}
+            tone="muted"
+          />
+        ) : null}
         Try again
       </Button>
     );

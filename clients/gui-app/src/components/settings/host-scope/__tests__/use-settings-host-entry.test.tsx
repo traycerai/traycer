@@ -582,6 +582,26 @@ describe("Settings entry host resolution", () => {
     );
   });
 
+  it("offers no retry for a host whose door says it is too old, whatever it reports", async () => {
+    entryClient = makeClient();
+    const hostId = "older-host-door";
+    const target = { ...targetOption(hostId, "remote"), isLocalMachine: false };
+    const { rendered } = requestEntry(target);
+    act(() =>
+      noteHostDoorState({
+        hostId,
+        kind: "older-host",
+        detail: { code: "UPGRADE_REQUIRED", doorReason: null },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(rendered.result.current.shownFromRow).toBe(true),
+    );
+    expect(rendered.result.current.hostId).toBe(hostId);
+    expect(rendered.result.current.retryEntryStatus).toBeNull();
+  });
+
   it("shows a registered host below the version floor while status is unread", async () => {
     entryClient = makeClient();
     const target = {

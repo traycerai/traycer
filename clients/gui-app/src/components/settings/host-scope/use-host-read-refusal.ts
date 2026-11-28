@@ -21,6 +21,11 @@ export interface HostReadRefusal {
    * `environment.status` read settled on an error that ends waiting.
    */
   readonly refused: boolean;
+  /**
+   * The door says the host is too old for this app (`older-host`): only an
+   * update clears it, so reading it again cannot.
+   */
+  readonly outdated: boolean;
   /** Reads the host's status again by its own key. */
   readonly retryStatus: () => void;
 }
@@ -58,7 +63,28 @@ export function useHostReadRefusal(hostId: string | null): HostReadRefusal {
     if (hostId === null) return;
     void queryClient.refetchQueries({ queryKey: statusQueryKey(hostId) });
   }, [queryClient, hostId]);
-  return { refused: doorRefused || statusFailed, retryStatus };
+  return {
+    refused: doorRefused || statusFailed,
+    outdated: door?.kind === "older-host",
+    retryStatus,
+  };
+}
+
+/** Whether `hostId`'s `environment.status` read is in flight, from the cache. */
+export function useHostStatusReading(hostId: string | null): boolean {
+  const queryClient = useQueryClient();
+  const subscribe = useCallback(
+    (onChange: () => void) => queryClient.getQueryCache().subscribe(onChange),
+    [queryClient],
+  );
+  const readFetching = useCallback(
+    () =>
+      hostId !== null &&
+      queryClient.getQueryState(statusQueryKey(hostId))?.fetchStatus ===
+        "fetching",
+    [queryClient, hostId],
+  );
+  return useSyncExternalStore(subscribe, readFetching);
 }
 
 function doorStateRefusesForGood(state: HostDoorState): boolean {

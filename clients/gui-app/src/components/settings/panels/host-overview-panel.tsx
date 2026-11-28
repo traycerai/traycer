@@ -1,3 +1,4 @@
+import { useHostStatusReading } from "@/components/settings/host-scope/use-host-read-refusal";
 import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
 import { HostRestartSessions } from "@/components/host/host-restart-sessions";
 import {
@@ -305,6 +306,8 @@ export function HostOverviewPanel(props: {
     props.hasLocalBridge;
 
   const [doctorOpen, setDoctorOpen] = useState(false);
+  // The status read the offline notice's "Try again" started, still in flight.
+  const offlineRetryPending = useHostStatusReading(scope.hostId);
   // Which dispatch leg the open restart confirm is armed for - captured at
   // OPEN, never re-derived at confirm. The cooperative `host.restart` needs
   // the scope's client and is withdrawn with it (the `!usable` rule below);
@@ -1750,6 +1753,7 @@ export function HostOverviewPanel(props: {
       // Also while a restart hides the offline line: it may be the only way
       // back for a host Settings shows from its account row.
       offlineRetry={usable ? null : scope.retryEntryStatus}
+      offlineRetryPending={offlineRetryPending}
       // The ATTEMPT, when this peer speaks it. Supersedes the coarse notice
       // rather than sitting beside it — two update lines describing one
       // operation in different vocabularies is the drift the shared

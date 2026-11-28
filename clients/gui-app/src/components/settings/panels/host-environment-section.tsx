@@ -26,9 +26,10 @@ export function HostEnvironmentSection(props: {
   const { scope } = props;
   const credentialStatus = useHostCredentialStatus(scope.hostId);
   const local = scope.host?.isLocalMachine ?? false;
+  // A computer shown from its account row starts no read the wait did not.
   const { readOwner, receipt, onReturn } = useOwnershipReceipt(
     scope.hostId,
-    local,
+    local && !props.shownFromRow,
   );
   const owner = local ? readOwner : (scope.host?.item?.owner ?? null);
   return (
@@ -59,7 +60,7 @@ export function HostEnvironmentSection(props: {
  */
 function useOwnershipReceipt(
   hostId: string | null,
-  local: boolean,
+  readsOwner: boolean,
 ): {
   /** This section's own owner read; null while unread or not read. */
   readonly readOwner: HostOwnerPrincipal | null;
@@ -73,7 +74,7 @@ function useOwnershipReceipt(
   const [started, setStarted] = useState<HeldGive | null>(null);
   const startedGive = started?.holder === holder ? started : null;
   const giveStarted = startedGive !== null;
-  const ownership = useHostOwnership(hostId, local || giveStarted);
+  const ownership = useHostOwnership(hostId, readsOwner || giveStarted);
   // A give whose dialog went with the card ends here, once an owner read
   // answered after its start names its team.
   if (

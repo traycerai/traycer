@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ReactNode } from "react";
+import { use, type ReactNode } from "react";
 import { remoteEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
@@ -85,15 +85,13 @@ vi.mock("@/lib/host", async (importOriginal) => {
   return {
     ...actual,
     useHostClient: () => harness.clients[harness.activeHostId],
-    useHostBinding: () => {
-      const selected =
-        useSettingsHostScopeStore.getState().hostByEnvironment.personal;
-      const hostId = selected?.hostId ?? harness.activeHostId;
-      return {
-        hostClient: harness.clients[hostId],
+    // The ambient binding stays on the active host A: only the panel's real
+    // scoped provider may hand it X's client.
+    useHostBinding: () =>
+      use(actual.HostRuntimeContext) ?? {
+        hostClient: harness.clients[harness.activeHostId],
         directory: null,
-      };
-    },
+      },
   };
 });
 

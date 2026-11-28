@@ -1492,12 +1492,15 @@ waits on cannot be read. That computer is a pending entry's while the entry
 found no way to end it in that render (`useSettingsHostEntry`'s `undecided`), or
 the window's own when there is no pin, no environment pick and no default
 known in that render (`defaultResolved`). It
-cannot be read when it has a route and is too old for this app, its door
+cannot be read when it has a route and is too old for this app (by its
+version, or by an `older-host` door, which offers no retry), its door
 refuses for good, or its status read settled on a non-retryable error that is
 not a first `not_admitted`. If that computer has an account registry row, the
 scope is that row alone (`hostRowDemotion`, `shownFromRow`): `unreachable`, no
 client, listed once with the picked environment's members. The Overview shows
-its About and Danger zone. The wait itself is unchanged: when the entry places
+its About and Danger zone; for this computer it offers no doctor, reinstall or
+restart (the panel passes no local bridge), and the environment section reads
+no owner. The wait itself is unchanged: when the entry places
 or abandons the computer, or the default resolves, the scope is the usual one
 again. A rail pick of another computer is the way out; re-picking the shown
 one does nothing, and returning to the active host only ends the named entry
@@ -6830,7 +6833,9 @@ set-state-in-effect` forbids the effect form, and an effect would also
        from its account row after its read was refused or failed
        (`useHostScope`'s `shownFromRow`), a "Try again" button sits beside it
        and re-reads that host's `environment.status` (`offlineRetry`); a
-       successful read lets the entry place the host as usual. The button stands alone
+       successful read lets the entry place the host as usual. While that
+       read is in flight (`useHostStatusReading`, from the cache) the button
+       is disabled with the inline spinner, label unchanged. The button stands alone
        in the strip while a restart withholds the notice.
     2. **The update card** (`HostOverviewOperationCard`), the host's own
        report: progress with measured bytes, the restart phases, a wait on

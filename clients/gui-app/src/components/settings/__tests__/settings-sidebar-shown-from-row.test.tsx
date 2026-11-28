@@ -357,6 +357,7 @@ function HostScopePage(): React.ReactNode {
       <HostOverviewNotices
         offlineNotice={null}
         offlineRetry={scope.retryEntryStatus}
+        offlineRetryPending={false}
         operation={null}
         drainGate={null}
       />

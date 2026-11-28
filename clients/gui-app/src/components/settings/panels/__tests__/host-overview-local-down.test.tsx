@@ -88,6 +88,7 @@ function renderLocalDown(options: {
   readonly settingUp: boolean;
   readonly management: IHostManagement;
   readonly name: string;
+  readonly shownFromRow: boolean;
 }): void {
   const hostId = "host-local-down";
   scopeOverrides.current = {
@@ -101,6 +102,7 @@ function renderLocalDown(options: {
     hostId,
     status: "unreachable",
     client: null,
+    shownFromRow: options.shownFromRow,
   };
   hostBindingMock.current = null;
 
@@ -130,11 +132,33 @@ function renderLocalDown(options: {
 }
 
 describe("Overview — this machine's own host, down (LocalHostDownActions)", () => {
+  it("this computer shown from its account row offers no doctor or reinstall", async () => {
+    const management = buildOverviewManagement({
+      getRemovalState: vi.fn(() => Promise.resolve({ removedByUser: true })),
+    });
+    renderLocalDown({
+      settingUp: false,
+      management,
+      name: "This Mac",
+      shownFromRow: true,
+    });
+
+    expect(await screen.findByTestId("settings-remove-traycer")).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Run doctor" })).toBeNull();
+    expect(screen.queryByTestId("host-overview-reinstall-local")).toBeNull();
+    expect(screen.queryByRole("button", { name: /restart/i })).toBeNull();
+  });
+
   it("a down local host offers Run doctor and no Start verb", async () => {
     const management = buildOverviewManagement({
       getRemovalState: vi.fn(() => Promise.resolve({ removedByUser: false })),
     });
-    renderLocalDown({ settingUp: false, management, name: "This Mac" });
+    renderLocalDown({
+      settingUp: false,
+      management,
+      name: "This Mac",
+      shownFromRow: false,
+    });
 
     const doctorButton = await screen.findByRole<HTMLButtonElement>("button", {
       name: "Run doctor",
@@ -151,7 +175,12 @@ describe("Overview — this machine's own host, down (LocalHostDownActions)", ()
     const management = buildOverviewManagement({
       getRemovalState: vi.fn(() => Promise.resolve({ removedByUser: false })),
     });
-    renderLocalDown({ settingUp: true, management, name: "This Mac" });
+    renderLocalDown({
+      settingUp: true,
+      management,
+      name: "This Mac",
+      shownFromRow: false,
+    });
 
     const doctorButton = await screen.findByRole<HTMLButtonElement>("button", {
       name: "Run doctor",
@@ -184,7 +213,12 @@ describe("Overview — this machine's own host, down (LocalHostDownActions)", ()
       clearRemoval,
       convergeReady,
     });
-    renderLocalDown({ settingUp: false, management, name: "This Mac" });
+    renderLocalDown({
+      settingUp: false,
+      management,
+      name: "This Mac",
+      shownFromRow: false,
+    });
 
     // The removal read is async (the sentinel query starts disabled-shaped
     // and resolves after mount), so the button only appears once it settles.
@@ -209,7 +243,12 @@ describe("Overview — this machine's own host, down (LocalHostDownActions)", ()
       Promise.resolve({ removedByUser: false }),
     );
     const management = buildOverviewManagement({ getRemovalState });
-    renderLocalDown({ settingUp: false, management, name: "This Mac" });
+    renderLocalDown({
+      settingUp: false,
+      management,
+      name: "This Mac",
+      shownFromRow: false,
+    });
 
     await screen.findByRole("button", { name: "Run doctor" });
     // Let the removal-state query actually settle before trusting the
@@ -262,7 +301,12 @@ describe("Overview — this machine's own host, down (LocalHostDownActions)", ()
       clearRemoval,
       convergeReady,
     });
-    renderLocalDown({ settingUp: false, management, name: "This Mac" });
+    renderLocalDown({
+      settingUp: false,
+      management,
+      name: "This Mac",
+      shownFromRow: false,
+    });
 
     const reinstallButton = await screen.findByRole("button", {
       name: "Reinstall Traycer",
@@ -350,7 +394,12 @@ describe("Overview — this machine's own host, down (LocalHostDownActions)", ()
       clearRemoval,
       convergeReady,
     });
-    renderLocalDown({ settingUp: false, management, name: "This Mac" });
+    renderLocalDown({
+      settingUp: false,
+      management,
+      name: "This Mac",
+      shownFromRow: false,
+    });
 
     const reinstallButton = await screen.findByRole("button", {
       name: "Reinstall Traycer",
