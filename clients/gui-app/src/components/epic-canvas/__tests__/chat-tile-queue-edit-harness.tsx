@@ -10,6 +10,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import * as Y from "yjs";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
@@ -389,6 +390,7 @@ export function resetQueueEditTileTest(): void {
 }
 
 export function cleanUpQueueEditTileTest(): void {
+  toast.dismiss();
   cleanup();
   chatHarness.teardown();
   epicHarness.teardown();
@@ -605,3 +607,24 @@ export function saveEdit(
 export function queueEditFrames() {
   return chatHarness.sent.filter((frame) => frame.kind === "queueEdit");
 }
+
+/** The toasts on screen, oldest first. */
+export function toastTitles(): string[] {
+  return toast.getToasts().map((entry) => {
+    if (!("title" in entry) || typeof entry.title !== "string") {
+      throw new Error("expected a text toast");
+    }
+    return entry.title;
+  });
+}
+
+// What the tile says when the edited row leaves the queue: the composer's
+// notice when changed text is kept, and the folder dialog's closing sentence.
+export const BEGUN_NOTICE =
+  "This message started before your edit was saved. Your changes are in the composer.";
+export const REMOVED_NOTICE =
+  "This message was removed before your edit was saved. Your changes are in the composer.";
+export const BEGUN_DIALOG =
+  "This message already started in its original folder. Nothing was changed.";
+export const REMOVED_DIALOG =
+  "This message was removed from the queue. Nothing was changed.";

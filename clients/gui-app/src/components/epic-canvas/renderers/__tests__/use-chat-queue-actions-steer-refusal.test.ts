@@ -137,6 +137,7 @@ function tileInput(
     dispatchUi: () => undefined,
     setEpicRunSettings: () => undefined,
     persistChatRunSettings: () => undefined,
+    onEditedRowLeftQueue: () => undefined,
   };
 }
 

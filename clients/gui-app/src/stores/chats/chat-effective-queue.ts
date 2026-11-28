@@ -13,6 +13,23 @@ export function hasDrainingQueueItems(
   return (state.drainingQueueItems?.length ?? 0) > 0;
 }
 
+/**
+ * Whether a prompt that left the queue began rather than was removed: it is
+ * handing off into a turn, or its message is in the transcript.
+ */
+export function queuedPromptHasBegun(
+  state: Pick<ChatSessionState, "messages" | "drainingQueueItems">,
+  messageId: string,
+): boolean {
+  return (
+    (state.drainingQueueItems?.some((item) => item.messageId === messageId) ??
+      false) ||
+    state.messages.some(
+      (message) => message.role === "user" && message.messageId === messageId,
+    )
+  );
+}
+
 const effectiveQueueCache = new WeakMap<
   OpenChatQueueState,
   WeakMap<ReadonlyArray<OpenChatQueuedPromptItem>, OpenChatQueueState>

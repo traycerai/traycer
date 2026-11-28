@@ -28,16 +28,31 @@ import {
 } from "@/lib/composer/composer-content-image-roots";
 import { blobHashesFromContent } from "@/lib/drafts/draft-write-codec";
 import type { QueueEditFollowUpReplacement } from "@/stores/chats/queue-edit-custody";
+import { queuedPromptHasBegun } from "@/stores/chats/chat-effective-queue";
+import { appendBelow } from "@/components/chat/quote/append-quote-to-draft";
+import { toast } from "sonner";
 import type { ChatTileUiAction } from "./chat-tile-session-state";
 
 const SETTINGS_RESTART_REASONS: ReadonlyArray<ChatQueueSteerRestartReason> = [
   "settings",
 ];
 
+// Shown once when a queued message leaves the queue under an open edit whose
+// text was changed, the changed text kept in the composer.
+const EDITED_ROW_STARTED_NOTICE =
+  "This message started before your edit was saved. Your changes are in the composer.";
+const EDITED_ROW_REMOVED_NOTICE =
+  "This message was removed before your edit was saved. Your changes are in the composer.";
+
 interface QueuedEditDraftSnapshot {
   readonly hadDraft: boolean;
   readonly content: JsonContent;
   readonly selection: { readonly from: number; readonly to: number } | null;
+  /** The row the edit last loaded and the content it put in the composer. */
+  readonly loaded: {
+    readonly messageId: string;
+    readonly content: JsonContent;
+  };
 }
 
 export interface ChatQueueActionsInput {
@@ -95,6 +110,12 @@ export interface ChatQueueActionsInput {
    * back to the legacy persist-on-next-send behavior.
    */
   readonly persistChatRunSettings: (settings: ChatRunSettings) => void;
+  /**
+   * The row under an open edit has left the queue, begun or removed. Called
+   * before the edit ends, so the tile's folder dialog for that edit closes
+   * with its sentence before the composer's notice.
+   */
+  readonly onEditedRowLeftQueue: (queueItemId: string) => void;
 }
 
 export interface ChatQueueActionsResult {
@@ -144,6 +165,7 @@ export function useChatQueueActions(
     dispatchUi,
     setEpicRunSettings,
     persistChatRunSettings,
+    onEditedRowLeftQueue,
   } = input;
 
   // Set when steering a queued prompt needs a turn-start-baked setting the
@@ -327,17 +349,26 @@ export function useChatQueueActions(
         dispatchUi({ type: "endQueueEdit" });
         return;
       }
-      if (queuedEditRestoreDraftRef.current === null) {
+      const loaded = {
+        messageId: item.messageId,
+        content: item.message.content,
+      };
+      const current = queuedEditRestoreDraftRef.current;
+      if (current === null) {
         const draft = useComposerDraftStore.getState().drafts[nodeId];
         const snapshot = {
           hadDraft: draft !== undefined,
           content: draft?.content ?? EMPTY_COMPOSER_DRAFT.content,
           selection: draft?.selection ?? null,
+          loaded,
         };
         queuedEditRestoreDraftRef.current = snapshot;
         // Held from capture until restored or discarded. The row this content
         // came from is about to be overwritten by the queued prompt.
         holdComposerContentImageRoots(savedDraftHolderId, snapshot.content);
+      } else {
+        // Switching rows keeps the draft saved under the first edit.
+        queuedEditRestoreDraftRef.current = { ...current, loaded };
       }
       inheritQueuedItemImageCustody(item.message.content);
       replaceDraftContent(nodeId, item.message.content, null);
@@ -359,6 +390,52 @@ export function useChatQueueActions(
     ],
   );
 
+  /**
+   * The edited row has left the queue, so nothing can save this edit: it
+   * began, or another window removed it. Changed text is never dropped. It
+   * stays in the composer as an ordinary draft, above the draft saved under
+   * the edit, and one notice says so. Text the edit left as loaded restores
+   * the saved draft, as Cancel does, with no notice.
+   */
+  const settleEditOfDepartedRow = useCallback(
+    (queueItemId: string): void => {
+      const snapshot = queuedEditRestoreDraftRef.current;
+      if (snapshot === null) return;
+      onEditedRowLeftQueue(queueItemId);
+      const edited =
+        useComposerDraftStore.getState().drafts[nodeId]?.content ??
+        EMPTY_COMPOSER_DRAFT.content;
+      if (JSON.stringify(edited) === JSON.stringify(snapshot.loaded.content)) {
+        restoreQueuedEditDraft();
+        return;
+      }
+      // The host-held claim stays: the kept text still names the queued
+      // prompt's images. The saved draft's own images change custody as on
+      // restore, written into the row before the hold is released.
+      if (snapshot.hadDraft) {
+        replaceDraftContent(
+          nodeId,
+          appendBelow(edited, snapshot.content.content ?? []),
+          null,
+        );
+      }
+      dropQueuedEditSnapshot();
+      toast(
+        queuedPromptHasBegun(handle.store.getState(), snapshot.loaded.messageId)
+          ? EDITED_ROW_STARTED_NOTICE
+          : EDITED_ROW_REMOVED_NOTICE,
+      );
+    },
+    [
+      dropQueuedEditSnapshot,
+      handle.store,
+      nodeId,
+      onEditedRowLeftQueue,
+      replaceDraftContent,
+      restoreQueuedEditDraft,
+    ],
+  );
+
   useEffect(() => {
     if (editingQueueItemId === null) {
       // The SUCCESSFUL-SAVE path (and the switch into the `same_turn` branch).
@@ -370,14 +447,14 @@ export function useChatQueueActions(
       return;
     }
     if (activeEditingQueueItemId !== null) return;
-    restoreQueuedEditDraft();
+    settleEditOfDepartedRow(editingQueueItemId);
     dispatchUi({ type: "endQueueEdit" });
   }, [
     activeEditingQueueItemId,
     dispatchUi,
     dropQueuedEditSnapshot,
     editingQueueItemId,
-    restoreQueuedEditDraft,
+    settleEditOfDepartedRow,
   ]);
 
   const cancelQueuedItem = useCallback(

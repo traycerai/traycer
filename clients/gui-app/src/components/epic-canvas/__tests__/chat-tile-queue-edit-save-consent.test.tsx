@@ -37,6 +37,8 @@ import {
   pickInEdit,
   saveEdit,
   queueEditFrames,
+  toastTitles,
+  BEGUN_DIALOG,
 } from "./chat-tile-queue-edit-harness";
 
 beforeEach(resetQueueEditTileTest);
@@ -127,10 +129,11 @@ describe("chat-tile saving a queued message's folders while a chat shell runs wh
     expect(screen.queryByTestId("queue-edit-draft-pill")).toBeNull();
   });
 
-  it("saves nothing on confirm when the message began while the dialog was open, though the queue still lists it", async () => {
+  it("closes the dialog on its own and saves nothing when the message begins, though the queue still lists it", async () => {
     await editRow(null, [SHELL_UNDER_A]);
     pickInEdit(LOCAL_PICK);
-    const outcome = saveEdit(submitCapture.onSubmitMessage);
+    const staleSubmit = submitCapture.onSubmitMessage;
+    const outcome = saveEdit(staleSubmit);
     await screen.findByTestId("teardown-commit-dialog");
 
     hostState.begunQueuedMessageIds = [
@@ -140,11 +143,13 @@ describe("chat-tile saving a queued message's folders while a chat shell runs wh
     await waitFor(() => {
       expect(screen.queryByTestId("queue-edit-draft-pill")).toBeNull();
     });
-    fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
 
-    expect(await outcome).toBe(false);
-    expect(queueEditFrames()).toEqual([]);
     expect(screen.queryByTestId("teardown-commit-dialog")).toBeNull();
+    expect(await outcome).toBe(false);
+    expect(toastTitles()).toEqual([BEGUN_DIALOG]);
+    expect(queueEditFrames()).toEqual([]);
+    expect(await saveEdit(staleSubmit)).toBe(false);
+    expect(queueEditFrames()).toEqual([]);
   });
 
   it("asks again when the shells changed while the dialog was open, and sends only on the second confirm", async () => {
