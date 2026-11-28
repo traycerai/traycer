@@ -171,6 +171,29 @@ export function deriveHostHealth(options: DeriveHostHealthOptions): HostHealth {
 }
 
 /**
+ * The health of a computer Settings shows from its account row
+ * (`hostRowDemotion`), from the reason it is shown that way rather than from
+ * evidence that it is serving: a process running on this machine or a ready
+ * lease says nothing about whether this app can read it. An expected restart
+ * claims no serving, so the computer's own `restarting` health stands. Too old
+ * for this app is the incompatible answer; a refused read is the registry's
+ * answer, with no live session vouching for it.
+ */
+export function hostRowHealth(input: {
+  readonly demotion: "needs-update" | "refused";
+  /** The computer's own health, as its row was built. */
+  readonly health: HostHealth;
+  readonly item: HostListItem | null;
+  readonly nowMs: number;
+}): HostHealth {
+  const { item, nowMs } = input;
+  if (input.health.state === "restarting") return input.health;
+  if (input.demotion === "needs-update")
+    return DEAD_HEALTH.incompatible({ item, nowMs });
+  return registryHealth({ item, hasLiveSession: false, nowMs });
+}
+
+/**
  * The local machine's health, or `null` when this is not the local machine (or
  * its service snapshot has not resolved yet, in which case the weaker answers
  * are still better than nothing).
@@ -332,7 +355,9 @@ function leaseHealth(options: DeriveHostHealthOptions): HostHealth | null {
  * reached no verdict about. Reached only when the two firsthand steps above
  * declined.
  */
-function registryHealth(options: DeriveHostHealthOptions): HostHealth {
+function registryHealth(
+  options: Pick<DeriveHostHealthOptions, "item" | "hasLiveSession" | "nowMs">,
+): HostHealth {
   const { item, hasLiveSession, nowMs } = options;
   if (item === null) {
     // In the runtime directory but not the cloud registry, and no lease: we

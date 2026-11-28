@@ -3,7 +3,12 @@ import type {
   HostConnectivity,
   HostListItem,
 } from "@traycer/protocol/host/host-status";
-import { deriveHostHealth } from "@/components/settings/host-scope/host-health";
+import {
+  HOST_UPDATE_REQUIRED_DETAIL,
+  deriveHostHealth,
+  hostRowHealth,
+  type HostHealth,
+} from "@/components/settings/host-scope/host-health";
 
 /**
  * `stopped` and `not-installed` are the two health states that name what this
@@ -275,5 +280,57 @@ describe("deriveHostHealth — connectivity mapping for a remote row", () => {
 
     expect(health.state).toBe("online");
     expect(health.live).toBe(true);
+  });
+});
+
+const RESTARTING_HEALTH: HostHealth = {
+  state: "restarting",
+  label: "Restarting…",
+  detail: "Expected restart — reconnecting.",
+  tone: "idle",
+  live: false,
+};
+
+const ONLINE_HEALTH: HostHealth = {
+  state: "online",
+  label: "Online",
+  detail: null,
+  tone: "live",
+  live: true,
+};
+
+describe("hostRowHealth", () => {
+  it("keeps a restarting computer's own health for either demotion", () => {
+    const item = registryItem("connectable");
+    expect(
+      hostRowHealth({
+        demotion: "needs-update",
+        health: RESTARTING_HEALTH,
+        item,
+        nowMs: NOW_MS,
+      }),
+    ).toBe(RESTARTING_HEALTH);
+    expect(
+      hostRowHealth({
+        demotion: "refused",
+        health: RESTARTING_HEALTH,
+        item,
+        nowMs: NOW_MS,
+      }),
+    ).toBe(RESTARTING_HEALTH);
+  });
+
+  it("words needs-update as Update required even when the registry uplink is up", () => {
+    const health = hostRowHealth({
+      demotion: "needs-update",
+      health: ONLINE_HEALTH,
+      item: registryItem("connectable"),
+      nowMs: NOW_MS,
+    });
+
+    expect(health.label).toBe("Update required");
+    expect(health.detail).toBe(HOST_UPDATE_REQUIRED_DETAIL);
+    expect(health.state).toBe("update-required");
+    expect(health.live).toBe(false);
   });
 });

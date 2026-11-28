@@ -28,6 +28,8 @@ import type {
   UpdateHostVersionPolicyFetchResult,
   UpdateHostVersionPolicyInput,
 } from "@traycer-clients/shared/host-client/host-version-policy-fetcher";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import {
@@ -54,47 +56,104 @@ const harness = vi.hoisted(() => ({
   accountRemovals: [] as string[],
   finishDeregister: null as (() => void) | null,
   xItem: null as HostListItem | null,
+  /** X's own health as its row is built; `null` keeps the fixture's. */
+  xHealth: null as HostHealth | null,
+  xIsLocalMachine: false,
+  /** "" keeps the entry at the test floor, so it does not need an update. */
+  xEntryVersion: "",
+  /** The binding's directory answers with X's entry, for the update action. */
+  xExposeDirectory: false,
   policyWrites: [] as {
     readonly hostId: string;
     readonly input: UpdateHostVersionPolicyInput;
   }[],
 }));
 
+/** X's directory entry for this render, read by the binding when a test exposes it. */
+let xDirectoryEntry: HostDirectoryEntry | null = null;
+
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return { ...actual, MINIMUM_HOST_VERSION: "2.0.0" };
+  },
+);
+
 vi.mock("@/components/settings/host-scope/use-host-options", async () => {
   const { hostOptionsFixture, hostScopeOptionFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
   const { remoteEntry } =
     await import("@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures");
-  const hostsById = new Map(
-    ["host-a", "host-x"].map((hostId) => [
-      hostId,
-      hostScopeOptionFixture({
-        hostId,
-        name: hostId === "host-x" ? "Host X" : "Host A",
-        isLocalMachine: false,
-        connectable: hostId !== "host-a",
-        isActive: hostId === "host-a",
-        entry: remoteEntry(hostId, null),
-      }),
-    ]),
-  );
+  const hostA = hostScopeOptionFixture({
+    hostId: "host-a",
+    name: "Host A",
+    isLocalMachine: false,
+    connectable: false,
+    isActive: true,
+    entry: remoteEntry("host-a", null),
+  });
   // One object per account record, so X keeps its identity across renders.
-  let xWithItem: HostScopeOption | null = null;
+  let cachedX: HostScopeOption | null = null;
+  let cachedStamp = "";
+  const xEntry = (version: string): HostDirectoryEntry => {
+    if (harness.xIsLocalMachine) {
+      return {
+        hostId: "host-x",
+        label: "Host X",
+        kind: "local",
+        websocketUrl: "ws://127.0.0.1:4917/rpc",
+        version,
+        transportDialability: "dialable",
+        owner: null,
+      };
+    }
+    const remote = remoteEntry("host-x", null);
+    const atVersion: RemoteHostDirectoryEntry = {
+      ...remote,
+      remoteStatus: { ...remote.remoteStatus, appVersion: version },
+    };
+    return atVersion;
+  };
+  const xOption = (): HostScopeOption => {
+    const stamp = [
+      String(harness.xIsLocalMachine),
+      JSON.stringify(harness.xHealth),
+      harness.xEntryVersion,
+      JSON.stringify(harness.xItem),
+    ].join("\n");
+    if (cachedX !== null && cachedStamp === stamp) return cachedX;
+    cachedStamp = stamp;
+    const version =
+      harness.xEntryVersion === "" ? "2.0.0" : harness.xEntryVersion;
+    const entry = xEntry(version);
+    xDirectoryEntry = entry;
+    const health = harness.xHealth;
+    const option = hostScopeOptionFixture({
+      hostId: "host-x",
+      name: "Host X",
+      isLocalMachine: harness.xIsLocalMachine,
+      connectable: true,
+      isActive: false,
+      entry,
+      item: harness.xItem,
+    });
+    cachedX = health === null ? option : { ...option, health };
+    return cachedX;
+  };
   return {
-    useHostOptions: () => {
-      const hosts = harness.hostIds.flatMap((hostId) => {
-        const host = hostsById.get(hostId);
-        if (host === undefined) return [];
-        if (hostId !== "host-x" || harness.xItem === null) return [host];
-        if (xWithItem?.item !== harness.xItem)
-          xWithItem = { ...host, item: harness.xItem };
-        return [xWithItem];
-      });
-      return hostOptionsFixture({
-        hosts,
+    useHostOptions: () =>
+      hostOptionsFixture({
+        hosts: harness.hostIds.flatMap((hostId) => {
+          if (hostId === "host-a") return [hostA];
+          if (hostId === "host-x") return [xOption()];
+          return [];
+        }),
         activeHostId: harness.activeHostId,
-      });
-    },
+      }),
   };
 });
 
@@ -168,7 +227,14 @@ vi.mock("@/lib/host", async (importOriginal) => ({
   useHostClient: () => harness.currentClient,
   useHostBinding: () => ({
     hostClient: null,
-    directory: null,
+    directory: harness.xExposeDirectory
+      ? {
+          findById: (hostId: string) =>
+            hostId === "host-x" ? xDirectoryEntry : null,
+          getLocalHostId: () => null,
+          onChange: () => ({ dispose: () => undefined }),
+        }
+      : null,
     auth: {
       deregisterHostFromAccount: (hostId: string) => {
         harness.accountRemovals.push(hostId);
@@ -285,6 +351,10 @@ vi.mock("@/components/settings/host-scope/add-host-dialog", () => ({
   AddHostDialog: () => null,
 }));
 
+import {
+  HOST_UPDATE_REQUIRED_DETAIL,
+  type HostHealth,
+} from "@/components/settings/host-scope/host-health";
 import { HostOverviewNotices } from "@/components/settings/panels/host-overview-notices";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
 import { SettingsSidebar } from "@/components/settings/settings-sidebar";
@@ -302,6 +372,36 @@ const X = hostScopeOptionFixture({
   isLocalMachine: false,
   isActive: false,
 });
+
+/** X's own health, as `deriveHostHealth` words each kind of evidence. */
+const LOCAL_RUNNING_HEALTH: HostHealth = {
+  state: "online",
+  label: "Online",
+  detail: "Running on this computer.",
+  tone: "live",
+  live: true,
+};
+const READY_LEASE_HEALTH: HostHealth = {
+  state: "online",
+  label: "Online",
+  detail: null,
+  tone: "live",
+  live: true,
+};
+const REPORTED_REACHABLE_HEALTH: HostHealth = {
+  state: "reported-reachable",
+  label: "Reported reachable",
+  detail: "Your account last heard from this host.",
+  tone: "idle",
+  live: false,
+};
+const RESTARTING_HEALTH: HostHealth = {
+  state: "restarting",
+  label: "Restarting…",
+  detail: "Expected restart — reconnecting.",
+  tone: "idle",
+  live: false,
+};
 
 const STATUS_CALL_CAP = 3;
 
@@ -370,6 +470,55 @@ function makeInstalledManagement(): IHostManagement {
   return buildOverviewManagement({
     installedRecord: vi.fn(() => Promise.resolve(makeInstalledRecord("1.4.2"))),
   });
+}
+
+function newQueryClient(): QueryClient {
+  return new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+}
+
+/** Uplink up is `connectable`; uplink down is `offline`. `clientCloud` stays ok. */
+function xRegistryItem(connectivity: "connectable" | "offline"): HostListItem {
+  return {
+    hostId: X.hostId,
+    displayName: "Host X",
+    platform: "darwin-arm64",
+    kind: "personal",
+    publicKey: "pk",
+    createdAt: "2026-03-03T12:00:00Z",
+    updatePolicy: "manual",
+    status: {
+      connectivity,
+      viewerReachability: "unknown",
+      clientCloud: "ok",
+      updateState: "current",
+      appVersion: "2.0.0",
+      lastSeenAt: "2026-03-03T12:00:00Z",
+    },
+  };
+}
+
+function renderShownPanel(queryClient: QueryClient): void {
+  harness.showPanel = true;
+  harness.observeStatus = false;
+  renderPage(queryClient);
+}
+
+function healthLabel(): string {
+  return screen.getByTestId("host-identity-health").textContent;
+}
+
+function expectSwitcherWord(word: string): void {
+  fireEvent.click(screen.getByTestId("settings-host-switcher"));
+  const row = screen.getByTestId(`settings-host-switcher-option-${X.hostId}`);
+  expect(screen.getByTestId("settings-host-switcher-status").textContent).toBe(
+    word,
+  );
+  expect(row.textContent).toContain(word);
 }
 
 function HostScopePage(): React.ReactNode {
@@ -463,6 +612,11 @@ function resetState(): void {
   harness.accountRemovals = [];
   harness.finishDeregister = null;
   harness.xItem = null;
+  harness.xHealth = null;
+  harness.xIsLocalMachine = false;
+  harness.xEntryVersion = "";
+  harness.xExposeDirectory = false;
+  xDirectoryEntry = null;
   harness.policyWrites = [];
   useSettingsEnvironmentPickStore.setState({
     pick: PERSONAL_PICK,
@@ -720,5 +874,140 @@ describe("<SettingsSidebar /> while a named host is shown from its row", () => {
     renderPage(queryClient);
 
     expect(await screen.findByTestId("settings-remove-traycer")).not.toBeNull();
+  });
+
+  it("reads Reported reachable, not Online, for this running computer shown from its row", () => {
+    harness.xIsLocalMachine = true;
+    harness.xHealth = LOCAL_RUNNING_HEALTH;
+    harness.xItem = xRegistryItem("connectable");
+    const queryClient = newQueryClient();
+    makeClients();
+    act(() => {
+      carryViewedHostIntoSettingsScope(X.hostId);
+      refuseXForGood();
+    });
+    renderShownPanel(queryClient);
+
+    expect(healthLabel()).toBe("Reported reachable");
+  });
+
+  it("reads Update required, with the update action, when this computer's entry is below the floor", () => {
+    harness.xIsLocalMachine = true;
+    harness.xHealth = LOCAL_RUNNING_HEALTH;
+    harness.xEntryVersion = "1.0.0";
+    harness.xExposeDirectory = true;
+    const queryClient = newQueryClient();
+    makeClients();
+    act(() => carryViewedHostIntoSettingsScope(X.hostId));
+    renderShownPanel(queryClient);
+
+    expect(healthLabel()).toBe("Update required");
+    const facts = screen.getByTestId("host-identity-fact-line");
+    expect(facts.textContent).toContain(HOST_UPDATE_REQUIRED_DETAIL);
+    expect(within(facts).getByTestId("host-scope-update-host")).not.toBeNull();
+    expect(screen.getAllByTestId("host-scope-update-host")).toHaveLength(1);
+  });
+
+  it("reads Reported reachable, not Online, when a remote ready lease's status read was refused", async () => {
+    harness.xHealth = READY_LEASE_HEALTH;
+    harness.xItem = xRegistryItem("connectable");
+    const queryClient = newQueryClient();
+    makeClients();
+    await seedStatusError(queryClient);
+    act(() => carryViewedHostIntoSettingsScope(X.hostId));
+    renderShownPanel(queryClient);
+
+    expect(healthLabel()).toBe("Reported reachable");
+  });
+
+  it("reads Reported reachable for a refused remote computer whose registry uplink is up", () => {
+    harness.xHealth = REPORTED_REACHABLE_HEALTH;
+    harness.xItem = xRegistryItem("connectable");
+    const queryClient = newQueryClient();
+    makeClients();
+    act(() => {
+      carryViewedHostIntoSettingsScope(X.hostId);
+      refuseXForGood();
+    });
+    renderShownPanel(queryClient);
+
+    expect(healthLabel()).toBe("Reported reachable");
+  });
+
+  it("reads Offline for a refused remote computer whose registry uplink is down", () => {
+    harness.xHealth = READY_LEASE_HEALTH;
+    harness.xItem = xRegistryItem("offline");
+    const queryClient = newQueryClient();
+    makeClients();
+    act(() => {
+      carryViewedHostIntoSettingsScope(X.hostId);
+      refuseXForGood();
+    });
+    renderShownPanel(queryClient);
+
+    expect(healthLabel()).toBe("Offline");
+  });
+
+  it("words the rail row and the switcher trigger update required for a needs-update computer", () => {
+    harness.xIsLocalMachine = true;
+    harness.xHealth = LOCAL_RUNNING_HEALTH;
+    harness.xEntryVersion = "1.0.0";
+    const queryClient = newQueryClient();
+    makeClients();
+    harness.observeStatus = false;
+    act(() => carryViewedHostIntoSettingsScope(X.hostId));
+    renderPage(queryClient);
+
+    expectSwitcherWord("update required");
+  });
+
+  it("words the rail row and the switcher trigger offline for a refused computer whose uplink is down", () => {
+    harness.xHealth = READY_LEASE_HEALTH;
+    harness.xItem = xRegistryItem("offline");
+    const queryClient = newQueryClient();
+    makeClients();
+    harness.observeStatus = false;
+    act(() => {
+      carryViewedHostIntoSettingsScope(X.hostId);
+      refuseXForGood();
+    });
+    renderPage(queryClient);
+
+    expectSwitcherWord("offline");
+  });
+
+  it("keeps Online for this computer when it is placed and not shown from its row", () => {
+    harness.xIsLocalMachine = true;
+    harness.xHealth = LOCAL_RUNNING_HEALTH;
+    const queryClient = newQueryClient();
+    makeClients();
+    renderShownPanel(queryClient);
+
+    expect(healthLabel()).toBe("Online");
+  });
+
+  it("keeps Restarting… for a demoted computer whose own health is an expected restart", () => {
+    harness.xHealth = RESTARTING_HEALTH;
+    const queryClient = newQueryClient();
+    makeClients();
+    act(() => {
+      carryViewedHostIntoSettingsScope(X.hostId);
+      refuseXForGood();
+    });
+    renderShownPanel(queryClient);
+
+    expect(healthLabel()).toBe("Restarting…");
+    expect(screen.queryByTestId("host-overview-offline-notice")).toBeNull();
+    const installation = screen.getByTestId(
+      "host-overview-tab-panel-installation",
+    );
+    expect(
+      within(installation).getByTestId("host-scope-connecting"),
+    ).not.toBeNull();
+    expect(
+      within(installation).queryByTestId(
+        "host-overview-installation-needs-connection",
+      ),
+    ).toBeNull();
   });
 });
