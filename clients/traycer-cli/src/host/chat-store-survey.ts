@@ -214,6 +214,33 @@ export async function surveyChatDbStamps(
   return { readings, failures };
 }
 
+/** A first install needs evidence of absence without opening any database. */
+export async function chatStoreRootsAreEmpty(
+  surveyRoots: ChatStoreSurveyRoots,
+): Promise<boolean> {
+  if (surveyRoots.enumerationFailed) return false;
+  for (const { path } of surveyRoots.roots) {
+    try {
+      if (!(await lstat(path)).isDirectory()) return false;
+      const entries = await readdir(path);
+      if (!entries.includes(EPIC_STATE_DIRNAME)) continue;
+      if (!(await lstat(join(path, EPIC_STATE_DIRNAME))).isDirectory()) {
+        return false;
+      }
+    } catch (error) {
+      if (isNotFound(error)) continue;
+      return false;
+    }
+    const epicIds = await listEpicDirs(path);
+    if (epicIds === null) return false;
+    for (const epicId of epicIds) {
+      if ((await inspectChatDbPath(path, epicId)).kind !== "absent")
+        return false;
+    }
+  }
+  return true;
+}
+
 /**
  * The epic directory names under one root, or `null` when the root exists but
  * could not be enumerated.

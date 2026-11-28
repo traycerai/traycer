@@ -61,7 +61,7 @@
  * exemption cleared both.
  */
 import type { Dirent } from "node:fs";
-import { readdir } from "node:fs/promises";
+import { lstat, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import {
   publishedHostProcessGone,
@@ -71,8 +71,10 @@ import {
   isChatStoreRootNotFound,
   type ChatStoreSurveyRoots,
 } from "./chat-store-survey-roots";
+import { chatStoreRootsAreEmpty } from "./chat-store-survey";
 import {
   serviceLabelMayRespawn,
+  serviceManagerAbsent,
   serviceManagerMayRespawn,
   serviceManagerUnreachable,
   type ServiceLabel,
@@ -88,6 +90,7 @@ import type { Environment } from "../runner/environment";
 import {
   hostDevHomeDir,
   hostDevRunsRoot,
+  hostInstallDir,
   hostPidMetadataPath,
   hostPidMetadataPathIn,
 } from "../store/paths";
@@ -188,6 +191,64 @@ export async function observeSwapQuiescence(
     writers,
     logger,
   );
+}
+
+/**
+ * A local archive installed without service registration can populate an
+ * empty slot without a systemd manager. The installer holds the same
+ * update-attempt lock that admits the CLI supervisor's spawn. This does
+ * not take the host's Layer 0 lock or exclude a host binary launched
+ * directly during the install. The image build runs no host concurrently.
+ * Existing bytes, stores or writer records use ordinary quiescence.
+ */
+export async function observeLocalArchiveInstallQuiescence(
+  environment: Environment,
+  surveyRoots: ChatStoreSurveyRoots,
+  logger: ILogger,
+): Promise<SwapQuiescence> {
+  if (
+    (await serviceManagerAbsent()) &&
+    (await installDirectoryIsEmpty(hostInstallDir(environment))) &&
+    (await chatStoreRootsAreEmpty(surveyRoots))
+  ) {
+    const sources = await resolveWriterEvidenceSources(
+      environment,
+      surveyRoots,
+    );
+    if (sources.kind === "unenumerable") {
+      return unseenWriters(environment, surveyRoots, sources.cause, logger);
+    }
+    const recordPaths = new Set([...sources.pidPaths, ...sources.holderPaths]);
+    for (const { path } of surveyRoots.roots) {
+      recordPaths.add(hostPidMetadataPathIn(path));
+      recordPaths.add(hostHolderRecordPathIn(path));
+    }
+    if (
+      (await Promise.all([...recordPaths].map(recordAbsent))).every(Boolean)
+    ) {
+      return QUIESCED;
+    }
+  }
+  return await observeSwapQuiescence(environment, surveyRoots, logger);
+}
+
+async function installDirectoryIsEmpty(path: string): Promise<boolean> {
+  try {
+    return (
+      (await lstat(path)).isDirectory() && (await readdir(path)).length === 0
+    );
+  } catch (error) {
+    return isChatStoreRootNotFound(error);
+  }
+}
+
+async function recordAbsent(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return false;
+  } catch (error) {
+    return isChatStoreRootNotFound(error);
+  }
 }
 
 /**

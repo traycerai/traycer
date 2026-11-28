@@ -767,6 +767,7 @@ export function createBytesOnlyInstallLifecycle(
   let publishHostStartAdoption: HostStartAdoptionPublisher = async () => {};
   let hostWasRunning = false;
   return {
+    bytesOnly: true,
     swapLockRecovery: swapLockRecoveryFor(label),
     setMutationVerifier: (verify) => {
       verifyMutationCapability = verify;
