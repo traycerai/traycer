@@ -171,6 +171,39 @@ export function deriveHostHealth(options: DeriveHostHealthOptions): HostHealth {
 }
 
 /**
+ * The health of a computer Settings shows from its account row
+ * (`hostRowDemotion`), by the reason it is shown that way:
+ * (refused) only a health that claims serving (`online`) is replaced, by the
+ * account's answer with no live session; (needs-update) a health that says
+ * nothing firsthand about the computer (`online`, `reported-reachable`,
+ * `unknown`) reads "Update required"; every other health the computer already
+ * has stands.
+ */
+export function hostRowHealth(input: {
+  readonly demotion: "needs-update" | "refused";
+  /** The computer's own health, as its row was built. */
+  readonly health: HostHealth;
+  readonly item: HostListItem | null;
+  readonly nowMs: number;
+}): HostHealth {
+  const { health, item, nowMs } = input;
+  if (input.demotion === "refused") {
+    return health.state === "online"
+      ? registryHealth({ item, hasLiveSession: false, nowMs })
+      : health;
+  }
+  return SAYS_NOTHING_FIRSTHAND.has(health.state)
+    ? DEAD_HEALTH.incompatible({ item, nowMs })
+    : health;
+}
+
+const SAYS_NOTHING_FIRSTHAND: ReadonlySet<HostHealthState> = new Set([
+  "online",
+  "reported-reachable",
+  "unknown",
+]);
+
+/**
  * The local machine's health, or `null` when this is not the local machine (or
  * its service snapshot has not resolved yet, in which case the weaker answers
  * are still better than nothing).
@@ -332,7 +365,9 @@ function leaseHealth(options: DeriveHostHealthOptions): HostHealth | null {
  * reached no verdict about. Reached only when the two firsthand steps above
  * declined.
  */
-function registryHealth(options: DeriveHostHealthOptions): HostHealth {
+function registryHealth(
+  options: Pick<DeriveHostHealthOptions, "item" | "hasLiveSession" | "nowMs">,
+): HostHealth {
   const { item, hasLiveSession, nowMs } = options;
   if (item === null) {
     // In the runtime directory but not the cloud registry, and no lease: we
