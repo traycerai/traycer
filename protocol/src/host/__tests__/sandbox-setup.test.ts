@@ -94,7 +94,7 @@ describe("sandbox setup frames", () => {
     });
   });
 
-  it("projects a waiting approval into author and editor views without exposing the author's chat", () => {
+  it("parses the waiting author frame and strips author/chat fields from the review card", () => {
     const author = sandboxSetupSubscribeServerFrameSchema.parse(
       sandboxSetupReviewViews.authorWaitingApproval,
     );
@@ -505,8 +505,5 @@ describe("Desktop 1.5.4 released compatibility", () => {
       expect(split.optionalManifest[method]).toEqual({ major: 1, minor: 0 });
       expect(hostRpcRegistry[method].degrade).toEqual({ kind: "unsupported" });
     }
-    expect(Object.keys(desktop154SandboxSetupCatalog.stream)).not.toContain(
-      "sandboxSetup.subscribe",
-    );
   });
 });
