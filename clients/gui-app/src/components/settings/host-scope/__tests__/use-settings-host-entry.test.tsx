@@ -591,7 +591,7 @@ describe("Settings entry host resolution", () => {
       noteHostDoorState({
         hostId,
         kind: "older-host",
-        detail: { code: "UPGRADE_REQUIRED", doorReason: null },
+        detail: { code: "UNAUTHORIZED", doorReason: null },
       }),
     );
 

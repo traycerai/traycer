@@ -24,9 +24,16 @@ import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import type { IHostManagement } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  UpdateHostVersionPolicyFetchResult,
+  UpdateHostVersionPolicyInput,
+} from "@traycer-clients/shared/host-client/host-version-policy-fetcher";
+import type { HostListItem } from "@traycer/protocol/host/host-status";
+import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import {
   buildOverviewManagement,
   makeInstalledRecord,
+  selectHostOverviewTab,
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
 
 const harness = vi.hoisted(() => ({
@@ -46,6 +53,11 @@ const harness = vi.hoisted(() => ({
   messengers: {} as Record<string, MockHostMessenger<HostRpcRegistry>>,
   accountRemovals: [] as string[],
   finishDeregister: null as (() => void) | null,
+  xItem: null as HostListItem | null,
+  policyWrites: [] as {
+    readonly hostId: string;
+    readonly input: UpdateHostVersionPolicyInput;
+  }[],
 }));
 
 vi.mock("@/components/settings/host-scope/use-host-options", async () => {
@@ -66,11 +78,17 @@ vi.mock("@/components/settings/host-scope/use-host-options", async () => {
       }),
     ]),
   );
+  // One object per account record, so X keeps its identity across renders.
+  let xWithItem: HostScopeOption | null = null;
   return {
     useHostOptions: () => {
       const hosts = harness.hostIds.flatMap((hostId) => {
         const host = hostsById.get(hostId);
-        return host === undefined ? [] : [host];
+        if (host === undefined) return [];
+        if (hostId !== "host-x" || harness.xItem === null) return [host];
+        if (xWithItem?.item !== harness.xItem)
+          xWithItem = { ...host, item: harness.xItem };
+        return [xWithItem];
       });
       return hostOptionsFixture({
         hosts,
@@ -156,6 +174,20 @@ vi.mock("@/lib/host", async (importOriginal) => ({
         harness.accountRemovals.push(hostId);
         return new Promise<{ readonly kind: "ok" }>((resolve) => {
           harness.finishDeregister = () => resolve({ kind: "ok" });
+        });
+      },
+      updateHostVersionPolicy: (
+        hostId: string,
+        input: UpdateHostVersionPolicyInput,
+      ): Promise<UpdateHostVersionPolicyFetchResult> => {
+        harness.policyWrites.push({ hostId, input });
+        return Promise.resolve({
+          kind: "ok",
+          result: {
+            hostId,
+            updatePolicy: input.updatePolicy ?? "manual",
+            desiredVersion: null,
+          },
         });
       },
     },
@@ -430,6 +462,8 @@ function resetState(): void {
   harness.messengers = {};
   harness.accountRemovals = [];
   harness.finishDeregister = null;
+  harness.xItem = null;
+  harness.policyWrites = [];
   useSettingsEnvironmentPickStore.setState({
     pick: PERSONAL_PICK,
     defaultPick: PERSONAL_PICK,
@@ -603,6 +637,62 @@ describe("<SettingsSidebar /> while a named host is shown from its row", () => {
     await waitFor(() =>
       expect(useSettingsHostScopeStore.getState().pendingHostId).toBeNull(),
     );
+  });
+
+  it("writes refused X's auto-update choice to the account and sends no host a request", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    makeClients();
+    harness.xItem = {
+      hostId: X.hostId,
+      displayName: "Host X",
+      platform: "darwin-arm64",
+      kind: "personal",
+      publicKey: "pk",
+      createdAt: "2026-03-03T12:00:00Z",
+      status: {
+        connectivity: "connectable",
+        viewerReachability: "unknown",
+        clientCloud: "ok",
+        updateState: "current",
+        appVersion: "1.5.0",
+        lastSeenAt: null,
+      },
+      updatePolicy: "manual",
+    };
+    harness.showPanel = true;
+    harness.observeStatus = false;
+    act(() => {
+      carryViewedHostIntoSettingsScope(X.hostId);
+      refuseXForGood();
+    });
+    const hostAMessenger = harness.messengers["host-a"];
+    const hostXMessenger = harness.messengers["host-x"];
+    hostAMessenger.calls.length = 0;
+    hostXMessenger.calls.length = 0;
+    renderPage(queryClient);
+
+    await selectHostOverviewTab("updates");
+    fireEvent.click(await screen.findByTestId("host-auto-update-host-x"));
+
+    await waitFor(() =>
+      expect(harness.policyWrites).toEqual([
+        {
+          hostId: "host-x",
+          input: {
+            updatePolicy: "auto",
+            desiredVersion: undefined,
+            force: undefined,
+          },
+        },
+      ]),
+    );
+    expect(hostAMessenger.calls).toEqual([]);
+    expect(hostXMessenger.calls).toEqual([]);
   });
 
   it("withholds LocalRecoveryDangerZone while a named entry waits and keeps it for an empty account", async () => {

@@ -300,10 +300,13 @@ export function HostOverviewPanel(props: {
   // forgot to start my host". It gets the bridge doctor, and — in the one
   // state the automation deliberately leaves alone, the user having removed
   // Traycer from this computer — the consent-reversing Reinstall.
+  // A computer shown from its account row is refused or too old, not down:
+  // it gets no bridge doctor and no Reinstall.
   const localDown =
     scope.status === "unreachable" &&
     (host?.isLocalMachine ?? false) &&
-    props.hasLocalBridge;
+    props.hasLocalBridge &&
+    !props.shownFromRow;
 
   const [doctorOpen, setDoctorOpen] = useState(false);
   // The status read the offline notice's "Try again" started, still in flight.

@@ -1498,9 +1498,12 @@ refuses for good, or its status read settled on a non-retryable error that is
 not a first `not_admitted`. If that computer has an account registry row, the
 scope is that row alone (`hostRowDemotion`, `shownFromRow`): `unreachable`, no
 client, listed once with the picked environment's members. The Overview shows
-its About and Danger zone; for this computer it offers no doctor, reinstall or
-restart (the panel passes no local bridge), and the environment section reads
-no owner. The wait itself is unchanged: when the entry places
+its About and Danger zone; for this computer it is not "down" (`localDown`
+reads `shownFromRow`), so the header offers no Run doctor or Reinstall, and the
+environment section reads no owner. Its other bridge reads stay: the
+Command-line tools hint and its tab dot. The restart confirm and the Doctor
+sheet have no opener on this view, since every one needs a usable scope or
+`localDown`. The wait itself is unchanged: when the entry places
 or abandons the computer, or the default resolves, the scope is the usual one
 again. A rail pick of another computer is the way out; re-picking the shown
 one does nothing, and returning to the active host only ends the named entry

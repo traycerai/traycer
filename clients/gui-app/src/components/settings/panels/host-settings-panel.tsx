@@ -174,10 +174,7 @@ function HostSettingsPanelInner(props: {
     scope,
     unresolved,
     compact,
-    // A computer shown from its account row is refused or too old, not down:
-    // nothing here restarts or repairs its host process over the bridge.
-    hasLocalBridge:
-      management !== null && scopedIsLocalMachine && !scope.shownFromRow,
+    hasLocalBridge: management !== null && scopedIsLocalMachine,
     localRecoveryZone,
     // `onApplied` rides the per-call `onSuccess`, and only an APPLIED outcome
     // reaches it: a declined repair changed nothing, so the report still

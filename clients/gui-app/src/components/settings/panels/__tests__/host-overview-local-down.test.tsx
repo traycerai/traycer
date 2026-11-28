@@ -68,10 +68,15 @@ import type {
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
-import { buildOverviewManagement } from "@/components/settings/panels/__tests__/host-overview-test-support";
+import {
+  buildOverviewManagement,
+  selectHostOverviewTab,
+} from "@/components/settings/panels/__tests__/host-overview-test-support";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 afterEach(() => {
   cleanup();
+  useSelectionAuthorityStore.getState().reset();
   resetNegotiatedManifests();
   scopeOverrides.current = {};
   hostBindingMock.current = null;
@@ -89,6 +94,8 @@ function renderLocalDown(options: {
   readonly management: IHostManagement;
   readonly name: string;
   readonly shownFromRow: boolean;
+  /** The host's lease is dead as incompatible: its row reads update-required. */
+  readonly updateRequired: boolean;
 }): void {
   const hostId = "host-local-down";
   scopeOverrides.current = {
@@ -98,6 +105,17 @@ function renderLocalDown(options: {
       isLocalMachine: true,
       connectable: false,
       settingUp: options.settingUp,
+      ...(options.updateRequired
+        ? {
+            health: {
+              state: "update-required" as const,
+              label: "Update required",
+              detail: null,
+              tone: "warn" as const,
+              live: false,
+            },
+          }
+        : {}),
     }),
     hostId,
     status: "unreachable",
@@ -141,12 +159,100 @@ describe("Overview — this machine's own host, down (LocalHostDownActions)", ()
       management,
       name: "This Mac",
       shownFromRow: true,
+      updateRequired: false,
     });
 
     expect(await screen.findByTestId("settings-remove-traycer")).not.toBeNull();
     expect(screen.queryByRole("button", { name: "Run doctor" })).toBeNull();
     expect(screen.queryByTestId("host-overview-reinstall-local")).toBeNull();
     expect(screen.queryByRole("button", { name: /restart/i })).toBeNull();
+  });
+
+  it("this computer shown from its account row with an incompatible lease offers Update host and no down actions", async () => {
+    useSelectionAuthorityStore.getState().applyKernelSnapshot({
+      attached: true,
+      preferredHostId: "host-local-down",
+      targetHostId: "host-local-down",
+      effectiveHostId: "host-local-down",
+      leases: [
+        {
+          hostId: "host-local-down",
+          status: "dead",
+          dead: {
+            reason: "incompatible",
+            detail: {
+              code: "PROTOCOL_MAJOR_MISMATCH",
+              hostVersion: "1.1.4",
+              minSupportedVersion: "1.2.0",
+              clientCompatibility: null,
+            },
+          },
+        },
+      ],
+      selectionRevision: 1,
+    });
+    const management = buildOverviewManagement({
+      getRemovalState: vi.fn(() => Promise.resolve({ removedByUser: true })),
+    });
+    renderLocalDown({
+      settingUp: false,
+      management,
+      name: "This Mac",
+      shownFromRow: true,
+      updateRequired: true,
+    });
+
+    expect(await screen.findByTestId("host-scope-update-host")).not.toBeNull();
+    expect(await screen.findByTestId("settings-remove-traycer")).not.toBeNull();
+    // Every control that opens the restart confirm or the Doctor sheet is
+    // absent, so neither bridge route can be reached from this view.
+    expect(
+      screen.queryByRole("button", { name: "More actions for This Mac" }),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: /restart/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Run doctor" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Reinstall Traycer" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Show installation help" }),
+    ).toBeNull();
+  });
+
+  it("this computer shown from its account row keeps its Command-line tools hint", async () => {
+    const management = buildOverviewManagement({
+      cliManifest: vi.fn(() =>
+        Promise.resolve({
+          version: "1.4.0",
+          installedAt: "2026-09-01T00:00:00Z",
+          binaryPath: "/opt/homebrew/bin/traycer",
+          source: "homebrew" as const,
+          pendingUpgrade: null,
+          packageManagerUpgrade: {
+            source: "homebrew" as const,
+            installedVersion: "1.3.0",
+            bundledVersion: "1.4.0",
+            upgradeCommand: "brew upgrade traycer",
+            recordedAt: "2026-09-20T00:00:00Z",
+          },
+        }),
+      ),
+    });
+    renderLocalDown({
+      settingUp: false,
+      management,
+      name: "This Mac",
+      shownFromRow: true,
+      updateRequired: false,
+    });
+
+    expect(
+      await screen.findByTestId("host-overview-installation-dot"),
+    ).not.toBeNull();
+    await selectHostOverviewTab("installation");
+    expect(
+      await screen.findByTestId("host-overview-command-line-tools"),
+    ).not.toBeNull();
   });
 
   it("a down local host offers Run doctor and no Start verb", async () => {
@@ -158,6 +264,7 @@ describe("Overview — this machine's own host, down (LocalHostDownActions)", ()
       management,
       name: "This Mac",
       shownFromRow: false,
+      updateRequired: false,
     });
 
     const doctorButton = await screen.findByRole<HTMLButtonElement>("button", {
@@ -180,6 +287,7 @@ describe("Overview — this machine's own host, down (LocalHostDownActions)", ()
       management,
       name: "This Mac",
       shownFromRow: false,
+      updateRequired: false,
     });
 
     const doctorButton = await screen.findByRole<HTMLButtonElement>("button", {
@@ -218,6 +326,7 @@ describe("Overview — this machine's own host, down (LocalHostDownActions)", ()
       management,
       name: "This Mac",
       shownFromRow: false,
+      updateRequired: false,
     });
 
     // The removal read is async (the sentinel query starts disabled-shaped
@@ -248,6 +357,7 @@ describe("Overview — this machine's own host, down (LocalHostDownActions)", ()
       management,
       name: "This Mac",
       shownFromRow: false,
+      updateRequired: false,
     });
 
     await screen.findByRole("button", { name: "Run doctor" });
@@ -306,6 +416,7 @@ describe("Overview — this machine's own host, down (LocalHostDownActions)", ()
       management,
       name: "This Mac",
       shownFromRow: false,
+      updateRequired: false,
     });
 
     const reinstallButton = await screen.findByRole("button", {
@@ -399,6 +510,7 @@ describe("Overview — this machine's own host, down (LocalHostDownActions)", ()
       management,
       name: "This Mac",
       shownFromRow: false,
+      updateRequired: false,
     });
 
     const reinstallButton = await screen.findByRole("button", {
