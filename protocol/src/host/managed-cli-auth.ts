@@ -1,4 +1,5 @@
 import type { HostRpcRegistry } from "./registry";
+import { lazySchema } from "../framework/lazy-schema";
 import { z } from "zod";
 
 /** HEAD discovers support, GET with a bearer reads the verified account. */
@@ -19,33 +20,41 @@ export const MANAGED_CLI_UNARY_METHODS = [
   "worktree.listBindingsForEpic",
 ] as const satisfies readonly (keyof HostRpcRegistry & string)[];
 
-const userIdentitySchema = z.object({
-  kind: z.literal("user"),
-  id: z.string().min(1),
-  label: z.string().min(1),
-});
-const teamIdentitySchema = z.object({
-  kind: z.literal("team"),
-  id: z.string().min(1),
-  label: z.string().min(1),
-});
+const userIdentitySchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("user"),
+    id: z.string().min(1),
+    label: z.string().min(1),
+  }),
+);
+const teamIdentitySchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("team"),
+    id: z.string().min(1),
+    label: z.string().min(1),
+  }),
+);
 export type ManagedCliIdentity =
   | z.infer<typeof userIdentitySchema>
   | z.infer<typeof teamIdentitySchema>;
 
-export const managedCliAccountSchema = z.discriminatedUnion("kind", [
-  userIdentitySchema.extend({
-    user: z.object({ id: z.string(), email: z.string(), name: z.string() }),
-    authnBaseUrl: z.string().min(1),
-  }),
-  teamIdentitySchema,
-]);
+export const managedCliAccountSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    userIdentitySchema.extend({
+      user: z.object({ id: z.string(), email: z.string(), name: z.string() }),
+      authnBaseUrl: z.string().min(1),
+    }),
+    teamIdentitySchema,
+  ]),
+);
 export type ManagedCliAccount = z.infer<typeof managedCliAccountSchema>;
 
-const managedCliOpenSchema = z.object({
-  token: z.string(),
-  taskCapability: z.string().nullable(),
-});
+const managedCliOpenSchema = lazySchema(() =>
+  z.object({
+    token: z.string(),
+    taskCapability: z.string().nullable(),
+  }),
+);
 export type ManagedCliOpen = z.infer<typeof managedCliOpenSchema>;
 
 export function encodeManagedCliOpen(open: ManagedCliOpen): string {

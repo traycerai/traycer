@@ -14,6 +14,9 @@ export async function readCliAuthMode(
     const marker = await readFile(join(hostDataDir, "cli-auth-mode"), "utf8");
     return marker === "managed\n" ? "managed" : "interactive";
   } catch (error) {
-    return errorCode(error) === "ENOENT" ? "interactive" : "unreadable";
+    const code = errorCode(error);
+    return code === "ENOENT" || code === "ENOTDIR"
+      ? "interactive"
+      : "unreadable";
   }
 }

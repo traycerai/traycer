@@ -247,6 +247,24 @@ afterEach(() => {
   });
 });
 
+function startLinkPhoneFlow(ctx: CommandContext) {
+  const codeShown = Promise.withResolvers<void>();
+  const settled = Promise.allSettled([
+    runLinkPhoneFlow(
+      {
+        ...ctx,
+        progress: (info) => {
+          ctx.progress(info);
+          if (info.stage === "link-code-shown") codeShown.resolve();
+        },
+      },
+      { showQr: true },
+    ),
+  ]);
+  // Wait for the real marker read and initial mint before driving poll time.
+  return { settled, started: Promise.race([codeShown.promise, settled]) };
+}
+
 /**
  * Runs the flow far enough for `ticks` status polls to land. The flow sleeps
  * between polls, so the timers have to be driven for it to make progress.
@@ -255,7 +273,8 @@ async function runWithPolls(
   ctx: CommandContext,
   ticks: number,
 ): Promise<PromiseSettledResult<unknown>> {
-  const settled = Promise.allSettled([runLinkPhoneFlow(ctx, { showQr: true })]);
+  const { settled, started } = startLinkPhoneFlow(ctx);
+  await started;
   for (let i = 0; i < ticks; i++) {
     await vi.advanceTimersByTimeAsync(POLL_MS);
   }
@@ -339,9 +358,8 @@ describe("runLinkPhoneFlow", () => {
       .mockImplementation(() => true);
     try {
       const ctx = makeCtx({ json: false, quiet: false, nonInteractive: false });
-      const settled = Promise.allSettled([
-        runLinkPhoneFlow(ctx, { showQr: true }),
-      ]);
+      const { settled, started } = startLinkPhoneFlow(ctx);
+      await started;
       // Several ticks' worth of waiting on an unclaimed code.
       await vi.advanceTimersByTimeAsync(POLL_MS * 3);
       statusMock.mockResolvedValue(CLAIMED);
@@ -531,9 +549,8 @@ describe("runLinkPhoneFlow", () => {
       answer.hold = true;
       const ctx = makeCtx({ json: false, quiet: false, nonInteractive: false });
 
-      const settled = Promise.allSettled([
-        runLinkPhoneFlow(ctx, { showQr: true }),
-      ]);
+      const { settled, started } = startLinkPhoneFlow(ctx);
+      await started;
       await vi.advanceTimersByTimeAsync(POLL_MS);
       expect(answer.lastPrompt).toBe(
         "  Approve within 1:28\nDoes your phone show 47? Approve sign-in [y/N] ",
@@ -585,12 +602,10 @@ describe("runLinkPhoneFlow", () => {
       });
       answer.current = "y";
       answer.hold = true;
-      const settled = Promise.allSettled([
-        runLinkPhoneFlow(
-          makeCtx({ json: false, quiet: false, nonInteractive: false }),
-          { showQr: true },
-        ),
-      ]);
+      const { settled, started } = startLinkPhoneFlow(
+        makeCtx({ json: false, quiet: false, nonInteractive: false }),
+      );
+      await started;
       await vi.advanceTimersByTimeAsync(POLL_MS + 3_000);
       expect(answer.lastPrompt).toContain("Approve within 1:28");
       expect(answer.redraws).toEqual([]);
@@ -621,14 +636,10 @@ describe("runLinkPhoneFlow", () => {
       });
       answer.current = "y";
       answer.hold = true;
-      const settled = Promise.allSettled([
-        runLinkPhoneFlow(
-          makeCtx({ json: false, quiet: false, nonInteractive: false }),
-          {
-            showQr: true,
-          },
-        ),
-      ]);
+      const { settled, started } = startLinkPhoneFlow(
+        makeCtx({ json: false, quiet: false, nonInteractive: false }),
+      );
+      await started;
       await vi.advanceTimersByTimeAsync(POLL_MS + 3_000);
       // The window is still stated, once, in the prompt itself.
       expect(answer.lastPrompt).toContain("Approve within 1:28");
@@ -701,9 +712,8 @@ describe("runLinkPhoneFlow", () => {
       .mockResolvedValue(mintedCode("KLMNP-QRSTV"));
     const ctx = interactiveCtx();
 
-    const settled = Promise.allSettled([
-      runLinkPhoneFlow(ctx, { showQr: true }),
-    ]);
+    const { settled, started } = startLinkPhoneFlow(ctx);
+    await started;
     await vi.advanceTimersByTimeAsync(REMINT_MS + POLL_MS);
     statusMock.mockResolvedValue(CLAIMED);
     await vi.advanceTimersByTimeAsync(POLL_MS);
@@ -724,9 +734,8 @@ describe("runLinkPhoneFlow", () => {
       .mockResolvedValue(mintedCode("KLMNP-QRSTV"));
     const ctx = interactiveCtx();
 
-    const settled = Promise.allSettled([
-      runLinkPhoneFlow(ctx, { showQr: true }),
-    ]);
+    const { settled, started } = startLinkPhoneFlow(ctx);
+    await started;
     await vi.advanceTimersByTimeAsync(REMINT_MS + POLL_MS);
     statusMock.mockResolvedValue(CLAIMED);
     await vi.advanceTimersByTimeAsync(POLL_MS);
@@ -741,9 +750,8 @@ describe("runLinkPhoneFlow", () => {
       .mockResolvedValueOnce(mintedCode("ABCDE-FGHJK"))
       .mockResolvedValue({ kind: "network-error" });
 
-    const settled = Promise.allSettled([
-      runLinkPhoneFlow(interactiveCtx(), { showQr: true }),
-    ]);
+    const { settled, started } = startLinkPhoneFlow(interactiveCtx());
+    await started;
     await vi.advanceTimersByTimeAsync(REMINT_MS + POLL_MS);
     const [result] = await settled;
 
@@ -766,9 +774,8 @@ describe("runLinkPhoneFlow", () => {
     answer.current = "y";
     const ctx = interactiveCtx();
 
-    const settled = Promise.allSettled([
-      runLinkPhoneFlow(ctx, { showQr: true }),
-    ]);
+    const { settled, started } = startLinkPhoneFlow(ctx);
+    await started;
     await vi.advanceTimersByTimeAsync(REMINT_MS + POLL_MS);
     statusMock.mockResolvedValue(CLAIMED);
     await vi.advanceTimersByTimeAsync(POLL_MS);
