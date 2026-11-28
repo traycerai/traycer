@@ -4429,7 +4429,7 @@ describe("RemoteSession wake", () => {
       session.close();
     }
   }, 15_000); /**
-   * A one-method registry for the two `sendUnary` cases below, which need a
+   * A one-method registry for the `sendUnary` case below, which needs a
    * real dispatchable method rather than the suite's empty registries.
    */
   function statusRpcRegistry(): VersionedRpcRegistry {
@@ -4496,115 +4496,6 @@ describe("RemoteSession wake", () => {
 
       await expect(pending).resolves.toEqual({ ready: true });
       expect(relay.errors).toEqual([]);
-    } finally {
-      session.close();
-    }
-  }, 15_000);
-
-  it("wakes once the parked request has PROVABLY failed pre-send - the caller-Retry path", async () => {
-    // Jitter at its ceiling makes both waits exact: the third failure arms the
-    // 4s rung, and a wake collapses it to 1s. The claim is about which of the
-    // two the fourth dial waited for, so it is timed to the moment that dial
-    // starts: its grant request, which comes before any Noise work. Everything
-    // after it, the handshake and the open the relay records, runs on real
-    // crypto and a loaded runner's CPU.
-    const jitterPin = vi.spyOn(Math, "random").mockReturnValue(1);
-    const relay = new FakeRelayHost();
-    relay.floorRpcManifest = { "host.status": { major: 1, minor: 0 } };
-    relay.unaryResult = { ready: true };
-    const lease = new MutableBearerLease("token", "user-1");
-    // Three failures: the parked call rides the third and is rejected by it,
-    // which is the moment the wake is earned. The fourth open succeeds.
-    relay.decideOpen = (_bearer, openIndex) =>
-      openIndex < 3
-        ? { kind: "fatal", details: retryableDropDetails() }
-        : { kind: "ack" };
-    const options = buildSessionOptions(relay, lease, null);
-    const dialStartedAt: number[] = [];
-    const session = new RemoteSession({
-      ...options,
-      grantProvider: (sequence, attempt) => {
-        dialStartedAt.push(Date.now());
-        return options.grantProvider(sequence, attempt);
-      },
-      rpcRegistry: statusRpcRegistry(),
-    });
-    try {
-      session.start();
-      // Park while the second failure's backoff is armed, so this caller
-      // rides the third attempt and sees it fail.
-      await vi.waitFor(() => expect(relay.openBearers).toHaveLength(2), {
-        timeout: 6_000,
-        interval: 50,
-      });
-      await expect(
-        session.sendUnary(
-          "host.status",
-          {},
-          null,
-          null,
-          null,
-          undefined,
-          false,
-          null,
-        ),
-      ).rejects.toBeInstanceOf(RetryableTransportError);
-      // Still pre-send, so the caller keeps its retry license - and the
-      // failure it just proved has accelerated the NEXT redial rather than
-      // leaving it on the tier that failure escalated to.
-      const rejectedAt = Date.now();
-      await vi.waitFor(() => expect(dialStartedAt).toHaveLength(4), {
-        timeout: 3_000,
-        interval: 20,
-      });
-      const fourthDialAt = dialStartedAt.at(-1) ?? Number.POSITIVE_INFINITY;
-      expect(fourthDialAt - rejectedAt).toBeLessThan(3_000);
-      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
-      expect(relay.openBearers).toHaveLength(4);
-      expect(relay.errors).toEqual([]);
-    } finally {
-      session.close();
-      jitterPin.mockRestore();
-    }
-  }, 15_000);
-
-  it("does not wake for a caller whose own request authority was aborted", async () => {
-    const relay = new FakeRelayHost();
-    relay.floorRpcManifest = { "host.status": { major: 1, minor: 0 } };
-    relay.unaryResult = { ready: true };
-    const lease = new MutableBearerLease("token", "user-1");
-    relay.decideOpen = (_bearer, openIndex) =>
-      openIndex < 3
-        ? { kind: "fatal", details: retryableDropDetails() }
-        : { kind: "ack" };
-    const session = new RemoteSession({
-      ...buildSessionOptions(relay, lease, null),
-      rpcRegistry: statusRpcRegistry(),
-    });
-    const controller = new AbortController();
-    try {
-      session.start();
-      await vi.waitFor(() => expect(relay.openBearers).toHaveLength(3), {
-        timeout: 8_000,
-        interval: 50,
-      });
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      const pending = session.sendUnary(
-        "host.status",
-        {},
-        null,
-        controller.signal,
-        null,
-        undefined,
-        false,
-        null,
-      );
-      controller.abort();
-      // An abandoned read is not evidence anybody is waiting, so its
-      // rejection carries no wake - the abort error is not retryable.
-      await expect(pending).rejects.toBeInstanceOf(HostRequestAbortedError);
-      await new Promise((resolve) => setTimeout(resolve, 1_200));
-      expect(relay.openBearers).toHaveLength(3);
     } finally {
       session.close();
     }

@@ -742,14 +742,13 @@ export interface IRemoteSession<
    *    (`IHostStreamClient.reconnectAll` ← `subscribeWakeSignals`). A runtime
    *    that was frozen - laptop sleep, a mobile WebView suspended on every app
    *    switch - comes back with a socket that may already be dead and a backoff
-   *    timer armed for a failure that is now minutes old;
-   *  - a `sendUnary` caller whose parked request has just failed PRE-SEND,
-   *    which is what the user's Retry looks like from down here.
+   *    timer armed for a failure that is now minutes old.
    *
    * Note what is NOT a caller: a request merely arriving at a session that is
-   * not ready. Waking on the way in lets ambient polling reads collapse the
-   * long tiers continuously, which turns an unavailable host into a dial loop.
-   * The wake is earned by a proven failure, not by demand.
+   * not ready, and a parked request the session's own failed attempt just
+   * released. Either would let a read that keeps asking collapse every tier,
+   * which turns an unavailable host into a dial loop. The wake is earned by
+   * news from outside the session, not by demand.
    *
    * The session decides what that evidence is worth. A pending redial is pulled
    * forward once - to a jittered sub-second delay, never instantly, and never
@@ -1772,37 +1771,24 @@ export class RemoteSession<
       // Throws on a terminal session, a failed attach, or the caller's
       // authority being aborted while parked; returns once this session is
       // ready to carry the frame.
-      try {
-        if (this.isParkedBeforeReady()) {
-          // The relay has already said there is no host, and nothing bounds
-          // a wait from here (the phase timer is cleared; see
-          // `onHostDetached`). This is the same retryable pre-send failure a
-          // waiter parked before the detach was settled with, delivered at
-          // once instead of at `host_attached`.
-          throw this.hostDetachedRejection(requestId, method);
-        }
-        await this.awaitReadyBoundary(requestId, method, abortSignal);
-      } catch (cause) {
-        if (cause instanceof RetryableTransportError) {
-          // The attach this caller was riding has now PROVABLY failed, before
-          // anything was sent. That is the moment a wake is earned: someone
-          // was demonstrably waiting on this session and got nothing, and
-          // their retry budget (`createRetryingMessenger`) is about to be
-          // spent against the same cached session - so the next attempt
-          // should ride an accelerated timer rather than the tier this
-          // failure just escalated to.
-          //
-          // Only here. Waking on the way IN - before knowing whether the
-          // in-progress attach would have succeeded - lets ambient polling
-          // reads collapse the 16s and 30s tiers continuously, which turns a
-          // genuinely unavailable host into a dial loop and a relay herd.
-          // Aborts, terminal closures, post-send ambiguity and host-originated
-          // failures never reach this branch: they are not
-          // `RetryableTransportError`.
-          this.wake("pre-send-failure", null);
-        }
-        throw cause;
+      //
+      // A failure here never wakes the session. Waiters parked on an attempt
+      // are released at its openAck, so a retryable rejection always comes
+      // from an attempt that was never admitted (a failed grant, a dial, a
+      // retryable fatal before openAck), and the wait it meets is the one
+      // that failure just armed. Pulling that wait forward lets a read that
+      // keeps asking redial the host about once a second for as long as it
+      // refuses. Only news from outside the session (online, resume, a
+      // Retry, an endpoint change) shortens it.
+      if (this.isParkedBeforeReady()) {
+        // The relay has already said there is no host, and nothing bounds
+        // a wait from here (the phase timer is cleared; see
+        // `onHostDetached`). This is the same retryable pre-send failure a
+        // waiter parked before the detach was settled with, delivered at
+        // once instead of at `host_attached`.
+        throw this.hostDetachedRejection(requestId, method);
       }
+      await this.awaitReadyBoundary(requestId, method, abortSignal);
       // LOAD-BEARING, not belt-and-braces. The abort listener above cannot
       // cover every ordering: an abort queued as a MICROTASK before
       // `settleReadyWaiters` resolves this waiter runs before the
@@ -6396,8 +6382,7 @@ export class RemoteSession<
    * sub-second delay measured from now.
    *
    * Two properties do all the work, and they are why {@link wake} can be wired
-   * to signals that fire freely (every app switch, every proven pre-send
-   * failure):
+   * to signals that fire freely (every app switch, every `online` edge):
    *
    *  - **One collapse per armed timer.** The draw happens on the first wake
    *    against a given timer and is then recorded as spent. Later wakes do not
