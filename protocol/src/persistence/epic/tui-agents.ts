@@ -170,12 +170,28 @@ export const cursorTuiAgentSchema = lazySchema(() =>
 );
 export type CursorTuiAgent = z.infer<typeof cursorTuiAgentSchema>;
 
+// Staging: the GUI/ACP surface runs `agy_acp_server`; the Terminal surface
+// runs the separate `agy` CLI under the same `antigravity` identity. The
+// resumable session id is host-back-filled (`agy -c` continues the last
+// session), so it is nullable, mirroring Codex/Cursor. Current runtime
+// catalogs do not advertise the TUI surface for antigravity, so normal product
+// flows do not create these records until the host ships support.
+export const antigravityTuiAgentSchema = lazySchema(() =>
+  z.object({
+    harnessId: z.literal("antigravity"),
+    ...baseTuiAgentFields,
+    harnessSessionId: z.string().nullable().catch(null),
+  }),
+);
+export type AntigravityTuiAgent = z.infer<typeof antigravityTuiAgentSchema>;
+
 export const tuiAgentSchema = lazySchema(() =>
   z.discriminatedUnion("harnessId", [
     claudeTuiAgentSchema,
     codexTuiAgentSchema,
     opencodeTuiAgentSchema,
     cursorTuiAgentSchema,
+    antigravityTuiAgentSchema,
   ]),
 );
 export type TuiAgent = z.infer<typeof tuiAgentSchema>;
