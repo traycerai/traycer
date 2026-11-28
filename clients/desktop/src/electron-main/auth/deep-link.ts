@@ -33,6 +33,25 @@ const AUTH_CALLBACK_PATH = "auth/callback";
 export type AuthReturnSignalHandler = () => void;
 
 /**
+ * Target of a `traycer://open/epic/<epicId>/chat/<chatId>` deep link. Ids only:
+ * the link names WHERE to look, never WHAT to do there. No prompt text, no
+ * action, no host override - so the worst a hostile link can do is bring one
+ * of the signed-in user's own chats forward.
+ */
+export interface OpenChatDeepLinkTarget {
+  readonly epicId: string;
+  readonly chatId: string;
+}
+
+export type OpenChatDeepLinkHandler = (target: OpenChatDeepLinkTarget) => void;
+
+const OPEN_CHAT_PATH = /^open\/epic\/([^/]+)\/chat\/([^/]+)$/;
+// Epic and chat ids are UUIDs today; accept the same conservative alphabet
+// the rest of the client treats as an opaque id, and nothing else (no dots,
+// slashes, percent-escapes or whitespace survive to the renderer).
+const OPAQUE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+
+/**
  * Whether `uri` is a `traycer://auth/callback` deep link (ignoring any query).
  * A stray legacy `?code=…` is tolerated - we never read it. Other traycer
  * deep links (e.g. session links) and non-traycer URIs return `false`.
@@ -54,6 +73,37 @@ function isAuthCallbackUri(uri: string): boolean {
 }
 
 /**
+ * Parses `traycer://open/epic/<epicId>/chat/<chatId>[?focus=composer]`.
+ * Returns `null` for anything else, including a malformed or over-long id.
+ * The optional `focus` query is accepted and ignored: an activated chat tile
+ * already autofocuses its composer on desktop (`ComposerPromptEditor`), so the
+ * hint exists only so callers can state intent without breaking older builds.
+ */
+export function parseOpenChatUri(uri: string): OpenChatDeepLinkTarget | null {
+  if (!uri.startsWith(`${PROTOCOL_SCHEME}://`)) {
+    return null;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(uri);
+  } catch {
+    return null;
+  }
+  const path = `${parsed.host}${parsed.pathname}`
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "");
+  const match = OPEN_CHAT_PATH.exec(path);
+  if (match === null) {
+    return null;
+  }
+  const [, epicId, chatId] = match;
+  if (!OPAQUE_ID.test(epicId) || !OPAQUE_ID.test(chatId)) {
+    return null;
+  }
+  return { epicId, chatId };
+}
+
+/**
  * Registers the `traycer://` custom protocol and wires the platform-specific
  * entry points:
  *   - `app.setAsDefaultProtocolClient` is the cross-platform registration
@@ -67,10 +117,13 @@ function isAuthCallbackUri(uri: string): boolean {
  * The protocol registration is unchanged from the redirect era; only the
  * handler is demoted. A `traycer://auth/callback` deep link fires the
  * payload-free `AuthReturnSignalHandler` (focus + poll-nudge); it parses no
- * payload and drives no exchange. Non-auth traycer URIs are ignored.
+ * payload and drives no exchange. A `traycer://open/epic/<id>/chat/<id>` link
+ * fires `openChatHandler` with the validated ids. Every other traycer URI is
+ * ignored.
  */
 export function registerDeepLinkHandling(
   handler: AuthReturnSignalHandler,
+  openChatHandler: OpenChatDeepLinkHandler,
 ): void {
   if (process.defaultApp) {
     if (process.argv.length >= 2) {
@@ -83,11 +136,17 @@ export function registerDeepLinkHandling(
   }
 
   const deliver = (uri: string): void => {
-    if (!isAuthCallbackUri(uri)) {
+    if (isAuthCallbackUri(uri)) {
+      log.info("[deep-link] auth return signal - nudging the device poll");
+      handler();
       return;
     }
-    log.info("[deep-link] auth return signal - nudging the device poll");
-    handler();
+    const target = parseOpenChatUri(uri);
+    if (target === null) {
+      return;
+    }
+    log.info("[deep-link] open chat");
+    openChatHandler(target);
   };
 
   app.on("open-url", (event, url) => {
