@@ -659,7 +659,8 @@ export class BrowserViewAgentFocus {
    * until that page reports one. Which page that is, it does not say.
    */
   private readsNoFocus(window: WindowFocus): boolean {
-    return window.app.focusedFrame === null;
+    // A closed window's page has nothing to read, and Electron throws on it.
+    return !window.app.isDestroyed() && window.app.focusedFrame === null;
   }
 
   /** Focus may be in `entry`'s tab. A wrong yes costs only an extra hand-back. */

@@ -79,6 +79,10 @@ const keyDown: Input = {
 };
 
 function setFocused(contents: BrowserViewWebContents, focused: boolean): void {
+  if (contents instanceof FocusWindow) {
+    contents.setFocusedFrame(focused ? {} : null);
+    return;
+  }
   Object.defineProperty(contents, "focusedFrame", {
     configurable: true,
     value: focused ? {} : null,
@@ -86,10 +90,7 @@ function setFocused(contents: BrowserViewWebContents, focused: boolean): void {
 }
 
 function setNoFocusedFrame(window: FocusWindow): void {
-  Object.defineProperty(window, "focusedFrame", {
-    configurable: true,
-    value: null,
-  });
+  window.setFocusedFrame(null);
 }
 
 async function dispatchAroundResult(
@@ -115,12 +116,19 @@ async function dispatchAroundResult(
 class FocusWindow extends FakeWebContents {
   focused = true;
   destroyed = false;
+  private focusedFrameValue: unknown = {};
   constructor() {
     super();
     Object.defineProperty(this, "focusedFrame", {
       configurable: true,
-      value: {},
+      get: () => {
+        if (this.destroyed) throw new Error("Object has been destroyed");
+        return this.focusedFrameValue;
+      },
     });
+  }
+  setFocusedFrame(frame: unknown): void {
+    this.focusedFrameValue = frame;
   }
   get webContents(): FakeWebContents {
     return this;
@@ -1516,6 +1524,33 @@ describe("BrowserViewAgentFocus", () => {
 
     await expect(pending).resolves.toEqual(abandonedResult);
     expect(h.events.some((event) => event.kind === "begin")).toBe(false);
+  });
+
+  it("returns not sent when the window closes during focus preparation", async () => {
+    const h = harness({});
+    let releaseEmulation!: () => void;
+    let emulationStarted!: () => void;
+    const emulationGate = new Promise<void>((resolve) => {
+      releaseEmulation = resolve;
+    });
+    const emulationPending = new Promise<void>((resolve) => {
+      emulationStarted = resolve;
+    });
+    vi.mocked(h.session.sendCommand).mockImplementation(async (method) => {
+      if (method === "Emulation.setFocusEmulationEnabled") {
+        emulationStarted();
+        await emulationGate;
+      }
+      return {};
+    });
+
+    const pending = h.focus.dispatchInput(h.entry, h.session, TARGET, press);
+    await emulationPending;
+    h.window.destroyed = true;
+    h.window.emit("closed");
+    releaseEmulation();
+
+    await expect(pending).resolves.toEqual(abandonedResult);
   });
 
   it("retries focus setup after a failed preparation and keeps it after success", async () => {
