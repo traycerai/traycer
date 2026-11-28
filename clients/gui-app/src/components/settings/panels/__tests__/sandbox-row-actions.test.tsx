@@ -868,7 +868,7 @@ describe("<SandboxRowActions />", () => {
       ).toBeNull();
     });
 
-    it("starts Personal's released Automations with no body, then asks for a terminal on it", async () => {
+    it("starts Personal's released Automations naming no target, then asks for a terminal on it", async () => {
       automation.openSandboxAutomation.mockResolvedValue({
         kind: "ok",
         sandbox: automationsRow("awake", null),

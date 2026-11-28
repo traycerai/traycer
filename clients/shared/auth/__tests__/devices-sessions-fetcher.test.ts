@@ -172,7 +172,7 @@ describe("devices/sessions authn fetcher", () => {
     expect(result.kind).toBe("step-up-required");
   });
 
-  it("declares a JSON body only on a request that has one, never on a session revoke's DELETE", async () => {
+  it("sends an empty JSON object on a session revoke's DELETE and on a revoke of every session", async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse(200, {}));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -182,10 +182,13 @@ describe("devices/sessions authn fetcher", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const revokeInit = fetchMock.mock.calls[0]?.[1];
     const revokeAllInit = fetchMock.mock.calls[1]?.[1];
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://authn.example.test/api/v3/user/sessions/family-1",
+    );
     expect(revokeInit?.method).toBe("DELETE");
-    expect(revokeInit?.body).toBeUndefined();
+    expect(revokeInit?.body).toBe("{}");
     const revokeHeaders = new Headers(revokeInit?.headers);
-    expect(revokeHeaders.has("Content-Type")).toBe(false);
+    expect(revokeHeaders.get("Content-Type")).toBe("application/json");
     expect(revokeHeaders.get("Authorization")).toBe("Bearer jwt");
     expect(revokeHeaders.get("Accept")).toBe("application/json");
     expect(revokeAllInit?.method).toBe("POST");

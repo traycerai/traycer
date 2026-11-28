@@ -3,7 +3,11 @@ import {
   listSecrets,
   verifySecret,
 } from "@traycer-clients/shared/environment/configuration-secrets";
-import { EnvironmentCloudError } from "@traycer-clients/shared/environment/environment-cloud";
+import {
+  EnvironmentCloudError,
+  sendSettings,
+  type EnvironmentCloud,
+} from "@traycer-clients/shared/environment/environment-cloud";
 import { nativeEnvironmentTransport } from "../src/native-environment-transport";
 
 const native = vi.hoisted(() => ({ request: vi.fn() }));
@@ -14,6 +18,13 @@ vi.mock("@capacitor/core", () => ({
 
 const BEARER = "bearer-never-in-an-error";
 const AUTHN = "https://authn.example.invalid";
+
+const PHONE_CLOUD: EnvironmentCloud = {
+  authnBaseUrl: AUTHN,
+  bearer: { kind: "cloud", getBearerToken: () => BEARER },
+  transport: nativeEnvironmentTransport,
+  onOriginSignIn: () => true,
+};
 
 afterEach(() => {
   native.request.mockReset();
@@ -28,15 +39,7 @@ describe("the phone's environment transport", () => {
       url: `${AUTHN}/api/v3/environments/env-1/secrets`,
     });
 
-    const answer = listSecrets(
-      {
-        authnBaseUrl: AUTHN,
-        bearer: { kind: "cloud", getBearerToken: () => BEARER },
-        transport: nativeEnvironmentTransport,
-        onOriginSignIn: () => true,
-      },
-      "env-1",
-    );
+    const answer = listSecrets(PHONE_CLOUD, "env-1");
 
     const error: unknown = await answer.catch((caught: unknown) => caught);
     if (!(error instanceof EnvironmentCloudError)) {
@@ -63,16 +66,11 @@ describe("the phone's environment transport", () => {
       url: `${AUTHN}/api/v3/environments/env-1/secrets/sec-1/verify`,
     });
 
-    const answer = verifySecret(
-      {
-        authnBaseUrl: AUTHN,
-        bearer: { kind: "cloud", getBearerToken: () => BEARER },
-        transport: nativeEnvironmentTransport,
-        onOriginSignIn: () => true,
-      },
-      "env-1",
-      { environmentId: "env-1", target: "secret", secretId: "sec-1" },
-    );
+    const answer = verifySecret(PHONE_CLOUD, "env-1", {
+      environmentId: "env-1",
+      target: "secret",
+      secretId: "sec-1",
+    });
 
     const error: unknown = await answer.catch((caught: unknown) => caught);
     if (!(error instanceof EnvironmentCloudError)) {
@@ -86,6 +84,34 @@ describe("the phone's environment transport", () => {
         url: `${AUTHN}/api/v3/environments/env-1/secrets/sec-1/verify`,
         method: "POST",
         disableRedirects: true,
+      }),
+    );
+  });
+
+  it("hands a payload-less DELETE to the native request as a typed empty JSON object", async () => {
+    native.request.mockResolvedValue({
+      status: 200,
+      data: { deleted: true },
+      headers: {},
+      url: `${AUTHN}/api/v3/environments/env-1/mcp-servers/srv-1`,
+    });
+
+    await sendSettings(
+      PHONE_CLOUD,
+      "DELETE",
+      "api/v3/environments/env-1/mcp-servers/srv-1",
+      null,
+    );
+
+    expect(native.request).toHaveBeenCalledTimes(1);
+    expect(native.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: `${AUTHN}/api/v3/environments/env-1/mcp-servers/srv-1`,
+        method: "DELETE",
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+        }),
+        data: {},
       }),
     );
   });

@@ -376,7 +376,7 @@ describe("parseSandboxAutomationEnvironmentId", () => {
 // names the pod a team's open wakes (or creates): a guessed target would open
 // another pod than the one picked, so a malformed one throws.
 describe("parseSandboxAutomationOpenTarget", () => {
-  it("keeps null as null: the caller's own Automations host, no body", () => {
+  it("keeps null as null: the caller's own Automations host, naming no target", () => {
     expect(parseSandboxAutomationOpenTarget(null)).toBeNull();
   });
 

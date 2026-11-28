@@ -1020,7 +1020,7 @@ describe("changeProviderApiKey shared flow", () => {
     replacement.release();
   });
 
-  it("sends Content-Type only with the set's body, never on the clear", async () => {
+  it("declares JSON on the set and on the clear, whose body is an empty object", async () => {
     const fetchMock = installFetch(
       async (_input, init) =>
         new Response(
@@ -1049,9 +1049,14 @@ describe("changeProviderApiKey shared flow", () => {
     await send({ action: "set", apiKey: API_KEY });
 
     const [clearInit, setInit] = fetchMock.mock.calls.map(([, init]) => init);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      `${AUTHN_BASE}/api/v3/environments/${ENVIRONMENT_FROM_HOST}/provider-keys/cursor`,
+    );
     expect(clearInit?.method).toBe("DELETE");
-    expect(clearInit?.body).toBeNull();
-    expect(new Headers(clearInit?.headers).has("Content-Type")).toBe(false);
+    expect(clearInit?.body).toBe("{}");
+    expect(new Headers(clearInit?.headers).get("Content-Type")).toBe(
+      "application/json",
+    );
     expect(new Headers(clearInit?.headers).get("Accept")).toBe(
       "application/json",
     );

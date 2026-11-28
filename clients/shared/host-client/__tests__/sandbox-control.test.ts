@@ -108,7 +108,7 @@ afterEach(() => {
 });
 
 describe("runSandboxVerbViaHttp", () => {
-  it("POSTs the verb to the sandbox's own path with the user bearer", async () => {
+  it("POSTs the verb to the sandbox's own path with the user bearer, and an empty JSON object without a gesture", async () => {
     const fetchMock = stubFetch(async () =>
       jsonResponse(200, { sandbox: SUMMARY }),
     );
@@ -129,10 +129,12 @@ describe("runSandboxVerbViaHttp", () => {
     expect(init?.method).toBe("POST");
     expect(init?.headers).toMatchObject({
       Authorization: `Bearer ${BEARER}`,
+      "Content-Type": "application/json",
     });
+    expect(init?.body).toBe("{}");
   });
 
-  it("sends a gesture as a JSON body, and no body without one", async () => {
+  it("sends a gesture as the JSON body", async () => {
     const fetchMock = stubFetch(async () =>
       jsonResponse(200, { sandbox: SUMMARY }),
     );
@@ -146,23 +148,12 @@ describe("runSandboxVerbViaHttp", () => {
       "open-terminal",
       VERB_TIMEOUT_MS,
     );
-    await runSandboxVerbViaHttp(
-      BASE,
-      BEARER,
-      null,
-      ULID,
-      "resume",
-      null,
-      VERB_TIMEOUT_MS,
-    );
 
     const [, withGesture] = fetchMock.mock.calls[0];
     expect(withGesture?.body).toBe('{"gesture":"open-terminal"}');
     expect(withGesture?.headers).toMatchObject({
       "Content-Type": "application/json",
     });
-    const [, plain] = fetchMock.mock.calls[1];
-    expect(plain?.body).toBeNull();
   });
 
   it("refuses an id that is not one plain path segment before any request", async () => {
@@ -736,7 +727,7 @@ describe("destroySandboxViaHttp", () => {
     );
   });
 
-  it("DELETEs the sandbox and reads 200 as settled, 202 as still destroying", async () => {
+  it("DELETEs the sandbox with an empty JSON object and reads 200 as settled, 202 as still destroying", async () => {
     const fetchMock = stubFetch(async () => jsonResponse(200, {}));
     expect(
       await destroySandboxViaHttp(BASE, BEARER, null, "sbx_1", false),
@@ -747,6 +738,10 @@ describe("destroySandboxViaHttp", () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(String(url)).toBe(`${BASE}/api/sandboxes/sbx_1`);
     expect(init?.method).toBe("DELETE");
+    expect(init?.headers).toMatchObject({
+      "Content-Type": "application/json",
+    });
+    expect(init?.body).toBe("{}");
 
     stubFetch(async () => jsonResponse(202, {}));
     expect(
@@ -816,7 +811,7 @@ describe("patchSandboxViaHttp", () => {
 });
 
 describe("keepSandboxViaHttp", () => {
-  it("POSTs to the sandbox's keep route with no body", async () => {
+  it("POSTs an empty JSON object to the sandbox's keep route", async () => {
     const fetchMock = stubFetch(async () => jsonResponse(200, {}));
     expect(await keepSandboxViaHttp(BASE, BEARER, null, "sbx_1")).toEqual({
       kind: "ok",
@@ -825,7 +820,10 @@ describe("keepSandboxViaHttp", () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(String(url)).toBe(`${BASE}/api/sandboxes/sbx_1/keep`);
     expect(init?.method).toBe("POST");
-    expect(init?.body).toBeNull();
+    expect(init?.headers).toMatchObject({
+      "Content-Type": "application/json",
+    });
+    expect(init?.body).toBe("{}");
   });
 
   it("hands a 404 sandbox_not_found, a keep that lost to the idle timer, to the caller", async () => {
@@ -1154,7 +1152,7 @@ describe("getSandboxAutomationViaHttp", () => {
 describe("openSandboxAutomationViaHttp", () => {
   const row = { ...SUMMARY, kind: "automation" };
 
-  it("POSTs with no body; 200 is settled", async () => {
+  it("POSTs an empty JSON object when no pod is named; 200 is settled", async () => {
     const fetchMock = stubFetch(async () =>
       jsonResponse(200, { sandbox: row }),
     );
@@ -1162,7 +1160,10 @@ describe("openSandboxAutomationViaHttp", () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(String(url)).toBe(`${BASE}/api/sandboxes/automation`);
     expect(init?.method).toBe("POST");
-    expect(init?.body ?? null).toBeNull();
+    expect(init?.headers).toMatchObject({
+      "Content-Type": "application/json",
+    });
+    expect(init?.body).toBe("{}");
     expect(result.kind).toBe("ok");
     if (result.kind === "ok") expect(result.settled).toBe(true);
   });
