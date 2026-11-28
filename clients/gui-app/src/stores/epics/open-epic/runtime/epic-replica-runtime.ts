@@ -120,6 +120,7 @@ import {
 import { planEpicAdapterTransition } from "./epic-adapter-lifecycle";
 import {
   classifyEpicWriteCommandFailure,
+  UNCONFIRMED_WRITE_EXPIRY,
   EpicWriteCommandTransportUnavailableError,
   type EpicWriteCommandIntent,
   type EpicWriteCommandSender,
@@ -910,7 +911,10 @@ export function createEpicReplicaRuntime(
     commandQueue.resolve(commandId, {
       kind: "superseded",
       observedAtMs: environment.clock.now(),
-      via,
+      via:
+        via === "landed-overlay-ttl" && command.delivery === "unknown-outcome"
+          ? UNCONFIRMED_WRITE_EXPIRY
+          : via,
     });
   }
 

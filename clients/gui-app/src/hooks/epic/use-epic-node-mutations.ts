@@ -8,7 +8,10 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
-import { toastFromHostError } from "@/lib/host-error-toast";
+import {
+  HOST_UNKNOWN_OUTCOME_NOTICE,
+  toastFromHostError,
+} from "@/lib/host-error-toast";
 import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import { hostWriteFailureOutcome } from "@/lib/host/host-write-outcome";
 import { toastIndeterminateHostWrite } from "@/lib/owner-host-write-error-toast";
@@ -18,10 +21,20 @@ import { hostQueryKeys } from "@/lib/query-keys";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import type { CommandRecord } from "@traycer-clients/shared/replica-runtime";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { EpicWriteCommandIntent } from "@/stores/epics/open-epic/runtime/epic-write-command";
+import {
+  isUnconfirmedWriteExpiry,
+  type EpicWriteCommandIntent,
+} from "@/stores/epics/open-epic/runtime/epic-write-command";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import { toast } from "sonner";
 import { useStore } from "zustand";
+
+export class ExpiredEpicWriteOutcomeError extends Error {
+  constructor() {
+    super(HOST_UNKNOWN_OUTCOME_NOTICE);
+    this.name = "ExpiredEpicWriteOutcomeError";
+  }
+}
 
 interface CommandMutationCallbacks<Response, Variables> {
   readonly onSuccess?: (response: Response, variables: Variables) => void;
@@ -54,6 +67,9 @@ async function enqueueAndWait(
   }
   const command = await state.waitForWriteCommand(commandId);
   if (command.state === "committed") return command;
+  if (isUnconfirmedWriteExpiry(command.resolution)) {
+    throw new ExpiredEpicWriteOutcomeError();
+  }
   if (command.resolution?.kind === "rejected") {
     throw HostRpcError.fromWireEnvelope(
       {
@@ -228,6 +244,7 @@ function useEpicDeleteArtifactCommand(
       }
       return { deleted: true };
     } catch (error: unknown) {
+      if (error instanceof ExpiredEpicWriteOutcomeError) throw error;
       const normalized =
         error instanceof Error ? error : new Error(String(error));
       if (failurePresentation === "individual") {
@@ -308,6 +325,7 @@ export function useEpicUpdateArtifactStatus(artifactId: string | null) {
       });
       return { updated: true };
     } catch (error: unknown) {
+      if (error instanceof ExpiredEpicWriteOutcomeError) throw error;
       const normalized =
         error instanceof Error ? error : new Error(String(error));
       toast.error("Couldn't update status.", {
@@ -376,6 +394,7 @@ export function useEpicRenameArtifact(
       }
       return { updated: true };
     } catch (error: unknown) {
+      if (error instanceof ExpiredEpicWriteOutcomeError) throw error;
       const normalized =
         error instanceof Error ? error : new Error(String(error));
       toast.error("Couldn't rename artifact.", {

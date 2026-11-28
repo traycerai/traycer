@@ -2,7 +2,10 @@ import type { CommandRecord } from "@traycer-clients/shared/replica-runtime";
 import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { QueryClient } from "@tanstack/react-query";
-import type { EpicWriteCommandIntent } from "@/stores/epics/open-epic/runtime/epic-write-command";
+import {
+  isUnconfirmedWriteExpiry,
+  type EpicWriteCommandIntent,
+} from "@/stores/epics/open-epic/runtime/epic-write-command";
 import { EpicSessionEndedError } from "@/stores/epics/open-epic/store";
 import { rereadEpicTitlesFromHost } from "@/lib/cloud-epic-tasks-query/cache";
 import { hostWriteFailureOutcome } from "@/lib/host/host-write-outcome";
@@ -59,6 +62,7 @@ export function settleEpicTitleWrite(
         options.onCommitted();
         return;
       }
+      if (isUnconfirmedWriteExpiry(command.resolution)) return;
       const message =
         command.resolution?.kind === "rejected"
           ? command.resolution.reason

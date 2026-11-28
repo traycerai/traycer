@@ -185,22 +185,29 @@ export function toastFromOwnerHostBatchWriteFailures(
   outcomes: readonly OwnerHostBatchWriteOutcome[],
   copy: OwnerHostBatchWriteCopy,
 ): void {
-  toastFromOwnerHostBatchWriteFailuresWithUnconfirmed(outcomes, 0, copy);
+  toastFromOwnerHostBatchWriteFailuresWithUnconfirmed(
+    outcomes,
+    { beforeDispatch: 0, afterDispatch: 0 },
+    copy,
+  );
+}
+
+interface UnconfirmedBatchWriteRows {
+  readonly beforeDispatch: number;
+  readonly afterDispatch: number;
 }
 
 /**
- * {@link toastFromOwnerHostBatchWriteFailures} for a batch with
- * `unconfirmedRows` more selected rows whose write the host answered without
- * confirming it changed them - neither applied nor failed. They stay in the
- * selection's count, and beside any failure they make the result unknown, so
- * the notice is the `unconfirmed` summary. With no failure the batch stays
- * quiet, as an all-applied one does.
+ * Report definite failures alongside rows whose write was skipped or whose
+ * outcome is still unknown. The caller owns any neutral per-write notice.
  */
 export function toastFromOwnerHostBatchWriteFailuresWithUnconfirmed(
   outcomes: readonly OwnerHostBatchWriteOutcome[],
-  unconfirmedRows: number,
+  unconfirmed: UnconfirmedBatchWriteRows,
   copy: OwnerHostBatchWriteCopy,
 ): void {
+  const unconfirmedRows =
+    unconfirmed.beforeDispatch + unconfirmed.afterDispatch;
   const counted = outcomes.filter(
     (outcome) => outcome.error === null || !isLeftOutOfBatch(outcome.error),
   );
@@ -223,10 +230,10 @@ export function toastFromOwnerHostBatchWriteFailuresWithUnconfirmed(
     (failure) => !isHostTransportFailure(failure),
   );
   if (unconfirmedRows > 0 || failures.some(writeMayHaveApplied)) {
-    // The unconfirmed rows changed nothing, so the reachability line the
-    // counted rows would carry on their own stays true beside them.
+    // A dispatched write can still have changed its host even when every
+    // definite failure in the batch came from a host that was unreachable.
     const unreachable =
-      unconfirmedRows > 0
+      unconfirmedRows > 0 && unconfirmed.afterDispatch === 0
         ? unreachableNoticeOfCounted(counted, failures)
         : null;
     const lead =

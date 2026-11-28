@@ -23,7 +23,11 @@
  * futile rather than merely unlikely - and old hosts never emit it.
  */
 import type { CommandRecord } from "@traycer-clients/shared/replica-runtime";
-import type { EpicWriteCommandIntent } from "@/stores/epics/open-epic/runtime/epic-write-command";
+import {
+  isUnconfirmedWriteExpiry,
+  type EpicWriteCommandIntent,
+} from "@/stores/epics/open-epic/runtime/epic-write-command";
+import { HOST_UNKNOWN_OUTCOME_NOTICE } from "@/lib/host-error-toast";
 
 /** The host's verdict when the epic itself refuses writes. Non-retryable. */
 const READ_ONLY_CODE = "E_EPIC_READ_ONLY";
@@ -92,14 +96,16 @@ export function presentEpicWriteCommand(
   // `pending`, and reporting it as pending is exactly the over-claim this
   // stage exists to prevent - nothing is in flight and nothing will be
   // without the user.
-  if (command.delivery === "unknown-outcome") {
+  const expired = isUnconfirmedWriteExpiry(command.resolution);
+  if (command.delivery === "unknown-outcome" || expired) {
     return {
       stage: "unknown-outcome",
       statusLabel: "Outcome unknown",
-      detail:
-        "This was sent, but its result never came back, so it may or may not have been applied. It is not retried automatically.",
-      canRetry: true,
-      canDiscard: false,
+      detail: expired
+        ? HOST_UNKNOWN_OUTCOME_NOTICE
+        : "This was sent, but its result never came back, so it may or may not have been applied. It is not retried automatically.",
+      canRetry: !expired,
+      canDiscard: expired,
     };
   }
   switch (command.state) {

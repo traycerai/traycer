@@ -196,6 +196,7 @@ import { getNegotiatedHostMethods } from "@traycer-clients/shared/host-transport
 import { subscribeRecordWriteRouting } from "@/lib/host/owner-gone-write-routing";
 import { readRecordWriteServingHostId } from "@/hooks/epic/use-epic-record-mutation-client";
 import {
+  ExpiredEpicWriteOutcomeError,
   useEpicCreateArtifact,
   useEpicDeleteArtifactInBatch,
 } from "@/hooks/epic/use-epic-node-mutations";
@@ -1685,15 +1686,24 @@ function SidebarBulkDeleteController(props: {
           (sum, target) => sum + (selectedRows.get(target.id) ?? 1),
           0,
         );
+        let unknownRows = 0;
         toastFromOwnerHostBatchWriteFailuresWithUnconfirmed(
           targets
-            .map((target, index) => {
+            .flatMap((target, index) => {
               const result = results[index];
+              const rowCount = selectedRows.get(target.id) ?? 1;
+              if (
+                result.status === "rejected" &&
+                result.reason instanceof ExpiredEpicWriteOutcomeError
+              ) {
+                unknownRows += rowCount;
+                return [];
+              }
               const isArtifact = target.kind === "artifact";
               const outcome: OwnerHostBatchWriteOutcome = {
                 kind: isArtifact ? "artifact" : "agent",
                 hostId: isArtifact ? sessionHostId : agentHostId(target),
-                selectedRows: selectedRows.get(target.id) ?? 1,
+                selectedRows: rowCount,
                 error:
                   result.status === "rejected"
                     ? toHostRpcError(
@@ -1702,11 +1712,14 @@ function SidebarBulkDeleteController(props: {
                       )
                     : null,
               };
-              return { position: selectionPosition(index), outcome };
+              return [{ position: selectionPosition(index), outcome }];
             })
             .sort((left, right) => left.position - right.position)
             .map(({ outcome }) => outcome),
-          Math.max(0, confirmedRows - representedRows),
+          {
+            beforeDispatch: Math.max(0, confirmedRows - representedRows),
+            afterDispatch: unknownRows,
+          },
           sidebarBulkDeleteCopy(targets),
         );
         const successfulIds = targets.flatMap((target, index) =>
@@ -1719,8 +1732,8 @@ function SidebarBulkDeleteController(props: {
             tile.type !== "terminal-agent" &&
             successfulIds.includes(tile.id),
         );
-        const failedIds = targets.flatMap((target, index) =>
-          results[index].status === "rejected" ? [target.id] : [],
+        const hasUnresolvedSelection = results.some(
+          (result) => result.status === "rejected",
         );
         // Closing several tabs is one focus-relevant change, not N: closing
         // each through its own `prepareCloseCanvasTabFocusTarget` call would
@@ -1763,7 +1776,7 @@ function SidebarBulkDeleteController(props: {
           }
         });
         clearSelectedIds(successfulIds);
-        if (failedIds.length === 0) {
+        if (!hasUnresolvedSelection) {
           cancelSelection();
         } else {
           closeDeleteDialog();

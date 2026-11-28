@@ -1,4 +1,7 @@
-import type { CommandSendFailure } from "@traycer-clients/shared/replica-runtime";
+import type {
+  CommandResolution,
+  CommandSendFailure,
+} from "@traycer-clients/shared/replica-runtime";
 
 /**
  * First re-drive delay for a host that refused a write because its idempotency
@@ -38,6 +41,17 @@ import {
   type TicketStatus,
 } from "@traycer/protocol/common/registry";
 import { getRecordSchema } from "@traycer/protocol/framework/versioned-record";
+
+export const UNCONFIRMED_WRITE_EXPIRY = "unconfirmed-write-expiry";
+
+export function isUnconfirmedWriteExpiry(
+  resolution: CommandResolution | null,
+): boolean {
+  return (
+    resolution?.kind === "superseded" &&
+    resolution.via === UNCONFIRMED_WRITE_EXPIRY
+  );
+}
 
 /** The registry's own vocabulary, never a copy of it. */
 const ticketStatusSchema = getRecordSchema(

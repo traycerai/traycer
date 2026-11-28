@@ -136,7 +136,11 @@ import type {
   SnapshotFetchError,
 } from "./runtime/epic-runtime-projection";
 import type { EpicStreamClientFactory } from "./runtime/legacy-epic-stream-adapter";
-import { type EpicWriteCommandIntent } from "./runtime/epic-write-command";
+import {
+  isUnconfirmedWriteExpiry,
+  type EpicWriteCommandIntent,
+} from "./runtime/epic-write-command";
+import { toastIndeterminateHostWrite } from "@/lib/owner-host-write-error-toast";
 
 export type { EpicStreamClientFactory };
 export type {
@@ -1829,6 +1833,22 @@ export function createOpenEpicStore(
     // warm registry entry byte-eligible, and its subscriber may dispose this
     // store before `setState` returns. Its port has then released every holder.
     if (isDisposed()) return;
+    if (projected.writeCommands !== undefined) {
+      const previouslyExpired = new Set(
+        current.writeCommands
+          .filter((command) => isUnconfirmedWriteExpiry(command.resolution))
+          .map((command) => command.commandId),
+      );
+      if (
+        projected.writeCommands.some(
+          (command) =>
+            isUnconfirmedWriteExpiry(command.resolution) &&
+            !previouslyExpired.has(command.commandId),
+        )
+      ) {
+        toastIndeterminateHostWrite();
+      }
+    }
     const projectionSize = mainProjectionAccount.recordPatch(projected);
     if (projectionSize !== null) {
       options.accounting.settleMainProjectionBytes(
