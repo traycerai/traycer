@@ -449,6 +449,7 @@ function NotificationsSessionBody(
   // host where one exists, the bound host on a shell without one). The
   // app-wide effective host can still be unresolved when this stream opens.
   const servingHostClient = useHostClientFor(servingHostEntry);
+  const hasServingHostClient = servingHostClient !== null;
   const servingHostId = servingHostEntry?.hostId ?? null;
   // Whether THIS connection can be asked for the local activity plane. Read
   // from the stream client's own manifest prediction rather than from any
@@ -663,6 +664,7 @@ function NotificationsSessionBody(
       // read as every other whole-origin host write
       // (`hostOriginWriteAuthorized` in `merged-notifications.ts`).
       if (
+        hasServingHostClient &&
         (acknowledgementScope.originHostId === null ||
           acknowledgementScope.originHostId === servingHostId) &&
         authorizesCloudCapability(useAuthStore.getState().status)
@@ -673,7 +675,13 @@ function NotificationsSessionBody(
         markCloudEntityRead(acknowledgementScope);
       }
     },
-    [servingHostId, markEntityRead, markCloudEntityRead, notificationFeedMode],
+    [
+      hasServingHostClient,
+      servingHostId,
+      markEntityRead,
+      markCloudEntityRead,
+      notificationFeedMode,
+    ],
   );
   const consumeFocusedEntity = useCallback(
     (scope: FocusedNotificationScope): void => {
