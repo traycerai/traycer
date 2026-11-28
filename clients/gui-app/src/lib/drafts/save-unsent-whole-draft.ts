@@ -140,16 +140,10 @@ export async function saveUnsentWholeDraft(input: {
           if (!(await putImageBytesAtHash(hash, bytes))) return null;
         }
         if (!stillCurrent()) return null;
-        const stored = await putDraftBlobs(
-          POOL_HOST_ID,
-          client,
-          blobHashes,
-          send.userId,
+        const stored = new Set(
+          await putDraftBlobs(POOL_HOST_ID, client, blobHashes, send.userId),
         );
-        if (
-          !stillCurrent() ||
-          blobHashes.some((hash) => !stored.includes(hash))
-        )
+        if (!stillCurrent() || blobHashes.some((hash) => !stored.has(hash)))
           return null;
         const receipt = await client.request("drafts.mutateWhole", {
           kind: "save",
