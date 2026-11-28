@@ -1,4 +1,5 @@
 import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 /**
  * Host+folder selection for terminal creation from the sidebar "+" popover:
  * host section, folder list, and Launch action. CMD-T's in-pane opener uses
@@ -238,6 +239,8 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
               disabled={bindingsQuery.isFetching}
               onClick={() => {
                 if (showHostUpdateNeededForGesture(pin.resolvedHostId)) return;
+                if (pin.resolvedHostId !== null)
+                  redialHostForRetry(pin.resolvedHostId);
                 void bindingsQuery.refetch({ cancelRefetch: false });
               }}
             >

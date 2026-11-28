@@ -34,6 +34,7 @@ import {
   type ChatUsageDialogTarget,
 } from "@/stores/chats/chat-usage-dialog-store";
 import { cn } from "@/lib/utils";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 type UsageSummaryQueryResult = UseQueryResult<
   UsageSummaryResponse,
@@ -148,6 +149,7 @@ function ChatUsageDialogContent(props: {
         error={query.error}
         onRetry={() => {
           if (showHostUpdateNeededForGesture(props.hostId)) return;
+          redialHostForRetry(props.hostId);
           void query.refetch();
         }}
       />

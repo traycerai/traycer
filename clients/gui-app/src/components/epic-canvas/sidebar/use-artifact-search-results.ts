@@ -27,6 +27,7 @@ import {
   useArtifactFilter,
 } from "@/stores/epics/left-panel-store";
 import { useEpicSearchArtifacts } from "@/hooks/epic/use-epic-search-artifacts-query";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 const EMPTY_HITS: ReadonlyArray<SearchArtifactHit> = Object.freeze([]);
 
@@ -156,7 +157,10 @@ export function useArtifactSearchResults(args: {
     isUnsupported,
     isError,
     isFetching: query.isFetching,
-    refetch: () => void query.refetch(),
+    refetch: () => {
+      if (activeHostId !== null) redialHostForRetry(activeHostId);
+      void query.refetch();
+    },
   };
 }
 

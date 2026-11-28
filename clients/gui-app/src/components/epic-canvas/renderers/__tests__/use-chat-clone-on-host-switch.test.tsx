@@ -1,9 +1,11 @@
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
+import type { CloneChatOnHostSwitchArgs } from "@/lib/commands/actions/clone-chat-on-host-switch";
 import { useChatCloneOnHostSwitch } from "../use-chat-clone-on-host-switch";
 
-const cloneOnHostSwitchMock = vi.fn<(...args: unknown[]) => () => undefined>();
+const cloneOnHostSwitchMock =
+  vi.fn<(args: CloneChatOnHostSwitchArgs) => () => undefined>();
 
 vi.mock("sonner", () => ({
   toast: Object.assign(vi.fn(), { error: vi.fn(), info: vi.fn() }),
@@ -33,8 +35,20 @@ vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
 }));
 
 vi.mock("@/lib/commands/actions/clone-chat-on-host-switch", () => ({
-  cloneChatOnHostSwitch: (...args: unknown[]) => cloneOnHostSwitchMock(...args),
+  cloneChatOnHostSwitch: (args: CloneChatOnHostSwitchArgs) =>
+    cloneOnHostSwitchMock(args),
 }));
+
+const redialRemoteSessionsFor = vi.hoisted(() => vi.fn());
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/active-remote-sessions",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@traycer-clients/shared/host-transport/remote/active-remote-sessions")
+    >()),
+    redialRemoteSessionsFor,
+  }),
+);
 
 const cloneTargetState = {
   hostId: "host-B" as string | null,
@@ -100,5 +114,36 @@ describe("useChatCloneOnHostSwitch - S6 same-host refusal", () => {
       "The active host is this agent's own bound host - switch to a different host before cloning.",
     );
     expect(result.current.cloning).toBe(true);
+  });
+});
+
+describe("useChatCloneOnHostSwitch - profile catalog unavailable", () => {
+  it("redials the target computer before retrying a clone whose profiles could not be loaded", () => {
+    const { result } = renderHook(() => useChatCloneOnHostSwitch(ARGS));
+    act(() => {
+      result.current.clone();
+    });
+    const firstCall = cloneOnHostSwitchMock.mock.lastCall;
+    if (firstCall === undefined) throw new Error("expected a clone attempt");
+    const [firstAttempt] = firstCall;
+    act(() => {
+      firstAttempt.onProfileSelectionRequired({
+        status: "catalog-unavailable",
+        providerId: "claude-code",
+      });
+    });
+    const recovery = result.current.profileRecovery;
+    if (recovery === null) throw new Error("expected a profile recovery offer");
+    redialRemoteSessionsFor.mockClear();
+
+    act(() => {
+      recovery.retry();
+    });
+
+    expect(redialRemoteSessionsFor).toHaveBeenCalledExactlyOnceWith(
+      "host-B",
+      "user-retry",
+    );
+    expect(cloneOnHostSwitchMock).toHaveBeenCalledTimes(2);
   });
 });

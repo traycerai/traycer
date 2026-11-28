@@ -16,6 +16,7 @@ import {
   mergeChatSearchPages,
   type ChatSearchMergedResults,
 } from "@/lib/chat-search/chat-search-results";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 /** Everything a search request carries except the per-section paging. */
 export type ChatSearchBaseRequest = Omit<
@@ -166,6 +167,7 @@ export function useChatSearchResults(args: {
                   failedIndex < chatCursors.length ? "chats" : "messages",
                 message: failed.error.message,
                 retry: () => {
+                  redialRequesterHost(client);
                   void failed.refetch();
                 },
               },
@@ -187,6 +189,12 @@ export type ChatSearchExpansionStatus =
       /** A later page that failed; the rows before it stay. */
       readonly loadMoreError: ChatSearchPageError | null;
     };
+
+/** A Retry asks the host the search is sent to to redial. */
+function redialRequesterHost(client: HostClient<HostRpcRegistry> | null): void {
+  const hostId = client?.getActiveHostId() ?? null;
+  if (hostId !== null) redialHostForRetry(hostId);
+}
 
 export interface ChatSearchPageError {
   readonly message: string;
@@ -261,6 +269,7 @@ export function useChatSearchMessageRows(args: {
             : {
                 message: failed.error.message,
                 retry: () => {
+                  redialRequesterHost(client);
                   void failed.refetch();
                 },
               },

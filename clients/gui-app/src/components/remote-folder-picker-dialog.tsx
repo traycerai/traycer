@@ -74,6 +74,7 @@ import {
   type FolderPickerIntent,
 } from "@/stores/workspace/remote-folder-picker-store";
 import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 /**
  * Folder picker for hosts the client cannot open a native OS dialog for
@@ -377,6 +378,7 @@ function RemoteFolderPickerBody(): ReactNode {
           onShowFullPath={setFullPath}
           onRetry={() => {
             if (showHostUpdateNeededForGesture(hostId)) return;
+            if (hostId !== null) redialHostForRetry(hostId);
             // Retry receives focus and disappears when it succeeds - hand
             // the keyboard back to the combobox field either way.
             void browseQuery.refetch().finally(() => {

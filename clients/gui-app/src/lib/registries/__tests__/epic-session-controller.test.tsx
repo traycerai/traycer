@@ -123,6 +123,17 @@ vi.mock("@/lib/host", () => ({
   useAuthService: () => authServiceStub,
 }));
 
+const redialRemoteSessionsFor = vi.hoisted(() => vi.fn());
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/active-remote-sessions",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@traycer-clients/shared/host-transport/remote/active-remote-sessions")
+    >()),
+    redialRemoteSessionsFor,
+  }),
+);
+
 function resetCanvasStore(): void {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
 }
@@ -1007,6 +1018,28 @@ describe("EpicSessionController: session lifecycle with no surface mounted", () 
     await waitFor(() => {
       expect(presentations.at(-1)?.kind).toBe("ready");
     });
+  });
+
+  it("a person's retry of a failed open redials the computer the failure names", () => {
+    const EPIC_ID = "epic-failed-retry-redial";
+    __setEpicRuntimeWorkerFactoryForTests(() => {
+      throw new Error("Worker construction blocked by CSP");
+    });
+    openTestEpicTab("tab-failed-retry-redial", EPIC_ID, "");
+    const controller = getEpicSessionController();
+    const presentation =
+      controller.readEntryStatusForTests(EPIC_ID)?.presentation;
+    expect(presentation?.kind).toBe("failed");
+    const failedHostId = presentation?.targetHostId ?? null;
+    expect(failedHostId).not.toBeNull();
+    redialRemoteSessionsFor.mockClear();
+
+    controller.retry(EPIC_ID);
+
+    expect(redialRemoteSessionsFor).toHaveBeenCalledExactlyOnceWith(
+      failedHostId,
+      "user-retry",
+    );
   });
 
   it("a claim pending across sign-out builds nothing, arms no backoff, and is released", async () => {

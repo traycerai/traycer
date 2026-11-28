@@ -43,6 +43,8 @@ import {
 import { CredentialRefusalNote } from "@/components/providers/credential-refusal-note";
 import type { CachedProviderProfilesReader } from "@/hooks/providers/use-cached-providers-list";
 import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 import {
   ADD_AS_NEW_PROFILE_TEXT,
   differentAccountText,
@@ -99,6 +101,7 @@ export function ProviderProfileReauthPanel({
   // auto-reauth): on a sandbox no sign-in starts, not even the automatic one
   // this panel runs on mount.
   const credentialRefusal = useHostCredentialRefusal(null);
+  const signInHostId = useAddressableHostId();
   const startLogin = useProvidersStartLogin();
   const awaitLogin = useHostScopedProvidersAwaitLogin();
   const cancelLogin = useProvidersCancelLogin();
@@ -263,7 +266,10 @@ export function ProviderProfileReauthPanel({
         }}
         onCancel={cancel}
         retryBlocked={hostBlock?.kind === "macos"}
-        onRetry={start}
+        onRetry={() => {
+          if (signInHostId !== null) redialHostForRetry(signInHostId);
+          start();
+        }}
         onSignInAgain={signInAgain}
         onDone={onDone}
       />

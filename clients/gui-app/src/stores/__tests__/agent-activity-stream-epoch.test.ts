@@ -30,6 +30,17 @@ import {
   useAgentActivityStore,
 } from "@/stores/agent-activity-store";
 
+const redialRemoteSessionsFor = vi.hoisted(() => vi.fn());
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/active-remote-sessions",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@traycer-clients/shared/host-transport/remote/active-remote-sessions")
+    >()),
+    redialRemoteSessionsFor,
+  }),
+);
+
 /**
  * Records the frame/status handlers `AgentActivityStreamClient` installs so a
  * test can drive them directly - mirrors the `StubSession` in
@@ -261,6 +272,7 @@ describe("agent activity stream epoch handoff", () => {
 
   afterEach(() => {
     __resetAgentActivityStoreForTests();
+    redialRemoteSessionsFor.mockClear();
   });
 
   it("a live session's health does not survive into the next stream epoch", () => {
@@ -661,5 +673,44 @@ describe("agent activity stream epoch handoff", () => {
     expect(subscribeA).toHaveBeenCalledTimes(2);
     expect(subscribeB).toHaveBeenCalledTimes(1);
     expect(sessionB.close).not.toHaveBeenCalled();
+  });
+
+  it("rereadAgentActivity asks each open stream's computer to redial, and not a disposed one's", () => {
+    const reconnectEngine = createStubReconnectEngine();
+    openAgentActivityStream({
+      hostId: "host-redial-open",
+      reconnectEngine,
+      wsStreamClient: new StubHostStreamClient(
+        new StubSession(),
+        "host-stream-a",
+      ),
+      onAuthError: null,
+      plane: null,
+    });
+    const disposeB = openAgentActivityStream({
+      hostId: "host-redial-disposed",
+      reconnectEngine,
+      wsStreamClient: new StubHostStreamClient(
+        new StubSession(),
+        "host-stream-b",
+      ),
+      onAuthError: null,
+      plane: null,
+    });
+    disposeB();
+
+    rereadAgentActivity();
+
+    // Streams earlier tests left open are reread too, so this reads only the
+    // two hosts named here, which no other test opens.
+    expect(redialRemoteSessionsFor).toHaveBeenCalledWith(
+      "host-redial-open",
+      "user-retry",
+    );
+    expect(
+      redialRemoteSessionsFor.mock.calls.some(
+        (call) => call[0] === "host-redial-disposed",
+      ),
+    ).toBe(false);
   });
 });

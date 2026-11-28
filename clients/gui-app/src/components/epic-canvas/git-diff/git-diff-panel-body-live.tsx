@@ -1,4 +1,5 @@
 import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 import {
   useCallback,
   useEffect,
@@ -340,6 +341,7 @@ export function GitDiffPanelBodyLive(
   const { refetch: refetchBindings } = bindingsQuery;
   const retryBindings = useCallback(async (): Promise<void> => {
     if (showHostUpdateNeededForGesture(pin.resolvedHostId)) return;
+    if (pin.resolvedHostId !== null) redialHostForRetry(pin.resolvedHostId);
     await refetchBindings();
   }, [pin.resolvedHostId, refetchBindings]);
 

@@ -61,6 +61,7 @@ import {
   buildUsageHostSplitRows,
   resolveUsageHostName,
 } from "@/lib/usage-analytics/usage-host-split";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 export interface UsageSummaryPanelProps {
   readonly client: HostClient<HostRpcRegistry> | null;
@@ -331,6 +332,7 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
         chartGroupBy={chartGroupBy}
         onChartGroupByChange={setChartGroupBy}
         hostNames={props.hostNames}
+        currentHostId={props.currentHostId}
         hostScopeName={
           hostId === null ? null : resolveUsageHostName(hostId, props.hostNames)
         }
@@ -421,6 +423,8 @@ function UsageSummaryPanelBody(props: {
   readonly chartGroupBy: UsageChartGroupBy;
   readonly onChartGroupByChange: (groupBy: UsageChartGroupBy) => void;
   readonly hostNames: ReadonlyMap<string, string>;
+  /** The host the panel's client reads through, which Retry asks to redial. */
+  readonly currentHostId: string | null;
   /** The picked host's display name, or `null` for the All-hosts default. */
   readonly hostScopeName: string | null;
 }): ReactNode {
@@ -435,6 +439,7 @@ function UsageSummaryPanelBody(props: {
     chartGroupBy,
     onChartGroupByChange,
     hostNames,
+    currentHostId,
     hostScopeName,
   } = props;
 
@@ -455,6 +460,7 @@ function UsageSummaryPanelBody(props: {
       <UsageErrorCard
         error={query.error}
         onRetry={() => {
+          if (currentHostId !== null) redialHostForRetry(currentHostId);
           void query.refetch();
         }}
       />
@@ -568,6 +574,7 @@ function UsageSummaryPanelBody(props: {
           query={activityQuery}
           fallbackQuery={activityFallbackQuery}
           metric={metric}
+          currentHostId={currentHostId}
         />
       </div>
       <div>
@@ -605,8 +612,10 @@ function UsageActivitySection(props: {
   readonly query: UsageSummaryQueryResult;
   readonly fallbackQuery: UsageSummaryQueryResult;
   readonly metric: UsageMetric;
+  /** The host the panel's client reads through, which Retry asks to redial. */
+  readonly currentHostId: string | null;
 }): ReactNode {
-  const { query, fallbackQuery, metric } = props;
+  const { query, fallbackQuery, metric, currentHostId } = props;
   // A host too old for the year window answers the narrower read instead -
   // a shorter calendar, not an error. The fallback query is only ever
   // ENABLED for that classified rejection (see `isWindowTooWideError`), so
@@ -639,6 +648,7 @@ function UsageActivitySection(props: {
         <UsageErrorCard
           error={displayedError}
           onRetry={() => {
+            if (currentHostId !== null) redialHostForRetry(currentHostId);
             void query.refetch();
             void fallbackQuery.refetch();
           }}

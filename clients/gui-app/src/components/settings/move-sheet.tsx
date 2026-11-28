@@ -55,6 +55,7 @@ import { useEnvironmentMoveStartMutation } from "@/hooks/environment/use-environ
 import { usePersonalForMoveQuery } from "@/hooks/environment/use-personal-for-move-query";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostQuery } from "@/hooks/host/use-host-query";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import type { HostRpcRegistry } from "@/lib/host";
 import { ignoreError } from "@/lib/browser-view/ignore-error";
@@ -213,6 +214,7 @@ function MoveSheetBody(props: {
   const planAnswered = answeredThisOpening(plan);
   const refusal = planRefusal(plan, planAnswered, rerun.stoppedAgain);
   const retryPlan = (): void => {
+    redialHostForRetry(target.hostId);
     if (rerun.stopped && refusal !== null) {
       rerun.rerun(refusal, () => {
         setChoices(new Map());

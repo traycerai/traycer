@@ -18,6 +18,12 @@ import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 import type { AttachGrantProvision } from "@traycer/protocol/host-transport/remote/grant";
 import { HostRequestAbortedError } from "../../host-messenger";
+import {
+  acquireRemoteSession,
+  redialRemoteSessionsFor,
+  retireAllRemoteSessions,
+  type RemoteSessionIdentity,
+} from "../active-remote-sessions";
 import { RemoteSession } from "../remote-session";
 import { emptyStreamRegistry, FakeRelayHost } from "./fake-relay-host";
 const WORKTREE_GET_BINDING_CONTRACT = defineRpcContract({
@@ -379,4 +385,103 @@ describe("a read released by the loss of an admitted connection", () => {
       session.close();
     }
   }, 25_000);
+});
+
+function cachedIdentity(hostId: string): RemoteSessionIdentity {
+  return {
+    hostId,
+    userId: "user-1",
+    hostPublicKey: `pubkey-${hostId}`,
+    relayAttachUrl: `wss://relay.test/attach-${hostId}`,
+    authRecovery: "revalidate",
+    authEpoch: "lease-1",
+    openAuth: "session-grant-or-sign-in",
+  };
+}
+
+describe("a person's Retry on one remote computer", () => {
+  afterEach(() => {
+    retireAllRemoteSessions();
+  });
+
+  it("dials that computer at once after the ladder has climbed, and no other", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(1);
+    const shownAt: number[] = [];
+    const otherAt: number[] = [];
+    const shown = acquireRemoteSession(
+      cachedIdentity("host-shown"),
+      { proactiveWakeEligible: true },
+      () =>
+        sessionAnswering(
+          new FakeRelayHost(),
+          UNAVAILABLE,
+          shownAt,
+          emptyStreamRegistry,
+        ),
+    );
+    const other = acquireRemoteSession(
+      cachedIdentity("host-other"),
+      { proactiveWakeEligible: true },
+      () =>
+        sessionAnswering(
+          new FakeRelayHost(),
+          UNAVAILABLE,
+          otherAt,
+          emptyStreamRegistry,
+        ),
+    );
+    shown.start();
+    other.start();
+    let pressedAt: number | null = null;
+    let otherDialsAtPress = 0;
+    for (let step = 0; step < 80; step += 1) {
+      await vi.advanceTimersByTimeAsync(250);
+      // Four failed dials: the next rung is 8 s.
+      if (pressedAt === null && shownAt.length === 4) {
+        pressedAt = Date.now();
+        otherDialsAtPress = otherAt.length;
+        redialRemoteSessionsFor("host-shown", "user-retry");
+      }
+      if (pressedAt !== null && shownAt.length === 5) break;
+    }
+    expect(pressedAt).not.toBeNull();
+    expect(
+      (shownAt.at(4) ?? Number.POSITIVE_INFINITY) - (pressedAt ?? 0),
+    ).toBeLessThan(250);
+    // The other computer keeps its own rung.
+    expect(
+      otherAt.filter(
+        (at) => at > (pressedAt ?? 0) && at < (pressedAt ?? 0) + 250,
+      ),
+    ).toEqual([]);
+    expect(otherAt.length).toBeLessThanOrEqual(otherDialsAtPress + 1);
+    shown.close();
+    other.close();
+  });
+
+  it("dials nothing for a computer whose session is ready", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(1);
+    const relay = new FakeRelayHost();
+    const dialAt: number[] = [];
+    const view = acquireRemoteSession(
+      cachedIdentity("host-ready"),
+      { proactiveWakeEligible: true },
+      () => sessionAnswering(relay, GRANTED, dialAt, emptyStreamRegistry),
+    );
+    view.start();
+    try {
+      await vi.waitFor(() => expect(view.isReady()).toBe(true), {
+        timeout: 10_000,
+        interval: 20,
+      });
+      redialRemoteSessionsFor("host-ready", "user-retry");
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(view.isReady()).toBe(true);
+      expect(dialAt).toHaveLength(1);
+      expect(relay.openBearers).toHaveLength(1);
+    } finally {
+      view.close();
+    }
+  }, 20_000);
 });

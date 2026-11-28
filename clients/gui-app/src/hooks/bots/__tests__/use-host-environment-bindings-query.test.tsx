@@ -48,6 +48,16 @@ vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
 vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
   useCloudChatViewerId: () => "viewer",
 }));
+const redialRemoteSessionsFor = vi.hoisted(() => vi.fn());
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/active-remote-sessions",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@traycer-clients/shared/host-transport/remote/active-remote-sessions")
+    >()),
+    redialRemoteSessionsFor,
+  }),
+);
 
 function wrapper(props: { readonly children: ReactNode }): ReactNode {
   return (
@@ -66,6 +76,7 @@ function wrapper(props: { readonly children: ReactNode }): ReactNode {
 afterEach(() => {
   cleanup();
   runtime.client = null;
+  redialRemoteSessionsFor.mockReset();
   resetNegotiatedManifests();
   useAuthStore.setState(useAuthStore.getInitialState(), true);
 });
@@ -221,6 +232,52 @@ describe("useHostEnvironmentBindings retry", () => {
     });
     expect(statusCalls).toBe(2);
     expect(bindingCalls).toBe(0);
+  });
+
+  it("redials a host whose status read failed before reading its status again", async () => {
+    let statusCalls = 0;
+    let statusCallsAtRedial: number | null = null;
+    redialRemoteSessionsFor.mockImplementation(() => {
+      statusCallsAtRedial = statusCalls;
+    });
+    const { spine } = buildEnvironmentClient({
+      hostId: HOST_ID,
+      handlers: {
+        "environment.status": () => {
+          statusCalls += 1;
+          if (statusCalls === 1) return Promise.reject(new Error("offline"));
+          return environmentStatusFixture({ principal: { kind: "personal" } });
+        },
+        "environment.host.read": () => ({
+          ...BINDING,
+          sharingGeneration: null,
+        }),
+      },
+    });
+    runtime.client = spine;
+    recordNegotiatedHostManifest(HOST_ID, {
+      "environment.status": { major: 1, minor: 1 },
+      "environment.host.read": { major: 1, minor: 1 },
+    });
+    const { result } = renderHook(
+      () => useHostEnvironmentBindings([HOST_ID], true),
+      { wrapper },
+    );
+
+    await waitFor(() => {
+      expect(result.current.failedHostIds).toEqual([HOST_ID]);
+    });
+    expect(redialRemoteSessionsFor).not.toHaveBeenCalled();
+
+    result.current.retryFailed();
+
+    expect(redialRemoteSessionsFor.mock.calls).toEqual([
+      [HOST_ID, "user-retry"],
+    ]);
+    expect(statusCallsAtRedial).toBe(1);
+    await waitFor(() => {
+      expect(statusCalls).toBe(2);
+    });
   });
 
   it("keeps a failed host failed until status answers non-Local, then reads its binding", async () => {

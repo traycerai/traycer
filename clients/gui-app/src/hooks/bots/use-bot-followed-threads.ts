@@ -23,6 +23,7 @@ import {
   followingOf,
 } from "@/lib/bots/bot-notification-settings";
 import { advanceTarget, threadHasNewReplies } from "@/lib/bots/bot-read-cursor";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 /** A thread the person follows, with the bot whose channel it hangs off. */
 export type BotFollowedThread = {
@@ -159,6 +160,7 @@ export function useBotFollowedThreads(
       failed.length === 0
         ? null
         : () => {
+            redialHostForRetry(hostId);
             for (const read of failed) void read.refetch();
           },
   };

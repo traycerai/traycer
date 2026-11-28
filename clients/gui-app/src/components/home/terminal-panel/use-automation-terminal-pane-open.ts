@@ -34,6 +34,7 @@ import {
   useLandingPanelStore,
   type AutomationTerminalRequest,
 } from "@/stores/home/landing-panel-store";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 const INDEPENDENT_SCOPE: PlainTerminalScope = { kind: "independent" };
 
@@ -216,6 +217,7 @@ export function useAutomationTerminalPaneOpen(
   }, [attempt, openTarget, wake]);
   const run = (): void => {
     if (starting || currentAttempt.current !== attempt) return;
+    if (attempt.hostId !== null) redialHostForRetry(attempt.hostId);
     setRetryCode(failureCode);
     open.reset();
     create.reset();

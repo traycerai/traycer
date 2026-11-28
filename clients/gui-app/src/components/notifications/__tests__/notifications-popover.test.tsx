@@ -144,6 +144,17 @@ const activeHostIdRef = vi.hoisted(() => ({
   value: null as string | null,
 }));
 
+const redialRemoteSessionsFor = vi.hoisted(() => vi.fn());
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/active-remote-sessions",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@traycer-clients/shared/host-transport/remote/active-remote-sessions")
+    >()),
+    redialRemoteSessionsFor,
+  }),
+);
+
 const notificationFeedMode = vi.hoisted<{ value: "local" | "cloud" }>(() => ({
   value: "local",
 }));
@@ -972,6 +983,7 @@ describe("NotificationsPopover", () => {
     useCloudNotificationsStore.getState().reset();
     notificationFeedMode.value = "local";
     readySessionHosts.value.clear();
+    redialRemoteSessionsFor.mockReset();
   });
 
   it("shows loading instead of caught up before the first cloud snapshot", async () => {
@@ -1501,6 +1513,45 @@ describe("NotificationsPopover", () => {
         { observedVersion: 1 },
       );
     });
+  });
+
+  it("asks the notification host to redial when a failed page is retried", async () => {
+    bindHostClient();
+    useHostNotificationsStore.getState().applySnapshot({
+      attention: { entries: [], nextCursor: null },
+      recent: {
+        entries: [hostDone("entry-local", 100, null)],
+        nextCursor: {
+          kind: "chronological",
+          updatedAt: 100,
+          id: "entry-local",
+        },
+      },
+      summary: { unreadCount: 1, attentionCount: 0 },
+    });
+    hostRequestMock.mockImplementation((method: string) =>
+      method === "host.notifications.list"
+        ? Promise.reject(new Error("host unreachable"))
+        : defaultHostRequest(method),
+    );
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    fireEvent.click(await screen.findByTestId("notifications-load-older"));
+    fireEvent.click(
+      await screen.findByTestId("notifications-load-older-retry"),
+    );
+
+    expect(redialRemoteSessionsFor).toHaveBeenCalledWith(
+      mockLocalHostEntry.hostId,
+      "user-retry",
+    );
   });
 
   it("clears every lane the mixed feed renders, not just the cloud one", async () => {

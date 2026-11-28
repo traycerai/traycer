@@ -89,6 +89,7 @@ import { CredentialRefusalNote } from "@/components/providers/credential-refusal
 import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
 import { HostReadFailure } from "@/components/settings/host-scope/host-scope-gate";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 const EMPTY_MCP_SERVERS: readonly ProviderMcpServer[] = [];
 function mcpListPresentation(listData: McpListData | undefined): {
@@ -1062,6 +1063,7 @@ export function ProviderMcpTab(props: {
         blockingNoRows={blockingNoRows}
         errorMessage={listError?.message ?? null}
         onRetryList={async () => {
+          if (hostId !== null) redialHostForRetry(hostId);
           await listQuery.refetch();
         }}
         servers={filteredServers}

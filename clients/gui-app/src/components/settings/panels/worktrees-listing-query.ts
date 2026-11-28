@@ -19,6 +19,7 @@ import { logPerfEvent } from "@/lib/perf/perf-telemetry";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 import {
   useWorktreeFirstPaintPerf,
   useWorktreeListQueryPerf,
@@ -454,7 +455,10 @@ export function useWorktreeListing(
         hostId: readiness.hostId,
       });
     },
-    retryPartial: () => fetchNextPage(),
+    retryPartial: () => {
+      if (readiness.hostId !== null) redialHostForRetry(readiness.hostId);
+      return fetchNextPage();
+    },
     isRefreshPending: refreshMutation.isPending,
     lastUpdatedAt: dataUpdatedAt === 0 ? null : dataUpdatedAt,
     isSettled: isSuccess && !hasNextPage && fetchStatus === "idle",

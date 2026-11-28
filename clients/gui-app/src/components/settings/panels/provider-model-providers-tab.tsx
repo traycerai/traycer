@@ -30,6 +30,7 @@ import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
 import { useProvidersModelProviderAuth } from "@/hooks/providers/use-providers-model-provider-auth-mutation";
 import { useHostBinding } from "@/lib/host/runtime";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 import {
   modelProviderAuthErrorMessage,
   modelProviderListErrorMessage,
@@ -740,6 +741,7 @@ export function ProviderModelProvidersTab(props: {
         packPreparing={packPreparing}
         providerLabel={providerLabel}
         onRetry={() => {
+          if (hostId !== null) redialHostForRetry(hostId);
           void listQuery.refetch();
         }}
         entries={filtered}

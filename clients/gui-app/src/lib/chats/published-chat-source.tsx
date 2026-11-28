@@ -5,6 +5,7 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useCloudChatPayload } from "@/hooks/chats/use-cloud-chat-queries";
 import type { CloudChatPayloadBytes } from "@/lib/chats/cloud-chat-payloads";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 /**
  * Where a chat surface's HEAVY content comes from, when it is not this
@@ -118,6 +119,12 @@ export interface PublishedSnapshotDiff {
 export interface PayloadReadFailure {
   /** Re-issues the reads that failed - and only those. */
   readonly retry: () => void;
+}
+
+/** A Retry asks the host the payload reads go through to redial. */
+function redialSourceHost(client: PublishedChatSource["client"]): void {
+  const hostId = client?.getActiveHostId() ?? null;
+  if (hostId !== null) redialHostForRetry(hostId);
 }
 
 /** One side's answer, as much of a payload query as the derivation reads. */
@@ -246,6 +253,7 @@ export function usePublishedSnapshotDiff(args: {
   // so a side that answered holds bytes that cannot become different bytes -
   // refetching it would spend a request to receive what it already has.
   const retry = (): void => {
+    redialSourceHost(client);
     if (before.isError) void before.refetch();
     if (after.isError) void after.refetch();
   };
@@ -305,6 +313,7 @@ export function usePublishedPlanContent(args: {
       truncation: null,
       failure: {
         retry: () => {
+          redialSourceHost(args.source?.client ?? null);
           void query.refetch();
         },
       },

@@ -11,6 +11,7 @@ import type {
   BotReadFailureKind,
   BotReadStaleKind,
 } from "@/lib/bots/bot-read-view";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 import { useMessageTime } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -65,6 +66,10 @@ export function BotReadNoticeView(props: {
 }): ReactNode {
   const { notice, surface, hostId } = props;
   const { view } = notice;
+  const retry = (): void => {
+    redialHostForRetry(hostId);
+    notice.retry();
+  };
   if (view.kind === "stale") {
     return (
       <StaleLine
@@ -72,7 +77,7 @@ export function BotReadNoticeView(props: {
         loadedAt={view.loadedAt}
         surface={surface}
         hostId={hostId}
-        retry={notice.retry}
+        retry={retry}
         retrying={notice.retrying}
       />
     );
@@ -82,7 +87,7 @@ export function BotReadNoticeView(props: {
       failure={view.failure}
       surface={surface}
       hostId={hostId}
-      retry={notice.retry}
+      retry={retry}
       retrying={notice.retrying}
     />
   );

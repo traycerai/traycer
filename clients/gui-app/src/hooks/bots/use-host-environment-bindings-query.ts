@@ -31,6 +31,7 @@ import {
   useAuthStore,
 } from "@/stores/auth/auth-store";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 const HOST_READ_METHOD = "environment.host.read";
 const POOL_READ_METHOD = "environment.binding.read";
@@ -91,7 +92,8 @@ export interface HostEnvironmentBindings {
   /**
    * Asks the failed hosts again: the status of a host whose status failed
    * (its binding follows from the answer), the binding of one whose binding
-   * failed. A no-op when none failed.
+   * failed. A person's Retry: each failed host's remote session redials
+   * first, since a failed read can be a failed dial. A no-op when none failed.
    */
   readonly retryFailed: () => void;
 }
@@ -235,6 +237,7 @@ export function useHostEnvironmentBindings(
         ownSettingsHostIds,
         failedHostIds,
         retryFailed: () => {
+          for (const hostId of failedHostIds) redialHostForRetry(hostId);
           for (const retry of failedRetries) void retry();
         },
       };

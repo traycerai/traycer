@@ -1,4 +1,5 @@
 import { plainTerminalFleetIdentityKey } from "@traycer/protocol/host/terminal/plain-schemas";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 export const EPIC_TERMINAL_DURABLE_CREATE_DEFAULT_COLS = 80;
 export const EPIC_TERMINAL_DURABLE_CREATE_DEFAULT_ROWS = 24;
@@ -249,6 +250,7 @@ export function retryEpicTerminalDurableCreate(
 ): void {
   const job = jobsByLifetimeKey.get(lifetimeKey(hostId, terminalId));
   if (job === undefined || job.status !== "failed") return;
+  redialHostForRetry(hostId);
   job.status = "accepted";
   job.error = null;
   job.inflight = null;

@@ -27,6 +27,7 @@ import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
 import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useBotSearchStore } from "@/stores/bots/bot-search-store";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 const METHOD = "bot.conversation.search";
 
@@ -167,6 +168,14 @@ export function useBotConversationSearch(): BotConversationSearchResults {
     restartedFor.current = base;
     await queryClient.resetQueries({ queryKey, exact: true });
   };
+  // A Retry asks each host its pages come from to redial, a source naming no
+  // host being the tab's.
+  const redialSources = (sources: ReadonlyArray<BotSearchSource>): void => {
+    for (const source of sources) {
+      const hostId = source.hostId ?? client?.getActiveHostId() ?? null;
+      if (hostId !== null) redialHostForRetry(hostId);
+    }
+  };
   return {
     query,
     pages: results.data,
@@ -176,7 +185,17 @@ export function useBotConversationSearch(): BotConversationSearchResults {
     loadingMore: results.isFetchingNextPage,
     loadMore: () => void loadMore(false),
     moreFailed: results.isFetchNextPageError,
-    retryMore: () => void loadMore(true),
-    retry: () => void refetch(),
+    retryMore: () => {
+      redialSources(results.data?.pages.at(-1)?.next ?? []);
+      void loadMore(true);
+    },
+    retry: () => {
+      redialSources(
+        results.data?.pageParams.flat() ?? [
+          botSearchFirstSource(scope, reachableHostOf),
+        ],
+      );
+      void refetch();
+    },
   };
 }

@@ -1,4 +1,5 @@
 import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 /**
  * Shared bootstrap for `TerminalTile` and `TuiAgentTile`. Owns:
  *
@@ -462,6 +463,7 @@ export function useTerminalTileBootstrap(
   const retrySessionKind = input.sessionKind;
   const retry = useCallback(() => {
     if (showHostUpdateNeededForGesture(input.hostId)) return;
+    redialHostForRetry(input.hostId);
     hasDispatchedRef.current = false;
     setCreateRetryError(create.error);
     create.reset();

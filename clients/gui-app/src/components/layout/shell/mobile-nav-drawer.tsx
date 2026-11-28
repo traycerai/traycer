@@ -81,6 +81,7 @@ import {
   useMobileDrawerTaskPainted,
 } from "./mobile-drawer-history-state";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 const ROW_CLASS = "h-11 w-full justify-start gap-3 px-3";
 
@@ -610,6 +611,7 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
           size="sm"
           data-testid="mobile-nav-task-list-retry"
           onClick={() => {
+            if (hostId !== null) redialHostForRetry(hostId);
             void refetch();
           }}
         >

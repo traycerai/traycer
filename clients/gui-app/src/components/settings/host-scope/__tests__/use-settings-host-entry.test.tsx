@@ -172,6 +172,16 @@ vi.mock("@/lib/host", async (importOriginal) => {
 vi.mock("@/hooks/host/use-host-client-for", () => ({
   useHostClientFor: () => entryClient,
 }));
+const redialRemoteSessionsFor = vi.hoisted(() => vi.fn());
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/active-remote-sessions",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@traycer-clients/shared/host-transport/remote/active-remote-sessions")
+    >()),
+    redialRemoteSessionsFor,
+  }),
+);
 vi.mock("@/hooks/environment/use-environment-invitations", () => ({
   useEnvironmentInvitationsQuery: () => ({
     data: { invitations: [] },
@@ -1237,6 +1247,34 @@ describe("Settings entry host resolution", () => {
     );
     expect(harness.bindingRequests).toEqual([]);
     expect(rendered.result.current.retryEntryStatus).not.toBeNull();
+  });
+
+  it("redials the remote computer whose failed status read a person retries", async () => {
+    entryClient = makeClient();
+    const target = targetOption("retried-status", "remote");
+    recordNegotiatedHostManifest(target.hostId, {
+      "environment.status": { major: 1, minor: 2 },
+    });
+    const { rendered, queryClient } = requestEntry(target);
+    await act(async () => {
+      await queryClient
+        .fetchQuery(
+          queryOptions({
+            queryKey: queryKeys.hostMethod<
+              HostRpcRegistry,
+              "environment.status"
+            >(target.hostId, "environment.status", {}),
+            queryFn: () => Promise.reject(new Error("status unavailable")),
+          }),
+        )
+        .catch(() => undefined);
+    });
+    redialRemoteSessionsFor.mockClear();
+    act(() => rendered.result.current.retryEntryStatus?.());
+    expect(redialRemoteSessionsFor).toHaveBeenCalledExactlyOnceWith(
+      target.hostId,
+      "user-retry",
+    );
   });
 
   it("holds a failed status entry in loading, retries its status, then completes Local", async () => {

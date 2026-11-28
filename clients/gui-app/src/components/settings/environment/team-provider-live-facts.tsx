@@ -19,6 +19,7 @@ import { useConfigurationSource } from "./configuration-source";
 import { usePickedTeamLabel } from "./team-pick-label";
 import { TeamReadFailed } from "./team-read-failed";
 import { TeamContentNeedsHost } from "./team-content-needs-host";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 export function TeamProviderLiveFacts(props: {
   readonly providerId: ProviderId;
@@ -59,7 +60,11 @@ export function TeamProviderLiveFacts(props: {
           {query.isError ? (
             <TeamReadFailed
               message="Couldn't read this host's providers."
-              onRetry={() => void query.refetch()}
+              onRetry={() => {
+                const hostId = scope.viewingHost?.hostId ?? null;
+                if (hostId !== null) redialHostForRetry(hostId);
+                void query.refetch();
+              }}
             />
           ) : null}
           {state === undefined ? null : (

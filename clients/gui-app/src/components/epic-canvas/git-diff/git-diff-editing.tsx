@@ -1,4 +1,5 @@
 import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 import {
   useCallback,
   useEffect,
@@ -543,6 +544,7 @@ export function useGitDiffEditing(
     editSession: gitDiffEditSession,
     retry: () => {
       if (showHostUpdateNeededForGesture(args.hostId)) return;
+      redialHostForRetry(args.hostId);
       fileSession.retry();
     },
     keepMine,

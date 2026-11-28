@@ -44,7 +44,10 @@ type OnboardingScript = { setup: BotOnboardingSetup | null } | "fails";
 const mocks = vi.hoisted(() => {
   const initialSupport = (): boolean | null => true;
   const initialOnboardingReads = (): Record<string, OnboardingScript> => ({});
-  const hostClient = { stub: "host-client" };
+  const hostClient = {
+    stub: "host-client",
+    getActiveHostId: (): string | null => "host-home",
+  };
   const environmentRefetch = vi.fn(() => Promise.resolve());
   const botRefetch = vi.fn(() => Promise.resolve());
   return {

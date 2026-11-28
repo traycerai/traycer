@@ -26,6 +26,8 @@ import {
 } from "@/lib/provider-ordering";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision-padding";
+import { useOptionalHostClient } from "@/lib/host";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 type SkillsQuery = UseQueryResult<SkillsListData, HostRpcError>;
 type PluginsQuery = UseQueryResult<PluginsListData, HostRpcError>;
@@ -285,6 +287,9 @@ function DiscoveryRetryNotice(props: {
   readonly plugins: PluginsQuery | null;
 }) {
   const { skills, plugins } = props;
+  // Both lists are read through this surface's host client, the computer
+  // Try again asks to redial.
+  const client = useOptionalHostClient();
   if (skills?.isError !== true && plugins?.isError !== true) return null;
   return (
     <div className="flex items-center justify-between gap-3 text-xs">
@@ -295,6 +300,8 @@ function DiscoveryRetryNotice(props: {
         type="button"
         className="shrink-0 rounded underline underline-offset-4 focus-visible:outline-2"
         onClick={() => {
+          const hostId = client?.getActiveHostId() ?? null;
+          if (hostId !== null) redialHostForRetry(hostId);
           if (skills?.isError === true) void skills.refetch();
           if (plugins?.isError === true) void plugins.refetch();
         }}

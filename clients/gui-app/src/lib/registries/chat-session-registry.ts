@@ -11,6 +11,7 @@ import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/h
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { HostKind } from "@traycer-clients/shared/host-client/host-directory";
 import { signInRecoveryForStream } from "@/lib/host/stream-presents-sign-in";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 import { useAuthService, useHostClient } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
@@ -584,6 +585,10 @@ function useChatSessionHandleInContainer(input: {
             // neither is evidence of a dead session, so neither escalates.
             transportSilentFor: (ms) =>
               boundStreamClient?.isSilentFor?.(ms) ?? false,
+            // The computer the transport above is opened on, not `hostId`.
+            redialTransportHost: () => {
+              redialHostForRetry(servingHostId);
+            },
             fatalCloseNotification,
           }),
       );

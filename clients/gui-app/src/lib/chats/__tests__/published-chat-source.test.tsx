@@ -7,6 +7,11 @@ import {
   screen,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import type { FileChangeSegment as FileChangeSegmentModel } from "@/stores/composer/chat-store";
 import { FileChangeSegment } from "@/components/chat/segments/file-change-segment";
 import { ThemeProvider } from "@/providers/theme-provider";
@@ -116,6 +121,17 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => null,
 }));
 
+const redialRemoteSessionsFor = vi.hoisted(() => vi.fn());
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/active-remote-sessions",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@traycer-clients/shared/host-transport/remote/active-remote-sessions")
+    >()),
+    redialRemoteSessionsFor,
+  }),
+);
+
 vi.mock("@/hooks/snapshots/use-snapshot-diff-query", () => ({
   useSnapshotDiffQuery: () => ({ data: undefined, isLoading: false }),
 }));
@@ -124,6 +140,7 @@ afterEach(() => {
   cleanup();
   readPayload.mockClear();
   refetched.mockClear();
+  redialRemoteSessionsFor.mockClear();
   failedHashes.clear();
   payloadAnswer.current = undefined;
 });
@@ -391,6 +408,41 @@ describe("published chat source", () => {
     result.current.failure?.retry();
 
     expect(refetched.mock.calls.map((call) => call[0])).toEqual([AFTER_HASH]);
+  });
+
+  it("asks the computer the reads go through to redial on a retry", () => {
+    payloadAnswer.current = { kind: "text", text: "x", isTruncated: false };
+    failedHashes.add(AFTER_HASH);
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: { invalidateHostScope: () => undefined },
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+      messenger: new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => "payload-retry",
+        handlers: {},
+      }),
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({ origin: "renderer", bearerToken: "token" }),
+    );
+    const client = spine.createRequester(mockLocalHostEntry);
+
+    const { result } = renderHook(() =>
+      usePublishedSnapshotDiff({
+        source: { identity: IDENTITY, client },
+        beforeHash: BEFORE_HASH,
+        afterHash: AFTER_HASH,
+        enabled: true,
+      }),
+    );
+    result.current.failure?.retry();
+
+    expect(redialRemoteSessionsFor).toHaveBeenCalledWith(
+      mockLocalHostEntry.hostId,
+      "user-retry",
+    );
   });
 
   it("keeps a pending read loading rather than calling it a failure", () => {

@@ -1,4 +1,5 @@
 import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
@@ -903,6 +904,7 @@ function WorkspaceFileTileLive(props: {
               state={editSession.state}
               onRetry={() => {
                 if (showHostUpdateNeededForGesture(tabHostId)) return;
+                redialHostForRetry(tabHostId);
                 editSession.retry();
               }}
               onKeepMine={() => {

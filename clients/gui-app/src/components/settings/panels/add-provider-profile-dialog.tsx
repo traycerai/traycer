@@ -23,6 +23,7 @@ import {
   type ProviderProfileAccentColor,
 } from "@traycer/protocol/host/provider-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 import { ProviderProfileCard } from "@/components/providers/provider-profile-card";
 import { AccentDot } from "@/components/providers/accent-dot";
 import {
@@ -230,9 +231,11 @@ function ProviderProfileSignInDialog({
   const openLink = useOpenLink();
   // Every entry point gates on the target host already; this is the floor
   // under all of them, so no sign-in ever starts on a sandbox.
-  const credentialRefusal = useHostCredentialRefusal(
-    client === null ? null : client.getActiveHostId(),
-  );
+  const signInHostId = client === null ? null : client.getActiveHostId();
+  const credentialRefusal = useHostCredentialRefusal(signInHostId);
+  const redialSignInHost = (): void => {
+    if (signInHostId !== null) redialHostForRetry(signInHostId);
+  };
   const supportsShareSkillsAndPlugins =
     PROVIDER_SHARES_SKILLS_AND_PLUGINS[state.providerId];
   const [shareSkillsAndPlugins, setShareSkillsAndPlugins] = useState(
@@ -536,7 +539,10 @@ function ProviderProfileSignInDialog({
                 void openLink(url, "auth", null);
               }}
               onCancel={() => close(false)}
-              onRetryLogin={linkAccount}
+              onRetryLogin={() => {
+                redialSignInHost();
+                linkAccount();
+              }}
               onRetryFinalize={retryFinalize}
             />
           </div>
@@ -582,7 +588,10 @@ function ProviderProfileSignInDialog({
           onUse={complete}
           onSignInWithAnother={linkAccount}
           listRereadPending={flow.listRereadPending}
-          onRetryListRead={flow.retryListRead}
+          onRetryListRead={() => {
+            redialSignInHost();
+            flow.retryListRead();
+          }}
           onDone={() => {
             onFailedAttempt(null);
             onOpenChange(false);

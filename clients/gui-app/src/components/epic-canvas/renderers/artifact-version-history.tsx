@@ -1,4 +1,5 @@
 import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { hostNameFromLabel } from "@/lib/host/host-name";
 import { useRef, useState, type ReactNode } from "react";
@@ -716,6 +717,7 @@ function ArtifactVersionHistoryPanel(props: {
                   className="mt-2"
                   onClick={() => {
                     if (showHostUpdateNeededForGesture(props.hostId)) return;
+                    redialHostForRetry(props.hostId);
                     void history.refetch();
                   }}
                 >
@@ -795,6 +797,7 @@ function ArtifactVersionHistoryPanel(props: {
               }
               onRetry={() => {
                 if (showHostUpdateNeededForGesture(props.hostId)) return;
+                redialHostForRetry(props.hostId);
                 if (selectedBlob.isError) void selectedBlob.refetch();
                 if (comparisonBlob.isError) void comparisonBlob.refetch();
               }}
@@ -821,6 +824,7 @@ function ArtifactVersionHistoryPanel(props: {
           setUnavailable(null);
         }}
         onRetry={() => {
+          redialHostForRetry(props.hostId);
           if (restoreTarget !== null) requestPreflight(restoreTarget, false);
         }}
         onConfirm={executeRestore}

@@ -30,6 +30,7 @@ import {
 } from "@/components/ui/dialog";
 import { useEnvironmentMoveStartMutation } from "@/hooks/environment/use-environment-move-start-mutation";
 import { useHostQuery } from "@/hooks/host/use-host-query";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { ignoreError } from "@/lib/browser-view/ignore-error";
 import { authQueryKeys } from "@/lib/query-keys";
@@ -177,7 +178,10 @@ export function TeamGiveDialog(props: {
           teamLabel={team.label}
           versionDiffers={versionDiffers}
           planError={planError}
-          onRetryPlan={() => void plan.refetch().catch(ignoreError)}
+          onRetryPlan={() => {
+            redialHostForRetry(props.hostId);
+            void plan.refetch().catch(ignoreError);
+          }}
           notFinished={notFinished || ended}
           startError={
             ownershipNotConfirmed ? TEAM_TRANSFER_NOT_CONFIRMED : startError

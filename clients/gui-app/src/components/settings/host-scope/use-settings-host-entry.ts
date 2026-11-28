@@ -15,6 +15,7 @@ import { useHostOptions } from "@/components/settings/host-scope/use-host-option
 import { useHostEnvironmentBindings } from "@/hooks/bots/use-host-environment-bindings-query";
 import type { HostRpcRegistry } from "@/lib/host";
 import { queryKeys } from "@/lib/query-keys";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { useHostNegotiatedMethodVersions } from "@/hooks/host/use-host-negotiated-method-version";
@@ -126,6 +127,7 @@ export function useSettingsHostEntry(): {
   }, [resolved]);
   const retryStatus = (): void => {
     if (targetHostId === null) return;
+    redialHostForRetry(targetHostId);
     void queryClient.refetchQueries({
       queryKey: queryKeys.hostMethod<HostRpcRegistry, "environment.status">(
         targetHostId,

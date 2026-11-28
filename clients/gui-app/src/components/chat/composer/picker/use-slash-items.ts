@@ -13,6 +13,7 @@ import type {
   ComposerPickerStore,
   ComposerSlashScope,
 } from "./composer-picker-store";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 export interface UseSlashItemsParams {
   readonly pickerStore: ComposerPickerStore;
@@ -79,8 +80,10 @@ export function useSlashItems(params: UseSlashItemsParams): void {
   });
 
   const retryLoad = useCallback(() => {
+    const hostId = hostClient?.getActiveHostId() ?? null;
+    if (hostId !== null) redialHostForRetry(hostId);
     void refetch();
-  }, [refetch]);
+  }, [hostClient, refetch]);
 
   const items = useMemo<ReadonlyArray<ComposerPickerItem>>(
     () => slashItemsForScope(commands, slashScope),

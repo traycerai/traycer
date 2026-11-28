@@ -60,6 +60,7 @@ import {
 } from "@/components/epic-canvas/renderers/xterm-host-registry";
 import { HostTeamPeopleProvider } from "@/hooks/identity/use-host-team-people";
 import { useTerminalSessionHandle } from "@/lib/registries/terminal-session-registry";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 const INDEPENDENT_SCOPE: TerminalScope = { kind: "independent" };
 const TERMINAL_DEFAULT_COLS = 80;
@@ -432,6 +433,7 @@ function LandingTerminalDurableState(props: {
         isPending={props.requestPending}
         onRetry={() => {
           if (showHostUpdateNeededForGesture(props.tab.hostId)) return;
+          redialHostForRetry(props.tab.hostId);
           props.retry();
         }}
       />

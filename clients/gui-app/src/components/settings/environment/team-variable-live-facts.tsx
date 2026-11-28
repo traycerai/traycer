@@ -7,6 +7,7 @@ import { useConfigurationSource } from "./configuration-source";
 import { usePickedTeamLabel } from "./team-pick-label";
 
 import { TeamReadFailed } from "./team-read-failed";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 export function TeamVariableLiveFacts(): ReactNode {
   const source = useConfigurationSource();
   const scope = useTeamViewingHost();
@@ -67,6 +68,8 @@ export function TeamVariableLiveFacts(): ReactNode {
             <TeamReadFailed
               message="Couldn't read this host's values."
               onRetry={() => {
+                const hostId = scope.viewingHost?.hostId ?? null;
+                if (hostId !== null) redialHostForRetry(hostId);
                 if (shell.isError) void shell.refetch();
                 if (variables.isError) void variables.refetch();
               }}

@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { RetryableTransportError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { WorktreeHostEntryV16 } from "@traycer/protocol/host/worktree-schemas";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
@@ -22,12 +23,24 @@ import {
   readWorktreeListingSnapshot,
 } from "@/components/settings/panels/worktrees-enrichment-persistence";
 
+const redialRemoteSessionsFor = vi.hoisted(() => vi.fn());
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/active-remote-sessions",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@traycer-clients/shared/host-transport/remote/active-remote-sessions")
+    >()),
+    redialRemoteSessionsFor,
+  }),
+);
+
 // The listing hook reads/writes the warm-open listing snapshot in
 // localStorage on every mount - a snapshot leaked by one test would seed the
 // next test's listing and skew its assertions.
 afterEach(() => {
   window.localStorage.clear();
   vi.useRealTimers();
+  redialRemoteSessionsFor.mockReset();
   cleanup();
 });
 
@@ -293,6 +306,60 @@ describe("useWorktreeListing (warm-open listing snapshot)", () => {
     expect(result.current.worktrees[PAGE_LIMIT + 7].worktreePath).toBe(
       `/wt/old-${String(PAGE_LIMIT + 7)}`,
     );
+  });
+
+  it("redials the host before asking again for the page a partial listing failed on", async () => {
+    const live = fleet(PAGE_LIMIT + 8, "live");
+    const cursors: (string | null)[] = [];
+    // A dial that never reached the host: the query layer does not retry it,
+    // so the walk stops partial on its first failure.
+    let secondPageUnreachable = true;
+    let requestsAtRedial: number | null = null;
+    redialRemoteSessionsFor.mockImplementation(() => {
+      requestsAtRedial = cursors.length;
+    });
+    const fixture = createFixture(
+      () => live,
+      (cursor) => {
+        cursors.push(cursor);
+      },
+      (cursor) =>
+        cursor !== null && secondPageUnreachable
+          ? Promise.reject(
+              new RetryableTransportError({
+                requestId: "req-1",
+                method: "worktree.listAllForHost",
+                code: "RPC_ERROR",
+                message: "dial failed",
+                fatalDetails: null,
+                replaySafetyFromKey: false,
+              }),
+            )
+          : Promise.resolve(),
+    );
+    const { result } = renderHook(
+      () => useWorktreeListing(fixture.client, true),
+      { wrapper: fixture.Wrapper },
+    );
+
+    await waitFor(() => {
+      expect(result.current.isPartial).toBe(true);
+    });
+    expect(redialRemoteSessionsFor).not.toHaveBeenCalled();
+    const requestsBeforeRetry = cursors.length;
+    secondPageUnreachable = false;
+
+    await act(async () => {
+      await result.current.retryPartial();
+    });
+
+    expect(redialRemoteSessionsFor.mock.calls).toEqual([
+      [HOST_ID, "user-retry"],
+    ]);
+    expect(requestsAtRedial).toBe(requestsBeforeRetry);
+    await waitFor(() => {
+      expect(result.current.worktrees).toHaveLength(PAGE_LIMIT + 8);
+    });
   });
 
   it("persists only COMPLETE listings, debounced - a partial walk never snapshots", async () => {

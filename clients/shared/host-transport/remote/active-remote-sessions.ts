@@ -848,6 +848,33 @@ export function wakeHeldRemoteSessions(
 }
 
 /**
+ * A person's Retry on one computer: every cached remote session to `hostId`
+ * that is not ready redials now, instead of waiting out the rung its last
+ * failed dial armed.
+ *
+ * A ready session is left alone: it carries frames, and a forced reconnect
+ * would drop it. So is a closed or superseded one, and a replay-unsafe one, for
+ * the reason {@link wakeHeldRemoteSessions} gives. A lingering entry that no
+ * consumer holds right now is included: the read the Retry starts acquires it
+ * next. Local hosts are reached by their own transport and have no entry here,
+ * so this never touches one.
+ */
+export function redialRemoteSessionsFor(hostId: string, reason: string): void {
+  for (const entry of entriesByKey.values()) {
+    if (
+      entry.identity.hostId !== hostId ||
+      entry.superseded ||
+      entry.session.isClosed() ||
+      entry.session.isReady() ||
+      !entry.proactiveWakeEligible
+    ) {
+      continue;
+    }
+    entry.session.forceReconnect(reason);
+  }
+}
+
+/**
  * True if the cached session for `hostId` (any signed-in user) is currently
  * ready. A lingering keep-warm session (refCount 0, window not yet expired)
  * counts: it is a live, attached connection, so it is honest evidence.

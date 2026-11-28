@@ -73,6 +73,7 @@ import {
   useSimulatorTileIdentity,
   useSimulatorTilePowerOff,
 } from "./use-simulator-tile-session";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 export interface SimulatorTileProps {
   readonly node: SimulatorTileRef;
@@ -192,6 +193,7 @@ export function SimulatorTile(props: SimulatorTileProps) {
           title={`Couldn't reach the mobile simulators on ${hostLabel}`}
           reason={sessions.errorMessage}
           onRetry={sessions.retry}
+          hostId={hostId}
         />
       );
     }
@@ -287,6 +289,7 @@ function simulatorNotReadyView(args: {
         title={`Couldn't set up mobile simulators on ${hostLabel}`}
         reason={state.packState.reason}
         onRetry={args.refresh}
+        hostId={args.hostId}
       />
     );
   }
@@ -296,6 +299,7 @@ function simulatorNotReadyView(args: {
         title={`Mobile simulators stopped on ${hostLabel}`}
         reason={state.hubState.lastError}
         onRetry={args.refresh}
+        hostId={args.hostId}
       />
     );
   }
@@ -734,8 +738,9 @@ function LiveSimulatorTile(props: {
     [controller],
   );
   const onReconnect = useCallback(() => {
+    redialHostForRetry(hostId);
     controller?.restart();
-  }, [controller]);
+  }, [controller, hostId]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const onToggleSettings = useCallback(() => {
     setSettingsOpen((open) => !open);

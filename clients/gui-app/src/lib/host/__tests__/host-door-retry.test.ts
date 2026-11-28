@@ -15,6 +15,17 @@ import {
 } from "@/stores/host/host-door-state-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
+const redialRemoteSessionsFor = vi.hoisted(() => vi.fn());
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/active-remote-sessions",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@traycer-clients/shared/host-transport/remote/active-remote-sessions")
+    >()),
+    redialRemoteSessionsFor,
+  }),
+);
+
 const USER_ID = "user-retry";
 const HOST_ID = "host-retry";
 const OTHER_HOST_ID = "host-other";
@@ -126,6 +137,18 @@ describe("retryHostDoor", () => {
     expect(obtain).not.toHaveBeenCalled();
     expect(lane.reopenCount()).toBe(1);
     expect(hostDoorStateFor(HOST_ID)).toEqual(state);
+  });
+
+  it("redials that computer's remote session, and no other's", async () => {
+    signedInAsRetryUser();
+    redialRemoteSessionsFor.mockClear();
+
+    await retryHostDoor(HOST_ID, inertHostTokenSource());
+
+    expect(redialRemoteSessionsFor).toHaveBeenCalledExactlyOnceWith(
+      HOST_ID,
+      "user-retry",
+    );
   });
 
   it("reopens even when obtaining a replacement token rejects", async () => {

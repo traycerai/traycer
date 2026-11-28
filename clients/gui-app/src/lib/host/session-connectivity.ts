@@ -5,6 +5,7 @@ import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { isMobileApp } from "@/lib/mobile-app";
 import { startVisibleInterval } from "@/lib/dom/visible-interval";
+import { redialRemoteSessionsFor } from "@traycer-clients/shared/host-transport/remote/active-remote-sessions";
 
 /**
  * The SESSION plane of host connectivity: whether this device's own live
@@ -418,4 +419,15 @@ export function useHostSessionWake(): () => void {
       wakeProbe: null,
     });
   }, [streamClient]);
+}
+
+/**
+ * A person's Retry on one computer, named by id: each remote session to it
+ * that is not ready redials now instead of waiting out its backoff rung. A
+ * ready session and a local host are left alone (`redialRemoteSessionsFor`).
+ * Call it beside the refetch, only where the failure can be a failure to reach
+ * the computer.
+ */
+export function redialHostForRetry(hostId: string): void {
+  redialRemoteSessionsFor(hostId, SESSION_WAKE_REASON);
 }

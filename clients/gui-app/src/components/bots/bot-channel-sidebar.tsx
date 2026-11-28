@@ -68,6 +68,7 @@ import {
   hasNoTeamEnvironment,
 } from "@/lib/home-bots/create-team-dashboard";
 import { cn } from "@/lib/utils";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 const EMPTY_ENVIRONMENTS: ReadonlyArray<EnvironmentDescriptor> = [];
 const EMPTY_BOTS: ReadonlyArray<BotRecord> = [];
@@ -202,7 +203,7 @@ export function BotChannelSidebar(props: {
       {threadsView === null ? null : (
         <ThreadsRow hostId={hostId} bots={botList} view={threadsView} />
       )}
-      <UnlessBotListFailed bots={bots}>
+      <UnlessBotListFailed bots={bots} hostId={hostId}>
         <SortableColumnList
           ids={model.groups.map((group) => group.environmentId)}
           onReorder={(order) => setSectionOrder(order, answeredModel)}
@@ -254,14 +255,19 @@ export function BotChannelSidebar(props: {
  */
 function UnlessBotListFailed(props: {
   readonly bots: UseQueryResult<unknown, HostRpcError>;
+  /** The host the list is read through. */
+  readonly hostId: string;
   readonly children: ReactNode;
 }): ReactNode {
-  const { bots } = props;
+  const { bots, hostId } = props;
   if (!bots.isError || bots.data !== undefined) return props.children;
   return (
     <BotReadFailure
       message="Couldn't load your bots."
-      onRetry={() => void bots.refetch()}
+      onRetry={() => {
+        redialHostForRetry(hostId);
+        void bots.refetch();
+      }}
       testId="bot-channel-sidebar-error"
     />
   );

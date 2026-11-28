@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { FileEditRecoveryEntry } from "@/lib/workspace/file-edit-runtime";
 
@@ -45,6 +45,17 @@ vi.mock("@/lib/workspace/file-edit-recovery-store", () => ({
   },
 }));
 
+const redialRemoteSessionsFor = vi.hoisted(() => vi.fn());
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/active-remote-sessions",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@traycer-clients/shared/host-transport/remote/active-remote-sessions")
+    >()),
+    redialRemoteSessionsFor,
+  }),
+);
+
 import { useFileEditSession } from "@/hooks/workspace/use-file-edit-session";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
 
@@ -63,6 +74,7 @@ describe("useFileEditSession reconciliation vs recovery race (RESUME13)", () => 
   afterEach(() => {
     fileEditRuntimeRegistry.resetForTesting();
     state.pendingLoad = null;
+    redialRemoteSessionsFor.mockReset();
     cleanup();
   });
 
@@ -116,5 +128,57 @@ describe("useFileEditSession reconciliation vs recovery race (RESUME13)", () => 
       expect(currentRuntimeState()?.status).toBe("clean");
     });
     expect(currentRuntimeState()?.draftContent).toBe("V2");
+  });
+
+  it("asks the file's computer to redial when Retry follows a save that never reached it", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+      <QueryClientProvider client={queryClient}>
+        {props.children}
+      </QueryClientProvider>
+    );
+    // No client: the write rejects, which is how a save that never reached
+    // the computer leaves the session `offline`.
+    const { result } = renderHook(
+      () =>
+        useFileEditSession({
+          client: null,
+          identity: IDENTITY,
+          diskContent: "V1",
+          surfaceId: "surface-a",
+          autoAttach: true,
+        }),
+      { wrapper: Wrapper },
+    );
+    await waitFor(() => {
+      expect(state.pendingLoad).not.toBeNull();
+    });
+    state.pendingLoad?.resolve(null);
+    await waitFor(() => {
+      expect(currentRuntimeState()?.status).toBe("clean");
+    });
+    act(() => {
+      expect(
+        fileEditRuntimeRegistry.get(IDENTITY)?.claimOwnership("surface-a"),
+      ).toBe(true);
+    });
+    act(() => {
+      result.current.setDraft("V2");
+      result.current.flush();
+    });
+    await waitFor(() => {
+      expect(currentRuntimeState()?.status).toBe("offline");
+    });
+
+    act(() => {
+      result.current.retry();
+    });
+
+    expect(redialRemoteSessionsFor).toHaveBeenCalledWith(
+      IDENTITY.hostId,
+      "user-retry",
+    );
   });
 });

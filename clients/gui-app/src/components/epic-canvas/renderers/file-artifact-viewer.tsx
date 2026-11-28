@@ -1,4 +1,5 @@
 import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 import { MediaArtifactContent } from "./media-artifact-content";
 import { useEffect, useState, type ReactNode } from "react";
 import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -209,6 +210,7 @@ export function FileArtifactViewer(props: {
                     size="sm"
                     onClick={() => {
                       if (showHostUpdateNeededForGesture(props.hostId)) return;
+                      redialHostForRetry(props.hostId);
                       void query.refetch();
                     }}
                   >

@@ -2,6 +2,7 @@ import { reopenHostConnectionNow } from "@traycer-clients/shared/host-client/hos
 import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { hostDoorStateFor } from "@/stores/host/host-door-state-store";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 /** Each owner holds its own rebuild timer, which no reconnect lane reaches. */
 const rebuildOwners = new Map<string, Set<() => void>>();
@@ -37,6 +38,7 @@ export async function retryHostDoor(
         owner: null,
       });
   } finally {
+    redialHostForRetry(hostId);
     reopenHostConnectionNow(hostId);
     for (const rebuildNow of [...(rebuildOwners.get(hostId) ?? [])])
       rebuildNow();

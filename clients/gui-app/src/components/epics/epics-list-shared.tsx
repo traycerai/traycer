@@ -37,6 +37,8 @@ import {
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useStatusGlyphTooltipOpen } from "@/components/notifications/status-glyph-focus";
 import { cn } from "@/lib/utils";
+import { useOptionalHostClient } from "@/lib/host";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 /**
  * A task row's status: the epic's notification indicator when it has one, its
@@ -459,6 +461,9 @@ export interface EpicsListErrorProps {
 
 export function EpicsListError(props: EpicsListErrorProps): ReactNode {
   const { error, onRetry } = props;
+  // The list is read through this surface's host client
+  // (`useCloudEpicTasksQuery`), so that is the computer Retry redials.
+  const client = useOptionalHostClient();
   const [showDetails, setShowDetails] = useState<boolean>(false);
   return (
     <div
@@ -473,7 +478,11 @@ export function EpicsListError(props: EpicsListErrorProps): ReactNode {
           size="sm"
           variant="outline"
           data-testid="epics-list-error-retry"
-          onClick={onRetry}
+          onClick={() => {
+            const hostId = client?.getActiveHostId() ?? null;
+            if (hostId !== null) redialHostForRetry(hostId);
+            onRetry();
+          }}
         >
           Retry
         </Button>

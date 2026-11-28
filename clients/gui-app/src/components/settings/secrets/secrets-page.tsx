@@ -33,6 +33,7 @@ import {
   PERSONAL_SECRETS_READ_FAILED,
   SECRETS_ADD_LABEL,
 } from "@/lib/sandboxes/secrets-page-copy";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 type SecretsList = ResponseOfMethod<
   HostRpcRegistry,
@@ -93,10 +94,12 @@ export function SecretsPage(props: {
   const { retry: retryEnvironment } =
     useSecretsEnvironment(configurationClient);
   const { refetch: refetchList } = list;
+  const { hostId } = props;
   const refetch = useCallback(() => {
+    if (hostId !== null) redialHostForRetry(hostId);
     retryEnvironment();
     return refetchList();
-  }, [retryEnvironment, refetchList]);
+  }, [hostId, retryEnvironment, refetchList]);
   const read = useBoundedRead({
     isPending: list.isPending,
     isError: list.isError,

@@ -29,6 +29,7 @@ import {
   createTeamDashboardUrl,
   hasNoTeamEnvironment,
 } from "@/lib/home-bots/create-team-dashboard";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 /** The Home tab's own section heading, so this reads as one of its bands. */
 const HEADING_CLASS_NAME = "tracking-[0.08em] uppercase";
@@ -170,6 +171,8 @@ export function HomeBotsSection(): ReactNode {
           variant="outline"
           size="sm"
           onClick={() => {
+            const hostId = client.getActiveHostId();
+            if (hostId !== null) redialHostForRetry(hostId);
             void environments.refetch();
             void bots.refetch();
           }}

@@ -70,6 +70,7 @@ import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-
 import { providerRailStateWord } from "./provider-rail-state-word";
 
 import type { HostRpcRegistry } from "@/lib/host";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 import { HostRuntimeContext } from "@/lib/host/runtime";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
@@ -835,7 +836,10 @@ function ProvidersPanelBody({
       <Button
         variant="outline"
         size="sm"
-        onClick={() => void query.refetch()}
+        onClick={() => {
+          if (hostId !== null) redialHostForRetry(hostId);
+          void query.refetch();
+        }}
         disabled={query.isFetching}
       >
         Retry

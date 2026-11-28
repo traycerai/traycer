@@ -99,6 +99,17 @@ vi.mock(
   },
 );
 
+const redialRemoteSessionsFor = vi.hoisted(() => vi.fn());
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/active-remote-sessions",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@traycer-clients/shared/host-transport/remote/active-remote-sessions")
+    >()),
+    redialRemoteSessionsFor,
+  }),
+);
+
 vi.mock("@/hooks/environment/use-environment-arms", () => ({
   useEnvironmentArmChats: () => [],
 }));
@@ -1609,7 +1620,8 @@ describe("the production chat stream client factory forwards every probe", () =>
     expect(authServiceStub.revalidateCurrentContext).toHaveBeenCalledTimes(1);
   });
 
-  it("revalidates sign-in when a team sandbox at rest is served by the pool", async () => {
+  /** A team sandbox's chat at rest, whose stream the pool serves. */
+  async function openAtRestOnPool(chatId: string) {
     const ownerHostId = teamSandboxEntry.hostId;
     const servingClient = new FakeStreamClient(true);
     const chatClient = new FakeStreamClient(true);
@@ -1624,7 +1636,6 @@ describe("the production chat stream client factory forwards every probe", () =>
         email: `${CHAT_PROFILE_USER_ID}@example.com`,
       },
     });
-    authServiceStub.revalidateCurrentContext.mockClear();
     openTransportRef.fn = (servingHostId) => {
       openedHostIds.push(servingHostId);
       return {
@@ -1636,7 +1647,7 @@ describe("the production chat stream client factory forwards every probe", () =>
     hostEntryRef.value = teamSandboxEntry;
 
     const { result } = renderHook(
-      () => useChatSessionHandle("chat-at-rest-on-pool", ownerHostId, true),
+      () => useChatSessionHandle(chatId, ownerHostId, true),
       { wrapper },
     );
     await waitFor(() => expect(servingClient.subscribes).toHaveLength(1));
@@ -1657,12 +1668,36 @@ describe("the production chat stream client factory forwards every probe", () =>
     await waitFor(() => expect(openedHostIds).toEqual([POOL_HOST_ID]));
     await waitFor(() => expect(result.current).not.toBeNull());
     await waitFor(() => expect(chatClient.sessions).toHaveLength(1));
+    const handle = result.current;
+    if (handle === null) {
+      throw new Error("expected a chat session handle");
+    }
+    return { handle, chatClient };
+  }
+
+  it("revalidates sign-in when a team sandbox at rest is served by the pool", async () => {
+    authServiceStub.revalidateCurrentContext.mockClear();
+    const { chatClient } = await openAtRestOnPool("chat-at-rest-on-pool");
 
     act(() => {
       chatClient.sessions[0]?.emitClosed(unauthorizedClose(null));
     });
 
     expect(authServiceStub.revalidateCurrentContext).toHaveBeenCalledTimes(1);
+  });
+
+  it("a person's retry redials the computer serving the chat, not the chat's own host", async () => {
+    const { handle } = await openAtRestOnPool("chat-retry-on-pool");
+    redialRemoteSessionsFor.mockClear();
+
+    act(() => {
+      handle.store.getState().retryFromUser();
+    });
+
+    expect(redialRemoteSessionsFor).toHaveBeenCalledExactlyOnceWith(
+      POOL_HOST_ID,
+      "user-retry",
+    );
   });
 
   it.each(FORWARDED_PROBES)(

@@ -14,6 +14,17 @@ import {
   subscribeEpicTerminalDurableCreates,
 } from "@/lib/terminals/epic-terminal-durable-create-coordinator";
 
+const redialRemoteSessionsFor = vi.hoisted(() => vi.fn());
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/active-remote-sessions",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@traycer-clients/shared/host-transport/remote/active-remote-sessions")
+    >()),
+    redialRemoteSessionsFor,
+  }),
+);
+
 const REQUEST = {
   hostId: "host-1",
   terminalId: "term-1",
@@ -178,6 +189,30 @@ describe("epic terminal durable create coordinator", () => {
     await retry;
     expect(create).toHaveBeenCalledTimes(2);
     expect(adopt).toHaveBeenCalledTimes(1);
+  });
+
+  it("redials the job's computer when a person retries a failed create", async () => {
+    acceptEpicTerminalDurableCreate(REQUEST);
+    await expect(
+      requestEpicTerminalDurableCreate({
+        hostId: REQUEST.hostId,
+        terminalId: REQUEST.terminalId,
+        ready: true,
+        create: () => Promise.reject(new Error("offline")),
+        onSuccess: () => undefined,
+        commit: undefined,
+        onCommit: undefined,
+        onFailure: undefined,
+      }),
+    ).rejects.toThrow("offline");
+    redialRemoteSessionsFor.mockClear();
+
+    retryEpicTerminalDurableCreate(REQUEST.hostId, REQUEST.terminalId);
+
+    expect(redialRemoteSessionsFor).toHaveBeenCalledExactlyOnceWith(
+      REQUEST.hostId,
+      "user-retry",
+    );
   });
 
   it("discard removes the job so pending-create need not be preserved", async () => {
