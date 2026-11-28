@@ -1512,19 +1512,24 @@ describe("minimal title echo hold through the real records lane and command queu
 
       pair.first.resolve(reply);
       await pair.first.completion;
+      const expectedState =
+        reply.kind === "rejected" ? "rejected" : "superseded";
       expect(await pair.firstResult).toMatchObject({
-        state: "superseded",
+        state: expectedState,
         delivery: "settled",
+        ...(reply.kind === "rejected"
+          ? { resolution: reply.resolution }
+          : { resolution: { kind: "superseded" } }),
       });
       expect(recordFor(rig.handle, pair.firstId)).toMatchObject({
-        state: "superseded",
+        state: expectedState,
         delivery: "settled",
       });
 
       const second = await pair.secondDispatch;
       expect(second.commandId).toBe(pair.secondId);
       expect(second.commandStatesAtDispatch.get(pair.firstId)).toBe(
-        "superseded",
+        expectedState,
       );
       expect(second.intent).toEqual({
         kind: "update-epic-title",
@@ -1649,9 +1654,7 @@ describe("minimal title echo hold through the real records lane and command queu
   });
 });
 
-async function expectHeldFailureToSupersede(
-  reply: CommandSendFailure,
-): Promise<void> {
+async function expectHeldFailure(reply: CommandSendFailure): Promise<void> {
   const rig = makeRig(POOL_HOST);
   await drain(rig.handle);
 
@@ -1670,19 +1673,22 @@ async function expectHeldFailureToSupersede(
 
   const result = rig.handle.store.getState().waitForWriteCommand(commandId);
   sent.resolve(reply);
+  const expectedState = reply.kind === "rejected" ? "rejected" : "superseded";
   expect(await result).toMatchObject({
-    state: "superseded",
+    state: expectedState,
     delivery: "settled",
     attempts: 1,
-    resolution: { kind: "superseded" },
+    ...(reply.kind === "rejected"
+      ? { resolution: reply.resolution }
+      : { resolution: { kind: "superseded" } }),
   });
   expect(rig.handle.store.getState().epic.title).toBe(TARGET_TITLE);
   rig.handle.dispose();
 }
 
 describe("a matching frame is not unary success", () => {
-  it("releases the held match as superseded after a definitive refusal", async () => {
-    await expectHeldFailureToSupersede({
+  it("keeps a held match's definitive refusal and its details", async () => {
+    await expectHeldFailure({
       kind: "rejected",
       resolution: {
         kind: "rejected",
@@ -1694,7 +1700,7 @@ describe("a matching frame is not unary success", () => {
   });
 
   it("releases the held match as superseded after a proved predispatch failure", async () => {
-    await expectHeldFailureToSupersede({
+    await expectHeldFailure({
       kind: "queued",
       reason: "request was not sent",
       boundedRetry: false,
@@ -1703,7 +1709,7 @@ describe("a matching frame is not unary success", () => {
   });
 
   it("does not retry a held match after another retryable failure", async () => {
-    await expectHeldFailureToSupersede({
+    await expectHeldFailure({
       kind: "queued",
       reason: "the unary dial failed after its retry budget",
       boundedRetry: true,
@@ -1712,7 +1718,7 @@ describe("a matching frame is not unary success", () => {
   });
 
   it("releases the held match as superseded after an unknown outcome", async () => {
-    await expectHeldFailureToSupersede({
+    await expectHeldFailure({
       kind: "unknown-outcome",
       reason: "the response was lost",
     });
@@ -1847,17 +1853,81 @@ describe("artifact write echo holds through the real records lane and queue", ()
           delivery: "sending",
         });
         sent.resolve(reply);
+        const expectedState =
+          reply.kind === "rejected" ? "rejected" : "superseded";
         expect(await result).toMatchObject({
-          state: "superseded",
+          state: expectedState,
           delivery: "settled",
-          resolution: { kind: "superseded" },
+          ...(reply.kind === "rejected"
+            ? { resolution: reply.resolution }
+            : { resolution: { kind: "superseded" } }),
         });
-        expect(writeCommandAlert(rig)).toBe("superseded");
+        expect(writeCommandAlert(rig)).toBe(
+          reply.kind === "rejected" ? "rejected" : "superseded",
+        );
+        if (reply.kind === "rejected") {
+          // The queue's terminal retirement already removed this command's
+          // overlay stamp; a second retire proves no held stamp remains.
+          expect(
+            await rig.handle.store
+              .getState()
+              .retirePendingMutation(commandId, "failed"),
+          ).toBe(false);
+        }
       } finally {
         rig.handle.dispose();
       }
     },
   );
+
+  it("retries an unheld queued rename under its original command ID", async () => {
+    const rig = makeRig(POOL_HOST);
+    try {
+      await seedArtifactScenario(rig, RENAME_HOLD);
+      const firstDispatch = rig.nextDispatch();
+      const firstId = await enqueueArtifactWrite(
+        rig.handle,
+        RENAME_HOLD.intent,
+      );
+      const first = await firstDispatch;
+      const firstResult = rig.handle.store
+        .getState()
+        .waitForWriteCommand(firstId);
+
+      first.resolve({
+        kind: "queued",
+        reason: "request was not sent",
+        boundedRetry: false,
+        retryAfterMs: null,
+      });
+      await first.completion;
+      await drain(rig.handle);
+      expect(recordFor(rig.handle, firstId)).toMatchObject({
+        state: "pending",
+        delivery: "queued",
+        attempts: 1,
+      });
+
+      const retryDispatch = rig.nextDispatch();
+      rig.handle.store.getState().retryWriteCommand(firstId);
+      const retry = await retryDispatch;
+      expect(first.commandId).toBe(firstId);
+      expect(retry.commandId).toBe(firstId);
+      expect(retry.intent).toEqual(RENAME_HOLD.intent);
+      expect(recordFor(rig.handle, firstId)).toMatchObject({
+        state: "pending",
+        delivery: "sending",
+        attempts: 2,
+      });
+      retry.resolve({ hostId: POOL_HOST });
+      expect(await firstResult).toMatchObject({
+        state: "committed",
+        delivery: "settled",
+      });
+    } finally {
+      rig.handle.dispose();
+    }
+  });
 
   it.each([RENAME_HOLD, REPARENT_HOLD, STATUS_HOLD] as const)(
     "ends the $name hold when the observed field changes",
@@ -2503,12 +2573,20 @@ describe("artifact write echo holds through the real records lane and queue", ()
               retryable: false,
             },
           });
-          expect(await result).toMatchObject({ state: "superseded" });
+          expect(await result).toMatchObject({
+            state: "rejected",
+            resolution: {
+              kind: "rejected",
+              code: "FORBIDDEN",
+              reason: "permission denied",
+              retryable: false,
+            },
+          });
           await mutationRejected;
         });
         expect(toast.error).toHaveBeenCalledTimes(1);
         expect(toast.error).toHaveBeenCalledWith(failureCopy, {
-          description: "A newer authoritative change superseded this write",
+          description: "permission denied",
         });
       } finally {
         for (const sent of rig.dispatches) {
