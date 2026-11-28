@@ -22,7 +22,7 @@
   "src/components/bots/__tests__/bot-memory-pane.test.tsx": "16 cases on the full memory pane, 3.6 s alone; 3.7 to 12.2 s on a loaded shard across five runs",
   "src/components/epic-canvas/sidebar/__tests__/epic-sidebar-selection-mode.test.tsx": "172 cases on the full task sidebar; 8.5 to 12.1 s across five runs",
   "src/__tests__/worktree-selection-key-census.test.ts": "parses every production source file under gui-app and shared with the TypeScript compiler; 6.0 to 11.3 s across five runs",
-  "src/components/home/host-workspace-selector/__tests__/in-epic-surface-primary-readonly.test.tsx": "44 cases mounting the in-task surface with its host and workspace selector; 6.1 to 11.1 s across five runs",
+  "src/components/home/host-workspace-selector/__tests__/in-epic-surface-primary-readonly.test.tsx": "60 cases mounting the in-task surface with its host and workspace selector; 11.1 s on the merge run that grew it from 44 cases, where it ran 6.1 to 11.1 s across five runs",
   "src/components/epics/__tests__/history-scope-integration.test.tsx": "76 cases on the full task history with its scope filters; 7.2 to 10.8 s across five runs",
   "src/components/layout/tabs/__tests__/side-tab-strip.test.tsx": "138 cases on the full side tab strip; 5.5 to 10.2 s across five runs",
   "src/components/home/terminal-panel/__tests__/landing-terminal-panel.test.tsx": "154 cases on the full Start Page terminal panel; 6.0 to 11.0 s across six runs",
