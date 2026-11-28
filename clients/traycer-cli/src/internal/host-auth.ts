@@ -1,3 +1,4 @@
+import { isManagedCliAuth } from "./managed-host-auth";
 import { config } from "../config";
 import { createCliLogger } from "../logger";
 import { devDesktopSlotForEnvironment } from "../store/dev-desktop-slot";
@@ -37,6 +38,7 @@ export async function resolveHostAuth(): Promise<HostAuth | null> {
   // value, so if this doesn't throw, neither will the downstream call.
   try {
     devDesktopSlotForEnvironment(config.environment, process.env);
+    if (await isManagedCliAuth()) return null;
   } catch {
     return null;
   }

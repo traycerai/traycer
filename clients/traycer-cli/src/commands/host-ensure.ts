@@ -1,3 +1,4 @@
+import { managedAccountNote } from "../internal/managed-host-auth";
 import {
   withStagedTeamToken,
   withTeamTokenInstall,
@@ -207,12 +208,15 @@ export function buildHostEnsureCommand(args: HostEnsureArgs): CommandFn {
               TEAM_INSTALL_RECEIPT_WAIT_MS,
             )
           : null;
-        const human = buildHuman(
+        let human = buildHuman(
           result,
           responsiveness,
           authPreflight,
           credentialProvision,
         );
+        if (authPreflight.state === "managed" && !ctx.runtime.json) {
+          human = `${human}\n${await managedAccountNote()}`;
+        }
         return {
           data: {
             teamBinding,

@@ -1,3 +1,4 @@
+import { managedAccountNote } from "../internal/managed-host-auth";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import {
@@ -299,6 +300,9 @@ export function buildServiceInstallCommand(
     // Restate the unauthenticated warning on the terminal line - the
     // pre-flight's copy printed before the registration output and may
     // have scrolled away.
+    if (authPreflight.state === "managed" && !ctx.runtime.json) {
+      human = `${human}\n${await managedAccountNote()}`;
+    }
     if (authPreflight.state === "unauthenticated") {
       human = `${human}; not signed in - the host is unprovisioned until you run \`traycer login\``;
     }

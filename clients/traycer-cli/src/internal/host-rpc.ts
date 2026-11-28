@@ -1,4 +1,15 @@
 import {
+  MANAGED_CLI_OPEN_PREFIX,
+  MANAGED_CLI_RPC_PATH,
+  MANAGED_CLI_UNARY_METHODS,
+} from "@traycer/protocol/host/managed-cli-auth";
+import {
+  isManagedCliAuth,
+  managedSignInRefusal,
+  managedUnavailable,
+  readManagedHostBearer,
+} from "./managed-host-auth";
+import {
   isRefusalOfAgentSessionCapability,
   markRefusalOfAgentSessionCapability,
   PROCESS_AGENT_ENVIRONMENT,
@@ -119,6 +130,14 @@ export async function callHostRpc<
     method,
     retryPolicy: "default",
   });
+  if (await isManagedCliAuth()) {
+    return requestWithManagedHostAuth(
+      method,
+      params,
+      await resolveEndpoint(),
+      PLAIN_DISPATCH,
+    );
+  }
   const auth = await resolveHostAuth();
   if (auth === null) {
     logger.warn("Host RPC blocked by missing credentials", {
@@ -166,6 +185,14 @@ export async function callHostRpcFastFail<
     method,
     retryPolicy: "fast-fail",
   });
+  if (await isManagedCliAuth()) {
+    return requestWithManagedHostAuth(
+      method,
+      params,
+      await resolveEndpoint(),
+      FAIL_FAST_DISPATCH,
+    );
+  }
   const auth = await resolveHostAuth();
   if (auth === null) {
     logger.warn("Host RPC fast-fail call blocked by missing credentials", {
@@ -261,6 +288,14 @@ export async function callHostRpcWithDispatch<
     method,
     retryPolicy: dispatch.failFast ? "fast-fail" : "default",
   });
+  if (await isManagedCliAuth()) {
+    return requestWithManagedHostAuth(
+      method,
+      params,
+      await resolveEndpoint(),
+      dispatch,
+    );
+  }
   const auth = await resolveHostAuth();
   if (auth === null) {
     logger.warn("Host RPC blocked by missing credentials", {
@@ -316,6 +351,7 @@ export async function callHostRpcWithAgentCredential<
   if (credential.kind === "outside-agent-session")
     return callHostRpcWithDispatch(method, params, dispatch);
   if (credential.kind === "none") {
+    if (await isManagedCliAuth()) throw managedSignInRefusal();
     createCliLogger(config.environment).warn(
       "Host RPC blocked: the agent session carries no capability",
       { environment: config.environment, method },
@@ -419,6 +455,9 @@ export async function callHostRpcAtEndpoint<
     retryPolicy: "default",
     hostId: endpoint.hostId,
   });
+  if (await isManagedCliAuth()) {
+    return requestWithManagedHostAuth(method, params, endpoint, PLAIN_DISPATCH);
+  }
   const auth = await resolveHostAuth();
   if (auth === null) {
     logger.warn(
@@ -769,6 +808,48 @@ function recordingSocketFactory(localDoor: LocalHostDoor): IWebSocketFactory {
       return socket;
     },
   };
+}
+
+const managedMethods = new Set<string>(MANAGED_CLI_UNARY_METHODS);
+
+async function requestWithManagedHostAuth<
+  Method extends keyof HostRpcRegistry & string,
+>(
+  method: Method,
+  params: RequestOfMethod<HostRpcRegistry, Method>,
+  endpoint: HostTransportEndpoint,
+  dispatch: HostRpcDispatch,
+): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
+  if (!managedMethods.has(method)) throw managedSignInRefusal();
+  const token = await readManagedHostBearer(endpoint, dispatch.signal);
+  if (endpoint.websocketUrl === null) throw hostNotRunningCliError();
+  const url = new URL(endpoint.websocketUrl);
+  url.pathname = MANAGED_CLI_RPC_PATH;
+  try {
+    return await requestWithHostToken(
+      method,
+      params,
+      { ...endpoint, websocketUrl: url.href },
+      {
+        identity: { userId: "managed-cli" },
+        getBearerToken: () => MANAGED_CLI_OPEN_PREFIX + token,
+      },
+      {
+        revalidateExpectedBearer: async () => "rejected",
+        revalidateRefusedBearer: async () => "rejected",
+      },
+      null,
+      NO_RETRY_TRANSPORT_POLICY,
+      { ...dispatch, reauthenticate: "before-request" },
+    );
+  } catch (error) {
+    const refusal = finalRefusalOf(error);
+    if (refusal instanceof HostTransportFailureError)
+      throw managedUnavailable(true);
+    if (refusal instanceof HostRpcError && refusal.code === "UNAUTHORIZED")
+      throw managedUnavailable(false);
+    throw error;
+  }
 }
 
 async function requestWithHostToken<

@@ -1,3 +1,7 @@
+import {
+  isManagedCliAuth,
+  managedSignInRefusal,
+} from "../internal/managed-host-auth";
 import { createInterface } from "node:readline";
 import QRCode from "qrcode";
 import {
@@ -237,6 +241,7 @@ function sleep(ms: number): Promise<void> {
  * script's exit code.
  */
 async function requireBearerToken(): Promise<string> {
+  if (await isManagedCliAuth()) throw managedSignInRefusal();
   const validation = await validateStoredCredentials();
   if (validation.kind === "network-error") {
     throw cliError({

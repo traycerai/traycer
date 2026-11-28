@@ -1,3 +1,7 @@
+import {
+  isManagedCliAuth,
+  managedSignInRefusal,
+} from "../internal/managed-host-auth";
 import { createInterface } from "node:readline/promises";
 import { readHostOwnershipViaHttp } from "@traycer-clients/shared/host-client/host-ownership";
 import { releaseTeamComputerViaHttp } from "@traycer-clients/shared/host-client/team-computer-release";
@@ -52,6 +56,7 @@ export interface HostClaimArgs {
  */
 export function buildHostClaimCommand(args: HostClaimArgs): CommandFn {
   return async (ctx): Promise<CommandResult> => {
+    if (await isManagedCliAuth()) throw managedSignInRefusal();
     const auth = await resolveHostAuth();
     if (auth === null) {
       throw claimRefused(

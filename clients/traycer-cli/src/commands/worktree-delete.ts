@@ -1,3 +1,7 @@
+import {
+  isManagedCliAuth,
+  managedSignInRefusal,
+} from "../internal/managed-host-auth";
 import { isReleasedSignInRefusal } from "@traycer-clients/shared/host-transport/released-sign-on";
 import {
   localTeamAdmissionCliError,
@@ -152,6 +156,7 @@ async function runWorktreeDelete(
   worktreePath: string,
   ctx: CommandContext,
 ): Promise<WorktreeDeleteOutcome> {
+  if (await isManagedCliAuth()) throw managedSignInRefusal();
   const auth = await resolveHostAuth();
   if (auth === null) throw signedOutCliError();
   const endpoint = await resolveEndpoint();

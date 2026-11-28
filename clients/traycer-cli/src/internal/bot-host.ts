@@ -1,3 +1,4 @@
+import { isManagedCliAuth, managedSignInRefusal } from "./managed-host-auth";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import { isReleasedSignInRefusal } from "@traycer-clients/shared/host-transport/released-sign-on";
 import {
@@ -210,6 +211,7 @@ export async function withLocalBotStream<T>(
     dial: LocalStreamDial,
   ) => Promise<T>,
 ): Promise<T> {
+  if (await isManagedCliAuth()) throw managedSignInRefusal();
   const auth = await resolveHostAuth();
   if (auth === null) throw signedOutCliError();
   const endpoint = await resolveEndpoint();

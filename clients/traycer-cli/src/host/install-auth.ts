@@ -1,4 +1,8 @@
 import {
+  isManagedCliAuth,
+  managedSignInRefusal,
+} from "../internal/managed-host-auth";
+import {
   TEAM_TRANSFER_DISCLOSURE,
   TEAM_TRANSFER_DISCLOSURE_VERSION,
 } from "@traycer/protocol/host/environment/team-transfer-disclosure";
@@ -100,6 +104,7 @@ import { probeHostHealth } from "../service/health-probe";
 // from one whose host will boot unprovisioned. The desktop's `result.data`
 // parsers are tolerant of added fields.
 export type HostInstallAuthPreflight =
+  | { readonly state: "managed"; readonly reason: null }
   | { readonly state: "signed-in"; readonly reason: null }
   | { readonly state: "signed-in-inline"; readonly reason: null }
   | {
@@ -178,6 +183,10 @@ export async function runSignInPreflight(
 ): Promise<HostInstallAuthPreflight> {
   if (policy === true) {
     return { state: "not-checked", reason: "bytes-only" };
+  }
+  if (await isManagedCliAuth()) {
+    if (typeof policy === "object") throw managedSignInRefusal();
+    return { state: "managed", reason: null };
   }
   const auth = await resolveHostAuthOrNull(ctx, "preflight");
   if (auth !== null) {
@@ -263,7 +272,7 @@ export async function maybeProvisionCredential(
   // does not depend on the operator's auth state at all. Bytes-only lands
   // here too: its caller passes `"none"` because it deliberately skips the
   // whole service lifecycle.
-  if (postSwapAction === "none") {
+  if (postSwapAction === "none" || authPreflight?.state === "managed") {
     return null;
   }
   const preflightSawSignIn =

@@ -1,3 +1,4 @@
+import { isManagedCliAuth, managedSignInRefusal } from "./managed-host-auth";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type {
   EnvironmentDescriptor,
@@ -89,6 +90,7 @@ export interface SignedInEnvironments {
 export async function readSignInEnvironments(
   notConfirmed: () => CliError,
 ): Promise<SignedInEnvironments> {
+  if (await isManagedCliAuth()) throw managedSignInRefusal();
   const auth = await resolveHostAuth();
   if (auth === null) throw hostTokenFailureCliError({ kind: "no-sign-in" });
   const signedIn = await storedSignInAsAuthnTakesIt(auth, notConfirmed);

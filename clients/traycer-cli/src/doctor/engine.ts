@@ -1,3 +1,7 @@
+import {
+  isManagedCliAuth,
+  MANAGED_ACCOUNT_UNCONFIRMED,
+} from "../internal/managed-host-auth";
 import { execFileSync } from "node:child_process";
 import {
   access,
@@ -1711,8 +1715,8 @@ async function probeHostRpc(
   pid: number,
 ): Promise<DoctorIssue | null> {
   const { websocketUrl } = endpoint;
-  const auth = await resolveHostAuth();
-  if (auth === null) {
+  const managed = await isManagedCliAuth();
+  if (!managed && (await resolveHostAuth()) === null) {
     // Without a bearer we can't verify the authenticated path. Don't claim
     // healthy (TCP-open ≠ usable) nor broken - surface as info.
     return {
@@ -1730,6 +1734,17 @@ async function probeHostRpc(
     const status = await callHostRpcAtEndpoint("host.status", {}, endpoint);
     return crossHostMessagingIssue(status.crossHostMessaging);
   } catch (caught) {
+    if (managed) {
+      return {
+        code: DOCTOR_ISSUE_CODES.HOST_RPC_UNVERIFIED,
+        severity: "info",
+        title: "Could not verify the connection",
+        message: MANAGED_ACCOUNT_UNCONFIRMED,
+        fixAction: null,
+        terminalCommand: null,
+        details: { websocketUrl },
+      };
+    }
     // A call the CLI's own gate ended is no host answer and no transport
     // failure: it is read from the gate's typed ending. A rejected sign-in is
     // the issue a host's own UNAUTHORIZED already raises.

@@ -1,3 +1,7 @@
+import {
+  isManagedCliAuth,
+  managedSignInRefusal,
+} from "../internal/managed-host-auth";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import {
   readHostOwnershipViaHttp,
@@ -60,6 +64,7 @@ export interface BotListGroup {
  */
 export function buildBotListCommand(): CommandFn {
   return async () => {
+    if (await isManagedCliAuth()) throw managedSignInRefusal();
     const [signedIn, bots] = await Promise.all([
       readSignInEnvironments(ownershipUnconfirmedCliError),
       listBots(),

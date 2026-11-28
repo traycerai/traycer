@@ -1,3 +1,4 @@
+import { managedAccountNote } from "../internal/managed-host-auth";
 import type { Environment } from "../runner/environment";
 import {
   withStagedTeamToken,
@@ -505,6 +506,9 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
         // Restate the unauthenticated warning on the terminal line - the
         // pre-flight's copy printed before a potentially long download and
         // may have scrolled away.
+        if (authPreflight.state === "managed" && !ctx.runtime.json) {
+          human = `${human}\n${await managedAccountNote()}`;
+        }
         if (authPreflight.state === "unauthenticated") {
           human = `${human}; not signed in - the host is unprovisioned until you run \`traycer login\``;
         }

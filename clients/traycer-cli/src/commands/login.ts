@@ -1,4 +1,8 @@
 import {
+  isManagedCliAuth,
+  managedAccountResult,
+} from "../internal/managed-host-auth";
+import {
   credentialsIdentityFromAuthenticatedUser,
   validateAuthTokenIdentityAccessOnly,
 } from "../../../shared/auth/auth-validation";
@@ -37,6 +41,7 @@ import { runWithCliStore, withCommitRetry } from "../store/credentials-store";
 // cannot deliver work to the user's other machines. A host that already holds
 // one is left alone, and with no host running nothing is dialed.
 export const loginCommand: CommandFn = async (ctx): Promise<CommandResult> => {
+  if (await isManagedCliAuth()) return managedAccountResult(ctx, false);
   ctx.runtime.logger.info("Interactive login command started", {
     environment: ctx.runtime.environment,
   });
@@ -133,6 +138,7 @@ export function buildLoginCommand(opts: {
 
 function loginWithToken(rawToken: string): CommandFn {
   return async (ctx): Promise<CommandResult> => {
+    if (await isManagedCliAuth()) return managedAccountResult(ctx, false);
     ctx.runtime.logger.info("Token login command started", {
       environment: ctx.runtime.environment,
       tokenFlagUsesStdin: rawToken === "-",
