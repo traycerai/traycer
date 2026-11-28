@@ -145,6 +145,7 @@ export interface StripTabItem {
   readonly displayTab: HeaderTab;
   readonly canClose: boolean;
   readonly canEditTitle: boolean;
+  readonly titleBusy: boolean;
   readonly rename: InlineRename;
   readonly leaderBadge: StripTabLeaderBadge | null;
   readonly close: () => void;
@@ -290,14 +291,12 @@ export function useStripTabItem(input: StripTabItemInput): StripTabItem {
     authorizesCloudCapability(state.status),
   );
   const titleBusy = useRegisteredTaskTitleBusy(tabEpicId);
-  const canEditTitle =
-    !titleBusy &&
-    canEditEpicTabTitle({
-      isEpicTab: tab.kind === "epic",
-      permissionRole,
-      localHome,
-      cloudAuthorized,
-    });
+  const canEditTitle = canEditEpicTabTitle({
+    isEpicTab: tab.kind === "epic",
+    permissionRole,
+    localHome,
+    cloudAuthorized,
+  });
   const canClose = tab.kind !== "epic" || tab.canClose;
   const displayTab = useMemo(
     () =>
@@ -547,6 +546,7 @@ export function useStripTabItem(input: StripTabItemInput): StripTabItem {
     displayTab,
     canClose,
     canEditTitle,
+    titleBusy,
     rename,
     leaderBadge,
     close,

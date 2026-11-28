@@ -311,6 +311,7 @@ function PanelTaskHeaderRow(props: {
             size="icon-xs"
             aria-label="Rename task"
             data-testid="epic-sidebar-task-header-rename"
+            disabled={rename.titleBusy}
             onClick={rename.startEditing}
           >
             <Pencil />
@@ -333,7 +334,7 @@ function PanelTaskHeaderRow(props: {
 function usePanelTaskTitleRename(
   epicId: string,
   title: string,
-): InlineRename & { readonly canEdit: boolean } {
+): InlineRename & { readonly canEdit: boolean; readonly titleBusy: boolean } {
   const handle = useMaybeOpenEpicHandle();
   const titleBusy = useWriteFieldBusy(handle, "epic-title", null);
   const queryClient = useQueryClient();
@@ -344,7 +345,6 @@ function usePanelTaskTitleRename(
   );
   const canEdit =
     handle !== null &&
-    !titleBusy &&
     isEditableRole(permissionRole) &&
     (localHome || cloudAuthorized);
   const commit = useCallback(
@@ -393,7 +393,7 @@ function usePanelTaskTitleRename(
       settleDetachedEpicTitleCommit(commit(next), "Epic panel header");
     },
   });
-  return { ...rename, canEdit };
+  return { ...rename, canEdit, titleBusy };
 }
 
 /**

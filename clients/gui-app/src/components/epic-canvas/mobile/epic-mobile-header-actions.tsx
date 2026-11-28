@@ -118,9 +118,7 @@ export function MobileEpicHeaderTitle(props: {
   const titlePermission = useRegisteredEpicPermissionRole(epicId);
   const titleBusy = useRegisteredTaskTitleBusy(epicId);
   const canEdit =
-    !titleBusy &&
-    isEditableRole(titlePermission) &&
-    (localHome || cloudAuthorized);
+    isEditableRole(titlePermission) && (localHome || cloudAuthorized);
   const updateTitle = useEpicUpdateTitle();
   const queryClient = useQueryClient();
   const handleCommit = useCallback(
@@ -211,6 +209,7 @@ export function MobileEpicHeaderTitle(props: {
     <InlineTitleField
       value={title}
       editable={canEdit}
+      disabled={titleBusy}
       isBlocked={() =>
         readWriteFieldBusy(
           getOpenEpicRegistry().peek(epicId),

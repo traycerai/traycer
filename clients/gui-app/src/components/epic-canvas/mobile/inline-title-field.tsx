@@ -14,6 +14,7 @@ interface InlineTitleFieldProps {
   readonly value: string;
   /** False renders plain text - the caller's permission rule decides. */
   readonly editable: boolean;
+  readonly disabled?: boolean;
   /** Fires only with a non-empty title that differs from `value`. */
   readonly onCommit: (next: string) => void;
   readonly isBlocked?: () => boolean;
@@ -47,6 +48,7 @@ export function InlineTitleField(props: InlineTitleFieldProps): ReactNode {
   const {
     value,
     editable,
+    disabled,
     onCommit,
     isBlocked,
     inputLabel,
@@ -65,7 +67,7 @@ export function InlineTitleField(props: InlineTitleFieldProps): ReactNode {
   };
   const longPress = useLongPress({
     onLongPress: startEdit,
-    disabled: !editable || draft !== null,
+    disabled: !editable || disabled === true || draft !== null,
     acceptsMouse: true,
     acceptsPen: false,
   });
@@ -149,6 +151,7 @@ export function InlineTitleField(props: InlineTitleFieldProps): ReactNode {
   return (
     <button
       type="button"
+      disabled={disabled}
       {...longPress.handlers}
       onKeyDown={(event) => {
         if (event.key !== "Enter" && event.key !== " ") return;
@@ -161,7 +164,7 @@ export function InlineTitleField(props: InlineTitleFieldProps): ReactNode {
       // callout, a text selection under a held mouse) would claim it first.
       className={cn(
         className,
-        "touch-chrome self-stretch rounded-sm text-left focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-hidden",
+        "touch-chrome self-stretch rounded-sm text-left focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-hidden disabled:opacity-50",
       )}
     >
       {value}
