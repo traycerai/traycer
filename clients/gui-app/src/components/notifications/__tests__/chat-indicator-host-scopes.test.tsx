@@ -20,7 +20,7 @@ import { ChatIndicatorAttestedContext } from "@/components/notifications/chat-in
 import { ChatIndicatorHostScopes } from "@/components/notifications/chat-indicator-host-scopes";
 import { chatIndicatorHostScopes } from "@/lib/notifications/chat-indicator-scopes";
 import {
-  NotificationIndicatorsContext,
+  useNotificationIndicatorsSnapshot,
   useSurfaceNotificationIndicatorState,
 } from "@/components/notifications/notification-indicator-context";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
@@ -254,7 +254,7 @@ function EpicProbe(): ReactNode {
 
 /** The inherited epic's unread count as the aggregate holds it. */
 function EpicCountProbe(): ReactNode {
-  const indicators = useContext(NotificationIndicatorsContext);
+  const indicators = useNotificationIndicatorsSnapshot();
   return (
     <span data-testid="probe-epic-1-count">
       {String(indicators.epics["epic-1"].unreadCount)}
@@ -592,7 +592,7 @@ describe("ChatIndicatorHostScopes against a stale host answer", () => {
   function renderStaleAnswer(cloud: {
     readonly hasSnapshot: boolean;
     readonly connectionState: "connected" | "unavailable";
-  }): Harness {
+  }): void {
     feedMode.value = "cloud";
     servingHost.value = HOST_A;
     useCloudNotificationsStore.setState({
@@ -642,7 +642,6 @@ describe("ChatIndicatorHostScopes against a stale host answer", () => {
         </ChatIndicatorHostScopes>,
       ),
     );
-    return harness;
   }
 
   it("keeps a chat read that the live cloud feed marked read, whatever another host's cached answer says", async () => {

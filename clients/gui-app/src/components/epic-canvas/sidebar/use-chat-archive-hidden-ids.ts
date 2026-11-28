@@ -43,6 +43,9 @@ import {
 } from "@/components/epic-canvas/sidebar/epic-sidebar-selection";
 
 const EMPTY_ALWAYS_VISIBLE_IDS: ReadonlyArray<string> = [];
+const NO_HIDDEN_IDS: ReadonlySet<string> = new Set();
+/** Joins chat ids into one membership key; no chat id contains it. */
+const ID_SEPARATOR = "\u0000";
 
 export type ChatDescendantStatusKind =
   | "failure"
@@ -255,8 +258,21 @@ export function useChatArchiveHiddenIds(args: {
     notificationIndicators,
     openTileContentIds,
   ]);
-  return useMemo(
-    () => revealArchiveHiddenIds(baseArchiveHiddenIds, alwaysVisibleIds, tree),
+  const hiddenIdsKey = useMemo(
+    () =>
+      [...revealArchiveHiddenIds(baseArchiveHiddenIds, alwaysVisibleIds, tree)]
+        .sort()
+        .join(ID_SEPARATOR),
     [baseArchiveHiddenIds, alwaysVisibleIds, tree],
+  );
+  // Keyed by membership: a dot lighting or clearing that hides or reveals no
+  // chat keeps the set, and with it every row reading the sidebar's visible
+  // ids, unchanged.
+  return useMemo(
+    (): ReadonlySet<string> =>
+      hiddenIdsKey === ""
+        ? NO_HIDDEN_IDS
+        : new Set(hiddenIdsKey.split(ID_SEPARATOR)),
+    [hiddenIdsKey],
   );
 }

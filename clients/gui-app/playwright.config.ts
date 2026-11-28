@@ -70,14 +70,20 @@ export default defineConfig({
   expect: { timeout: 10_000 },
   // The JSON report is what the per-test budget and the shard timings read
   // (`scripts/browser-test-budget.ts`, `scripts/browser-test-timings.ts`).
+  // The last one prints the first test on each worker step by step, since a
+  // slow browser start lands there (`support/first-test-timing-reporter.ts`).
   reporter: isCi
     ? [
         ["github"],
         ["list"],
         ["html", { open: "never" }],
         ["json", { outputFile: "test-results.json" }],
+        ["./browser-tests/support/first-test-timing-reporter.ts"],
       ]
     : [["list"]],
+  // Pays a machine's first browser start and page load before any test's
+  // budget begins, and prints both times.
+  globalSetup: "./browser-tests/support/warm-up.ts",
   use: {
     baseURL: BASE_URL,
     ...(chromeBin === undefined
