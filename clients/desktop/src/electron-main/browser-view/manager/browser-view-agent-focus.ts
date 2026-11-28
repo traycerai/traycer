@@ -348,7 +348,7 @@ export class BrowserViewAgentFocus {
     if (entry === undefined) return;
     const tab = this.tabs.get(entry);
     if (tab === undefined || tab.unsettled.length === 0) return;
-    if (this.holder(window) !== entry) return;
+    if (this.focusedTile(window) !== entry) return;
     if (window.owner !== entry) this.handBackOrPark(window, entry);
     tab.unsettled.shift()?.();
   }
