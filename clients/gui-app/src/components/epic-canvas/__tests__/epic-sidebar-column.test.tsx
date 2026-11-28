@@ -749,9 +749,37 @@ describe("<EpicSidebarColumn /> panel task header", () => {
     ) as HTMLButtonElement;
     expect(pencil.disabled).toBe(true);
     fireEvent.click(pencil);
+    fireEvent.keyDown(pencil, { key: "Enter", code: "Enter" });
     expect(
       screen.queryByTestId("epic-sidebar-task-header-title-input"),
     ).toBeNull();
+  });
+
+  it("keeps the panel rename control absent for a denied user while the real title key is occupied", async () => {
+    const writes: EpicWriteCommandIntent[] = [];
+    const handle = buildEditableTitleSession(writes, "owner");
+    useAuthStore.setState({ status: "signed-in" });
+    useEpicCanvasStore
+      .getState()
+      .openEpicTabWithId(TAB_ID, EPIC_ID, "Header Task");
+    const commandId = await handle.store.getState().submitWriteCommand({
+      kind: "update-epic-title",
+      title: "Occupied title",
+      updatedAt: 1,
+    });
+    expect(commandId).not.toBeNull();
+    await handle.flush();
+    expect(handle.store.getState().occupiedWriteFields["epic-title"]).toBe(
+      true,
+    );
+    handle.store.setState({ permissionRole: null });
+
+    renderColumnWithSession(handle);
+
+    expect(handle.store.getState().occupiedWriteFields["epic-title"]).toBe(
+      true,
+    );
+    expect(screen.queryByTestId("epic-sidebar-task-header-rename")).toBeNull();
   });
 
   it("keeps the task title pencil absent without a grant while the title key is idle", () => {

@@ -13,7 +13,13 @@
  * expose `mutateAsync` returning a controllable Promise instead of a
  * synchronous `mutate`.
  */
-import { act, fireEvent, render, renderHook } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  renderHook,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import {
@@ -1018,20 +1024,38 @@ describe("useRenameCanvasTab", () => {
         await handle.flush();
       });
 
-      expect(mocks.artifactCalls).toEqual([
-        { artifactId: id, title: "First title" },
-      ]);
-      expect(readWriteFieldBusy(handle, "rename", id)).toBe(true);
+      const firstCommand = handle.store
+        .getState()
+        .writeCommands.find(
+          (command) =>
+            command.state === "pending" &&
+            command.intent.kind === "rename-artifact" &&
+            command.intent.artifactId === id,
+        );
+      if (firstCommand === undefined)
+        throw new Error("expected the first artifact rename command");
+      const terminal = handle.store
+        .getState()
+        .waitForWriteCommand(firstCommand.commandId);
+      await waitFor(() => {
+        expect(readWriteFieldBusy(handle, "rename", id)).toBe(true);
+        expect(handle.store.getState().artifacts.byId[id]?.title).toBe(
+          "First title",
+        );
+      });
 
       await act(async () => {
         mocks.pendingSettles[0]?.();
-        await flushMicrotasks();
         await handle.flush();
       });
+      await expect(terminal).resolves.toMatchObject({ state: "committed" });
+      await waitFor(() => {
+        expect(readWriteFieldBusy(handle, "rename", id)).toBe(true);
+        expect(handle.store.getState().artifacts.byId[id]?.title).toBe(
+          "First title",
+        );
+      });
       expect(mocks.artifactCalls).toHaveLength(1);
-      expect(handle.store.getState().artifacts.byId[id].title).toBe(
-        "First title",
-      );
     } finally {
       first.unmount();
       second.unmount();
@@ -1260,15 +1284,33 @@ describe("useRenameCanvasTab", () => {
       });
       await act(async () => handle.flush());
 
+      const firstCommand = handle.store
+        .getState()
+        .writeCommands.find(
+          (command) =>
+            command.state === "pending" &&
+            command.intent.kind === "rename-artifact" &&
+            command.intent.artifactId === id,
+        );
+      if (firstCommand === undefined)
+        throw new Error("expected the first artifact rename command");
+      const firstTerminal = handle.store
+        .getState()
+        .waitForWriteCommand(firstCommand.commandId);
+
       await act(async () => {
         mocks.pendingSettles[0]?.();
-        await flushMicrotasks();
         await handle.flush();
       });
-      expect(readWriteFieldBusy(handle, "rename", id)).toBe(true);
-      expect(mocks.artifactCalls).toEqual([
-        { artifactId: id, title: "First title" },
-      ]);
+      await expect(firstTerminal).resolves.toMatchObject({
+        state: "committed",
+      });
+      await waitFor(() => {
+        expect(readWriteFieldBusy(handle, "rename", id)).toBe(true);
+        expect(handle.store.getState().artifacts.byId[id]?.title).toBe(
+          "First title",
+        );
+      });
 
       await act(async () => {
         result.current(artifactTile(id), "Second title");
@@ -1289,21 +1331,60 @@ describe("useRenameCanvasTab", () => {
         });
         await handle.flush();
       });
-      expect(readWriteFieldBusy(handle, "rename", id)).toBe(false);
+      await waitFor(() => {
+        expect(readWriteFieldBusy(handle, "rename", id)).toBe(false);
+        expect(handle.store.getState().artifacts.byId[id]?.title).toBe(
+          "First title",
+        );
+      });
 
       await act(async () => {
         result.current(artifactTile(id), "Second title");
         await handle.flush();
       });
+      await waitFor(() => {
+        expect(
+          handle.store
+            .getState()
+            .writeCommands.find(
+              (candidate) =>
+                candidate.intent.kind === "rename-artifact" &&
+                candidate.intent.artifactId === id &&
+                candidate.intent.title === "Second title",
+            ),
+        ).toBeDefined();
+      });
+      const secondCommand = handle.store
+        .getState()
+        .writeCommands.find(
+          (candidate) =>
+            candidate.intent.kind === "rename-artifact" &&
+            candidate.intent.artifactId === id &&
+            candidate.intent.title === "Second title",
+        );
+      if (secondCommand === undefined)
+        throw new Error("expected the second artifact rename command");
+      const secondTerminal = handle.store
+        .getState()
+        .waitForWriteCommand(secondCommand.commandId);
+      await act(async () => {
+        mocks.pendingSettles[1]?.();
+        await handle.flush();
+      });
+      await expect(secondTerminal).resolves.toMatchObject({
+        state: "committed",
+      });
+      await waitFor(() => {
+        expect(readWriteFieldBusy(handle, "rename", id)).toBe(true);
+        expect(handle.store.getState().artifacts.byId[id]?.title).toBe(
+          "Second title",
+        );
+      });
+      expect(mocks.artifactCalls).toHaveLength(2);
       expect(mocks.artifactCalls).toEqual([
         { artifactId: id, title: "First title" },
         { artifactId: id, title: "Second title" },
       ]);
-      await act(async () => {
-        mocks.pendingSettles[1]?.();
-        await flushMicrotasks();
-        await handle.flush();
-      });
     } finally {
       unmount();
     }
