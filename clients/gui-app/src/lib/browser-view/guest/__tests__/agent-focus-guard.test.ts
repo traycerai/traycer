@@ -447,4 +447,67 @@ describe("startAgentFocusGuard", () => {
     focusElement.mockRestore();
     hasFocus.mockRestore();
   });
+
+  it("blurs the agent tile when intent cannot take focus during reclaim", async () => {
+    const { input, webview, bridge } = setup();
+    bridge.emitAgentFocusSignal(beginSignal("reclaim-refocus-fails"));
+    await vi.waitFor(() =>
+      expect(bridge.agentFocusReports.at(-1)).toEqual({
+        kind: "bracketOpened",
+        bracketId: "reclaim-refocus-fails",
+      }),
+    );
+    setActiveElement(webview);
+    vi.spyOn(input, "focus").mockImplementation(() => {
+      setActiveElement(webview);
+    });
+    vi.spyOn(webview, "blur").mockImplementation(() => {
+      setActiveElement(document.body);
+    });
+    const activeAtReclaimed: Array<Element | null> = [];
+    vi.spyOn(bridge, "reportAgentFocus").mockImplementation((report) => {
+      if (report.kind === "reclaimed") {
+        activeAtReclaimed.push(document.activeElement);
+      }
+      return Promise.resolve();
+    });
+
+    bridge.emitAgentFocusSignal({ kind: "reclaim", reclaimId: "r4" });
+
+    expect(activeAtReclaimed).toEqual([document.body]);
+  });
+
+  it("leaves a non-agent tile alone when reclaim has no intent", async () => {
+    const { webview, bridge } = setup();
+    dispose?.();
+    setActiveElement(null);
+    dispose = startAgentFocusGuard(bridge);
+    bridge.emitAgentFocusSignal({
+      kind: "begin",
+      bracketId: "non-agent-tile",
+      registrationId,
+      agentRegistrationIds: [],
+    });
+    await vi.waitFor(() =>
+      expect(bridge.agentFocusReports.at(-1)).toEqual({
+        kind: "bracketOpened",
+        bracketId: "non-agent-tile",
+      }),
+    );
+    setActiveElement(webview);
+    vi.spyOn(webview, "blur").mockImplementation(() => {
+      setActiveElement(document.body);
+    });
+    const activeAtReclaimed: Array<Element | null> = [];
+    vi.spyOn(bridge, "reportAgentFocus").mockImplementation((report) => {
+      if (report.kind === "reclaimed") {
+        activeAtReclaimed.push(document.activeElement);
+      }
+      return Promise.resolve();
+    });
+
+    bridge.emitAgentFocusSignal({ kind: "reclaim", reclaimId: "r5" });
+
+    expect(activeAtReclaimed).toEqual([webview]);
+  });
 });

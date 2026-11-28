@@ -172,6 +172,14 @@ interface TabFocus {
 
 /** Outside every viewport: only a page's own root widget can be hit there. */
 const OFF_VIEW_POINT = { x: -1, y: -1 } as const;
+type ButtonlessMouseEvent = "mousePressed" | "mouseReleased";
+/** Chromium moves focus into the page for the press. */
+const PRESS: readonly ButtonlessMouseEvent[] = [
+  "mousePressed",
+  "mouseReleased",
+];
+/** Moves no focus: Chromium does that only for a press, a touch or a tap. */
+const RELEASE: readonly ButtonlessMouseEvent[] = ["mouseReleased"];
 /**
  * A page that runs the guard answers a `begin` at once, so this bounds only a
  * page whose main thread is stalled; its input is abandoned.
@@ -319,7 +327,10 @@ export class BrowserViewAgentFocus {
         return;
       case "guardStopped":
         this.guards.delete(windowId);
-        if (window !== undefined) abandonBegins(window);
+        if (window !== undefined) {
+          abandonBegins(window);
+          this.answerReclaims(window);
+        }
         return;
       // An answer for a bracket no longer pending, from a page since replaced
       // included, changes nothing.
@@ -697,37 +708,49 @@ export class BrowserViewAgentFocus {
 
   /** Moves focus to the owner; false when that could not be sent, and focus stays put. */
   private handBack(window: WindowFocus): boolean {
-    // Another user of the app page's debugger may have detached it mid-input.
-    if (window.owner === "app" && !this.ensureHost(window)) return false;
-    const answered =
-      window.owner === "app" &&
+    const reclaiming =
       this.readsNoFocus(window) &&
-      this.guards.get(window.windowId) === "running"
-        ? this.reclaim(window)
-        : this.pressWithoutButton(window, window.owner);
-    if (answered === null) return false;
-    if (window.owner === "app") {
-      const applied = Promise.race([answered, window.pageEnded.promise]);
-      window.handedBack = applied;
-      window.appHandedBack = applied;
+      this.guards.get(window.windowId) === "running";
+    // Another user of the app page's debugger may have detached it mid-input.
+    if ((window.owner === "app" || reclaiming) && !this.ensureHost(window)) {
+      return false;
+    }
+    if (reclaiming) {
+      const reclaim = this.reclaim(window);
+      if (reclaim === null) return false;
+      window.handedBack = Promise.race([reclaim.all, window.pageEnded.promise]);
+      window.appHandedBack = Promise.race([
+        reclaim.app,
+        window.pageEnded.promise,
+      ]);
     } else {
-      // A tile's closing detaches its debugger, which answers it.
-      window.handedBack = answered;
+      const answered = this.pressWithoutButton(window, window.owner);
+      if (answered === null) return false;
+      if (window.owner === "app") {
+        const applied = Promise.race([answered, window.pageEnded.promise]);
+        window.handedBack = applied;
+        window.appHandedBack = applied;
+      } else {
+        // A tile's closing detaches its debugger, which answers it.
+        window.handedBack = answered;
+      }
     }
     window.parkedIn = null;
     return true;
   }
 
   /**
-   * Hands focus back to the app page by the page's own report. While the
-   * window's focus is in a page with no focused frame, Chromium takes a press
-   * into the app page as landing where focus already is and moves nothing,
-   * and that page keeps the focus once it reports a frame. A frame the app
-   * page reports focused takes it back whatever the other page holds.
-   * Answered by a press sent after the page's answer, which Chromium answers
-   * once the page has applied the page focus that move set.
+   * Hands focus back by the app page's own report. While the window's focus is
+   * in a page with no focused frame, Chromium takes a press into any page as
+   * landing where focus already is and moves nothing, and that page keeps the
+   * focus once it reports a frame. A frame the app page reports focused takes
+   * it back whatever the other page holds, and a press into the owner then
+   * moves it, to whoever owns it by then. `app` is answered once the app page
+   * has applied the page focus these moves set, `all` once the owner's has.
    */
-  private reclaim(window: WindowFocus): Promise<void> | null {
+  private reclaim(
+    window: WindowFocus,
+  ): { readonly app: Promise<void>; readonly all: Promise<void> } | null {
     const reclaimId = randomUUID();
     const reclaimed = Promise.withResolvers<void>();
     window.reclaims.set(reclaimId, reclaimed.resolve);
@@ -735,9 +758,29 @@ export class BrowserViewAgentFocus {
       window.reclaims.delete(reclaimId);
       return null;
     }
-    return reclaimed.promise.then(async () => {
-      await this.pressWithoutButton(window, "app");
+    const moved = reclaimed.promise.then(() => {
+      const owner = window.owner;
+      const toOwner =
+        this.pressWithoutButton(window, owner) ?? Promise.resolve();
+      // The app page took page focus, and a press into a tile takes it away
+      // again. A release moves no focus, and is answered after both.
+      const app =
+        owner === "app"
+          ? toOwner
+          : (this.sendWithoutButton(window, "app", RELEASE) ??
+            Promise.resolve());
+      return { app, all: Promise.all([toOwner, app]).then(() => undefined) };
     });
+    return {
+      app: moved.then(({ app }) => app),
+      all: moved.then(({ all }) => all),
+    };
+  }
+
+  /** Answers every reclaim the app page will not, so each falls through to its press. */
+  private answerReclaims(window: WindowFocus): void {
+    for (const answer of window.reclaims.values()) answer();
+    window.reclaims.clear();
   }
 
   /** Runs `then` once the last hand-back, and any made while it is awaited, is applied. */
@@ -762,11 +805,23 @@ export class BrowserViewAgentFocus {
     window: WindowFocus,
     target: FocusOwner,
   ): Promise<void> | null {
+    return this.sendWithoutButton(window, target, PRESS);
+  }
+
+  /**
+   * Sends buttonless mouse events to `target`'s page, which Blink drops;
+   * answered once that page has handled them. Null when they could not be sent.
+   */
+  private sendWithoutButton(
+    window: WindowFocus,
+    target: FocusOwner,
+    types: readonly ButtonlessMouseEvent[],
+  ): Promise<void> | null {
     const browserDebugger = this.debuggerFor(window, target);
     if (browserDebugger === null) return null;
     this.ownPress = true;
     try {
-      const answers = (["mousePressed", "mouseReleased"] as const).map((type) =>
+      const answers = types.map((type) =>
         browserDebugger
           .sendCommand(
             "Input.dispatchMouseEvent",
@@ -1036,7 +1091,7 @@ export class BrowserViewAgentFocus {
       this.guards.set(window.windowId, "replaced");
     }
     window.pageEnded.resolve();
-    window.reclaims.clear();
+    this.answerReclaims(window);
     abandonBegins(window);
   }
 
@@ -1046,7 +1101,7 @@ export class BrowserViewAgentFocus {
     window.removeListeners();
     this.guards.delete(window.windowId);
     window.pageEnded.resolve();
-    window.reclaims.clear();
+    this.answerReclaims(window);
     abandonBegins(window);
     this.release(window);
   }

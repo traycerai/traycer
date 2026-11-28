@@ -148,20 +148,22 @@ export function startAgentFocusGuard(bridge: BrowserViewBridge): () => void {
   };
   // Focus this page's frame: Chromium moves the window's focus back for that
   // report, sent ahead of the answer on the same channel, whatever the tile
-  // holding it has. Blurring the tile does it when no element should get it.
+  // holding it has. Blurring the agent's tile does it when no element should
+  // get it, or the element can't take it now. A tile the person pressed into
+  // is theirs, and is left alone.
   const reclaim = (reclaimId: string): void => {
+    if (
+      intent !== null &&
+      intent.isConnected &&
+      lostFocus(document.activeElement)
+    ) {
+      refocus(intent);
+    }
     const active = document.activeElement;
-    if (lostFocus(active)) {
-      if (intent !== null && intent.isConnected) {
-        refocus(intent);
-      } else if (
-        active instanceof HTMLElement &&
-        browserGuestRegistrationOf(active) !== null
-      ) {
-        quietly(() => {
-          active.blur();
-        });
-      }
+    if (active instanceof HTMLElement && isAgentTile(active)) {
+      quietly(() => {
+        active.blur();
+      });
     }
     pendingRestore = null;
     tell({ kind: "reclaimed", reclaimId });
