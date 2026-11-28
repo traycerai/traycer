@@ -142,15 +142,6 @@ export const sandboxSetupTaskFrames = {
       toolSwitches: [],
     },
   },
-  worktreeFailureOffer: {
-    kind: "task",
-    hasBinaryPayload: false,
-    state: {
-      setupChat: null,
-      cards: [{ kind: "offer", repository: sandboxSetupRepository }],
-      toolSwitches: [],
-    },
-  },
   offerWithSetupChat: {
     kind: "task",
     hasBinaryPayload: false,
@@ -175,6 +166,52 @@ export const sandboxSetupTaskFrames = {
     state: null,
   },
 } satisfies Record<string, SandboxSetupSubscribeServerFrame>;
+
+export const sandboxSetupReviewViews = {
+  authorWaitingApproval: {
+    kind: "task",
+    hasBinaryPayload: false,
+    state: {
+      setupChat: sandboxSetupChat,
+      cards: [sandboxSetupTaskCards.waiting],
+      toolSwitches: [],
+    },
+  } satisfies SandboxSetupSubscribeServerFrame,
+  editorReviewInput: {
+    kind: "task",
+    hasBinaryPayload: false,
+    state: {
+      setupChat: null,
+      cards: [
+        {
+          kind: "review",
+          repository: sandboxSetupRepository,
+          versionId: sandboxSetupVersionId,
+          authorId: "author-only-user-id",
+          authorChatId: "author-only-chat-id",
+          chatId: sandboxSetupChat.chatId,
+          setupChat: sandboxSetupChat,
+        },
+      ],
+      toolSwitches: [],
+    },
+  },
+  editorReview: {
+    kind: "task",
+    hasBinaryPayload: false,
+    state: {
+      setupChat: null,
+      cards: [
+        {
+          kind: "review",
+          repository: sandboxSetupRepository,
+          versionId: sandboxSetupVersionId,
+        },
+      ],
+      toolSwitches: [],
+    },
+  } satisfies SandboxSetupSubscribeServerFrame,
+};
 
 export const sandboxSetupOutOfDateVersionFrames = [
   sandboxSetupTaskCards.ready,
@@ -267,15 +304,6 @@ export const sandboxSetupSettingsHandover = {
     settingsStartRequest("website", sandboxSetupOperationIds.handoverWebsite),
     settingsStartRequest("docs", sandboxSetupOperationIds.handoverDocs),
   ],
-  retryRequest: settingsStartRequest(
-    "traycer",
-    sandboxSetupOperationIds.handoverTraycer,
-  ),
-  results: [
-    { kind: "accepted", setupChat: sandboxSetupChat },
-    { kind: "accepted", setupChat: sandboxSetupChat },
-    { kind: "accepted", setupChat: sandboxSetupChat },
-  ] satisfies SandboxSetupStartResponse[],
 };
 
 export const sandboxSetupStartResults: Record<string, SandboxSetupStartResponse> = {

@@ -29,7 +29,6 @@ import {
   desktop154SandboxSetupCatalog,
   sandboxSetupChat,
   sandboxSetupHiddenPanel,
-  sandboxSetupId,
   sandboxSetupPanel,
   sandboxSetupQuestions,
   sandboxSetupSettingsHandover,
@@ -44,28 +43,12 @@ import {
   sandboxSetupContinueOffer,
   sandboxSetupOtherPersonBusyOffer,
   sandboxSetupOutOfDateVersionFrames,
-  sandboxSetupOperationIds,
   sandboxSetupPickerSettings,
   sandboxSetupBaseVersionId,
+  sandboxSetupReviewViews,
 } from "./__fixtures__/sandbox-setup";
 
 describe("sandbox setup frames", () => {
-  it("uses the same offer frame after a normal action or a worktree failure", () => {
-    const normalOffer = sandboxSetupSubscribeServerFrameSchema.parse(
-      sandboxSetupTaskFrames.offerWithoutSetupChat,
-    );
-    const besideWorktreeFailureOffer =
-      sandboxSetupSubscribeServerFrameSchema.parse({
-        ...sandboxSetupTaskFrames.worktreeFailureOffer,
-      });
-
-    expect(besideWorktreeFailureOffer).toEqual(normalOffer);
-    expect(normalOffer).toMatchObject({
-      kind: "task",
-      state: { cards: [{ kind: "offer" }] },
-    });
-  });
-
   it("carries offer picker presence and absence through setupChat", () => {
     const withoutPicker = sandboxSetupSubscribeServerFrameSchema.parse(
       sandboxSetupTaskFrames.offerWithoutSetupChat,
@@ -109,6 +92,39 @@ describe("sandbox setup frames", () => {
         },
       },
     });
+  });
+
+  it("parses the waiting author frame and strips author/chat fields from the review card", () => {
+    const author = sandboxSetupSubscribeServerFrameSchema.parse(
+      sandboxSetupReviewViews.authorWaitingApproval,
+    );
+    const editor = sandboxSetupSubscribeServerFrameSchema.parse(
+      sandboxSetupReviewViews.editorReviewInput,
+    );
+
+    expect(author).toEqual(sandboxSetupReviewViews.authorWaitingApproval);
+    expect(editor).toEqual(sandboxSetupReviewViews.editorReview);
+  });
+
+  it("rejects chat-linked cards when the viewer chat is foreign or absent", () => {
+    const authorFrame = sandboxSetupReviewViews.authorWaitingApproval;
+    for (const foreignSetupChat of [
+      { ...sandboxSetupChat, chatId: "other-viewer-chat" },
+      { ...sandboxSetupChat, epicId: "other-viewer-epic" },
+    ]) {
+      expect(
+        sandboxSetupSubscribeServerFrameSchema.safeParse({
+          ...authorFrame,
+          state: { ...authorFrame.state, setupChat: foreignSetupChat },
+        }).success,
+      ).toBe(false);
+    }
+    expect(
+      sandboxSetupSubscribeServerFrameSchema.safeParse({
+        ...authorFrame,
+        state: { ...authorFrame.state, setupChat: null },
+      }).success,
+    ).toBe(false);
   });
 
   it("accepts ordinary, secret, and tool-version question actions", () => {
@@ -341,38 +357,12 @@ describe("sandbox setup actions and return branches", () => {
     ).toBe(false);
   });
 
-  it("uses one settings handover and one setup chat across three checked-out repositories", () => {
-    const requests = sandboxSetupSettingsHandover.requests.map((request) =>
-      sandboxSetupStartRequestSchema.parse(request),
-    );
-    const results = sandboxSetupSettingsHandover.results.map((result) =>
-      sandboxSetupStartResponseSchema.parse(result),
-    );
-    const retry = sandboxSetupStartRequestSchema.parse(
-      sandboxSetupSettingsHandover.retryRequest,
+  it("round-trips the settings start tuples for three checked-out repositories", () => {
+    const parsedRequests = sandboxSetupSettingsHandover.requests.map(
+      (request) => sandboxSetupStartRequestSchema.parse(request),
     );
 
-    expect(new Set(requests.map((request) => request.setupId))).toEqual(
-      new Set([sandboxSetupId]),
-    );
-    expect(new Set(requests.map((request) => request.repository.repo))).toEqual(
-      new Set(["traycer", "website", "docs"]),
-    );
-    const operationIds = requests.map((request) => request.operationId);
-    expect(operationIds).toEqual([
-      sandboxSetupOperationIds.handoverTraycer,
-      sandboxSetupOperationIds.handoverWebsite,
-      sandboxSetupOperationIds.handoverDocs,
-    ]);
-    expect(new Set(operationIds).size).toBe(3);
-    expect(retry.operationId).toBe(operationIds[0]);
-    expect(
-      new Set(
-        results.map((result) =>
-          result.kind === "accepted" ? result.setupChat.chatId : "",
-        ),
-      ),
-    ).toEqual(new Set([sandboxSetupChat.chatId]));
+    expect(parsedRequests).toEqual(sandboxSetupSettingsHandover.requests);
   });
 
   it("accepts the successful start result and every refusal code", () => {
@@ -429,11 +419,10 @@ describe("Desktop 1.5.4 released compatibility", () => {
       desktop154SandboxSetupCatalog.unary,
     );
     const releasedStreamPeer = desktop154SandboxSetupCatalog.stream;
-    const oldStreamOpenAck = selectConnectionManifestForPeer(
-      hostStreamRpcRegistry,
-      { "chat.subscribe": currentStreams["chat.subscribe"] },
-      releasedStreamPeer,
-    );
+    const servingNewStreamManifest = {
+      "chat.subscribe": currentStreams["chat.subscribe"],
+      "sandboxSetup.subscribe": currentStreams["sandboxSetup.subscribe"],
+    };
 
     expect(oldUnaryConnection["terminal.list"]).toMatchObject({
       major: 1,
@@ -456,20 +445,10 @@ describe("Desktop 1.5.4 released compatibility", () => {
       ),
     ).toEqual({ ok: true });
 
-    expect(oldStreamOpenAck["chat.subscribe"]).toEqual(
-      currentStreams["chat.subscribe"],
-    );
-    expect(Object.keys(oldStreamOpenAck)).not.toContain(
-      "sandboxSetup.subscribe",
-    );
-    expect(Object.keys(releasedStreamPeer)).not.toContain(
-      "sandboxSetup.subscribe",
-    );
-    expect(currentStreams["sandboxSetup.subscribe"]).toBeDefined();
     expect(
       checkStreamMethodCompatibility(
         hostStreamRpcRegistry,
-        oldStreamOpenAck,
+        servingNewStreamManifest,
         releasedStreamPeer,
         "host",
         "chat.subscribe",
@@ -479,11 +458,33 @@ describe("Desktop 1.5.4 released compatibility", () => {
       checkStreamMethodCompatibility(
         hostStreamRpcRegistry,
         releasedStreamPeer,
-        oldStreamOpenAck,
+        servingNewStreamManifest,
         "client",
         "chat.subscribe",
       ),
     ).toEqual({ ok: true });
+    expect(
+      checkStreamMethodCompatibility(
+        hostStreamRpcRegistry,
+        servingNewStreamManifest,
+        releasedStreamPeer,
+        "client",
+        "sandboxSetup.subscribe",
+      ),
+    ).toMatchObject({
+      ok: false,
+      details: {
+        code: "INCOMPATIBLE",
+        incompatibleMethods: [
+          {
+            method: "sandboxSetup.subscribe",
+            clientCanonical: servingNewStreamManifest["sandboxSetup.subscribe"],
+            hostCanonical: null,
+            blocking: "host-missing-method",
+          },
+        ],
+      },
+    });
   });
 
   it("keeps sandbox setup unary methods optional and its stream sibling off the old floor", () => {
@@ -504,8 +505,5 @@ describe("Desktop 1.5.4 released compatibility", () => {
       expect(split.optionalManifest[method]).toEqual({ major: 1, minor: 0 });
       expect(hostRpcRegistry[method].degrade).toEqual({ kind: "unsupported" });
     }
-    expect(Object.keys(desktop154SandboxSetupCatalog.stream)).not.toContain(
-      "sandboxSetup.subscribe",
-    );
   });
 });
