@@ -35,9 +35,12 @@ import {
 import type { TaskPinnedState } from "@/hooks/epic/use-epic-task-pinned-states-query";
 import { useEpicWaitingReason } from "@/hooks/epic/use-epic-activity-status";
 import { isEditableRole } from "@/lib/epic-permissions";
-import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
-import { getAppHostClientSnapshot } from "@/lib/host/runtime";
-import { buildDialableHostClient } from "@/hooks/host/use-host-client-for";
+import {
+  getEpicSessionHandleHostClient,
+  getOpenEpicRegistry,
+} from "@/lib/registries/epic-session-registry";
+import { getHostBindingSnapshot } from "@/lib/host/runtime";
+import { resolveTaskTabTitleRequester } from "@/lib/epic-title-requester";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import {
@@ -69,8 +72,6 @@ import {
   type HeaderTab,
   type HeaderTabAppearance,
 } from "@/stores/tabs/types";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { HostRpcRegistry } from "@/lib/host";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
 import { tabRefKey } from "@/stores/tabs/layout";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
@@ -148,34 +149,6 @@ export interface StripTabItem {
     pinned: boolean,
     reading: TaskPinnedState | null,
   ) => void;
-}
-
-/**
- * The client an epic rename should be sent on.
- *
- * `null` host - no live session for that epic - keeps the app-wide client,
- * which is what this surface used before tabs carried a host at all. A NAMED
- * host resolves that host's own requester, and returning `null` when it cannot
- * be built is deliberate: the caller reports a failure rather than falling
- * back, because "rename the epic on the machine that holds it" and "rename it
- * on whichever machine this window happens to be pointed at" are different
- * requests, and silently substituting the second is how a rename lands against
- * a host that never had the epic.
- *
- * Built through `buildDialableHostClient` - the same builder every other
- * explicit-host consumer uses - rather than a second construction path.
- */
-function epicRenameClient(
-  hostId: string | null,
-): HostClient<HostRpcRegistry> | null {
-  const appClient = getAppHostClientSnapshot();
-  if (appClient === null) return null;
-  if (hostId === null || hostId === appClient.getActiveHostId()) {
-    return appClient;
-  }
-  const entry = appClient.resolveHostById(hostId);
-  if (entry === null) return null;
-  return buildDialableHostClient(appClient, entry);
 }
 
 /**
@@ -316,23 +289,8 @@ export function useStripTabItem(input: StripTabItemInput): StripTabItem {
       const epicId = tab.epicId;
       const tabHostId = tab.hostId;
       const handle = getOpenEpicRegistry().peek(epicId);
-      // The header strip is app-global and not guaranteed to sit inside a
-      // HostRuntimeProvider, so reach the host client through the snapshot
-      // rather than a render-time hook. It is the app-wide client, already
-      // pinned to the effective host: this rename used to be issued on the
-      // SPINE, which answered from the active slot, so the call landed on
-      // whichever host was bound at the instant it was dispatched. Post-P4.2
-      // the client addresses the host it resolved, and `hostId` below is that
-      // same resolution rather than a second, independently-timed read.
-      //
-      // HOST-SCOPED where the tab knows its host. An epic served by a session
-      // on host B was renamed through the app-wide client - host A - purely
-      // because the strip had no way to know about B. `tab.hostId` is that
-      // session's own answer projected onto the tab, so the rename now goes
-      // where the epic actually lives. `null` (no live session) keeps the
-      // app-wide client, which is all this surface ever had.
-      const client = epicRenameClient(tabHostId);
       if (handle !== null) {
+        const client = getEpicSessionHandleHostClient(handle);
         const hostId = client?.getActiveHostId() ?? null;
         const userId = client?.getRequestContextUserId() ?? null;
         const state = handle.store.getState();
@@ -356,6 +314,13 @@ export function useStripTabItem(input: StripTabItemInput): StripTabItem {
         });
         return;
       }
+      const client = resolveTaskTabTitleRequester({
+        binding: getHostBindingSnapshot(),
+        queryClient,
+        epicId,
+        tabHostId,
+        localHome,
+      });
       if (client === null) {
         reportableErrorToast(
           "Couldn't reach the host to rename the epic.",
