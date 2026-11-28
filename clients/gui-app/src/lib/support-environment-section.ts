@@ -94,6 +94,7 @@ export interface SupportEnvironmentSetupAttempt {
   readonly exitStatus: number | null;
   readonly stageReached: string | null;
   readonly result: string | null;
+  readonly sandboxSetup?: SetupAttempt["sandboxSetup"];
 }
 
 export interface SupportEnvironmentPolicy {
@@ -263,6 +264,9 @@ export function supportEnvironmentSection(
             exitStatus: attempt.exitStatus,
             stageReached: nullableCode(attempt.stageReached),
             result: nullableCode(attempt.result),
+            ...(attempt.sandboxSetup === undefined
+              ? {}
+              : { sandboxSetup: attempt.sandboxSetup }),
           })),
     policy:
       reads.policy === null
