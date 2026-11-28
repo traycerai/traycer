@@ -46,12 +46,9 @@ import {
   useRowSwipeTray,
 } from "@/components/epics/mobile/use-row-swipe-tray";
 import { useLongPress } from "@/hooks/ui/use-long-press";
-import { useEpicUpdateTitle } from "@/hooks/epic/use-epic-title-mutation";
+import { useHistoryTitleRename } from "@/components/epics/history-title-rename";
 import { useHistoryRowLocalHomePinSupported } from "@/hooks/epic/use-epic-pin-local-home-support";
-import {
-  useInlineRename,
-  type InlineRenameInputProps,
-} from "@/hooks/ui/use-inline-rename";
+import type { InlineRenameInputProps } from "@/hooks/ui/use-inline-rename";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { cn } from "@/lib/utils";
 
@@ -152,33 +149,11 @@ export const MobileHistoryRow = memo(function MobileHistoryRow(
     (s) => s.resolveTabIdForEpic(item.epicId) ?? item.epicId,
   );
 
-  const { mutate: renameEpicTitle, isPending: isRenamePending } =
-    useEpicUpdateTitle();
-  const commitTitle = useCallback(
-    (nextTitle: string) => {
-      // Re-checked at COMMIT, as the desktop row does: a rename begun before
-      // a demotion must not land on the retained credential afterwards.
-      if (
-        item.isLocalHome !== true &&
-        !authorizesCloudCapability(useAuthStore.getState().status)
-      ) {
-        return;
-      }
-      renameEpicTitle({
-        epicDelta: { id: item.epicId, title: nextTitle, updatedAt: Date.now() },
-      });
-    },
-    [item.epicId, item.isLocalHome, renameEpicTitle],
-  );
   const {
     isEditing: isRenaming,
     startEditing: startRenaming,
     inputProps: renameInputProps,
-  } = useInlineRename({
-    value: item.title,
-    canEdit: canRename && !isRenamePending,
-    onCommit: commitTitle,
-  });
+  } = useHistoryTitleRename(item, canRename);
 
   const setTrayOpen = useCallback(
     (open: boolean) => {

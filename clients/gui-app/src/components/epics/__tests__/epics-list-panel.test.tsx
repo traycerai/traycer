@@ -112,6 +112,7 @@ import {
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
+import { useInlineRename } from "@/hooks/ui/use-inline-rename";
 import { ScopedEpicsListPanel } from "./scoped-panel-harness";
 import {
   PickerEpicsListPanel,
@@ -321,6 +322,10 @@ const stubChatSearchHostClient = { getActiveHostId: () => "host-test" };
 const stubDeleteHostClient = {
   getActiveHostId: (): string => "host-test",
   getRequestContextUserId: (): string | null => testState.requestUserId,
+  createRequesterForHostId: (hostId: string) => ({
+    getActiveHostId: () => hostId,
+    getRequestContextUserId: (): string | null => testState.requestUserId,
+  }),
   request: (method: string, params: unknown): Promise<never> => {
     testState.hostRequests.push({ method, params });
     return new Promise<never>(() => undefined);
@@ -339,6 +344,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
     ...actual,
     useOptionalHostClient: () => testState.chatSearchClient,
     useHostClient: () => stubDeleteHostClient,
+    useHostBinding: () => ({ hostId: null, hostClient: stubDeleteHostClient }),
   };
 });
 
@@ -448,6 +454,27 @@ vi.mock("@/hooks/epic/use-epic-title-mutation", () => ({
     mutate: testState.renameMutate,
   }),
 }));
+
+vi.mock("@/components/epics/history-title-rename", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/components/epics/history-title-rename")
+    >();
+  return {
+    ...actual,
+    useHistoryTitleRename: (item: HistoryItem, canEdit: boolean) => {
+      const { startEditing, ...rename } = useInlineRename({
+        value: item.title,
+        canEdit,
+        onCommit: (title) =>
+          testState.renameMutate({
+            epicDelta: { id: item.epicId, title, updatedAt: Date.now() },
+          }),
+      });
+      return { ...rename, isPending: false, startEditing };
+    },
+  };
+});
 
 vi.mock("@/hooks/epic/use-epic-set-pinned-mutation", () => ({
   useEpicSetPinned: () => ({

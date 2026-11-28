@@ -68,14 +68,10 @@ import { useHistoryReplicaPage } from "@/lib/view-replica/history-replica";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
   filteredHistoryContributionQueryOptions,
-  hasOrganizationFilters,
   historyPageMethod,
   readHistoryPagePeerId,
 } from "@/lib/cloud-epic-tasks-query/query";
-import {
-  composeHistoryPage,
-  type HistoryHostContribution,
-} from "@/lib/history-composition/compose-history-page";
+import { projectHistoryPage } from "@/lib/history-composition/history-page-projection";
 import {
   historyPageFromAddress,
   type HistoryListedPage,
@@ -955,8 +951,6 @@ export function useCloudEpicTasksQueryForClient(
   };
 }
 
-const ABSENT_HISTORY_CONTRIBUTION: HistoryHostContribution = { kind: "absent" };
-
 function readPoolHistoryContribution(
   listHostId: string,
   userId: string,
@@ -1017,35 +1011,6 @@ function usePoolHistoryProjection(input: {
       }),
     [computerId, localContribution, request],
   );
-}
-
-function projectHistoryPage(
-  page: ListTasksResponse,
-  input: {
-    readonly hostId: string;
-    readonly request: ListCloudTasksRequest;
-    readonly contribution: HistoryHostContributionState | undefined;
-    readonly contributingPeerId: string | null;
-    readonly cursorPage: boolean;
-  },
-): HistoryListedPage {
-  const listed = historyPageFromAddress(page, input.hostId);
-  if (input.hostId !== POOL_HOST_ID) return listed;
-  const { contribution, cursorPage, request } = input;
-  const firstPagePlacement = hasOrganizationFilters(request.filters)
-    ? "unprovable-filter"
-    : "admit";
-  return composeHistoryPage({
-    page: listed,
-    contributingPeerId: input.contributingPeerId,
-    contribution:
-      contribution === undefined || contribution.kind === "pending"
-        ? ABSENT_HISTORY_CONTRIBUTION
-        : contribution,
-    sort: request.sort,
-    query: request.filters?.query,
-    placement: cursorPage ? "cursor-page" : firstPagePlacement,
-  });
 }
 
 /** Whether this hook's cached first page is a pending local-first one being fetched. */
