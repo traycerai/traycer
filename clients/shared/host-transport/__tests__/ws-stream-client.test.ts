@@ -694,6 +694,79 @@ describe("WsStreamClient", () => {
     },
   );
 
+  it.each([
+    {
+      label: "no draft stream",
+      manifest: {},
+      hostCanonical: null,
+      blocking: "host-missing-method",
+    },
+    {
+      label: "an alternate minor beyond the pin",
+      manifest: {
+        "drafts.subscribe": {
+          major: 2,
+          minor: 0,
+          supportedMajors: [1, 2],
+          supportedVersions: [
+            { major: 1, minor: 2 },
+            { major: 2, minor: 0 },
+          ],
+        },
+      },
+      hostCanonical: { major: 2, minor: 0 },
+      blocking: "no-bridge",
+    },
+  ])(
+    "sends plain version pairs when refusing a pinned draft stream from a peer with $label",
+    async ({ manifest, hostCanonical, blocking }) => {
+      const { factory, sockets } = makeFactory();
+      const client = makeClient({
+        factory,
+        authToken: "token-abc",
+        pingIntervalMs: 25_000,
+        pongTimeoutMs: 50_000,
+        initialBackoffMs: 10,
+        maxBackoffMs: 1_000,
+      });
+      client.subscribeAtVersion(
+        "drafts.subscribe",
+        { major: 1, minor: 0, maximumMinor: 1 },
+        {},
+      );
+      try {
+        await flush();
+        const socket = sockets[0].socket;
+        socket.fireOpen();
+        socket.fireText({ kind: "openAck", manifest });
+        expect(socket.textSent.slice(1).map(parseText)).toEqual([
+          {
+            kind: "fatalError",
+            details: {
+              code: "INCOMPATIBLE",
+              reason: "Stream method 'drafts.subscribe' requires schema @1.0",
+              incompatibleMethods: [
+                {
+                  method: "drafts.subscribe",
+                  clientCanonical: { major: 1, minor: 0 },
+                  hostCanonical,
+                  blocking,
+                },
+              ],
+              upgradeGuidance: null,
+            },
+          },
+        ]);
+        expect(socket.closed).toEqual({
+          code: 1000,
+          reason: "mirror-incompatible",
+        });
+      } finally {
+        client.close("release draft stream refusal test complete");
+      }
+    },
+  );
+
   it("delivers the same unpinned released stream with or without alternate evidence", async () => {
     const activated = buildStreamManifest(
       hostStreamRpcRegistry,

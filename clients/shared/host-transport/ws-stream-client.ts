@@ -57,6 +57,7 @@ import {
   type FirstPartyClientIdentity,
 } from "@traycer/protocol/framework/client-identity";
 import {
+  clientStreamFatalErrorFrameSchema,
   hostStreamOpenAckFrameSchema,
   hostStreamFatalErrorFrameSchema,
   streamMethodFrameEnvelopeSchema,
@@ -3176,10 +3177,10 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
         "unsupported",
         this.openFrameHostId,
       );
-      const terminalFrame: ClientStreamFatalErrorFrame = {
+      const terminalFrame = clientStreamFatalErrorFrameSchema.parse({
         kind: "fatalError",
         details: compat.details,
-      };
+      });
       this.sendControlText(socket, terminalFrame);
       if (!this.disposeSession()) {
         return;
