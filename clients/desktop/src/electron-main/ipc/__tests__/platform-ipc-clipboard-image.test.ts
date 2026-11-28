@@ -40,7 +40,6 @@ vi.mock("../../app/recent-documents", () => ({
 }));
 vi.mock("../../app/window-effects", () => ({
   handleFlashFrame: vi.fn(),
-  handleSetBadge: vi.fn(),
   handleSetContentProtection: vi.fn(),
   handleSetDocumentEdited: vi.fn(),
   handleSetOverlayIcon: vi.fn(),
@@ -121,6 +120,7 @@ function installPlatformHandlers(): Map<string, InvokeHandler> {
     handleInvoke: (channel, handler) => {
       handlers.set(channel, handler);
     },
+    resolveSenderWindowId: () => null,
   });
   return handlers;
 }

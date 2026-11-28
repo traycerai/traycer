@@ -1,6 +1,7 @@
 import type { HostLifecycleMode } from "@traycer/protocol/config/host-lifecycle-policy";
 import { log } from "../app/logger";
 import type { JsonFileStore } from "../app/json-file-store";
+import { appIconBadgeWindows } from "./app-icon-badge-windows";
 import type {
   RegistryManagedWindow,
   WindowRegistry,
@@ -174,6 +175,7 @@ export function registryCloseToTrayWindows<
       if (window === null) return;
       window.hide();
       hiddenToTray.add(windowId);
+      appIconBadgeWindows.hidden(windowId);
     },
     close: (windowId) => {
       void registry.closeById(windowId);

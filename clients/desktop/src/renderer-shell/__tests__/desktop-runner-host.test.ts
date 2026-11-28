@@ -680,7 +680,7 @@ function buildFakeBridge(
         setBackgroundMaterial: async () => undefined,
         setVisibleOnAllWorkspaces: async () => undefined,
       },
-      app: { setBadge: async () => undefined },
+      app: { setAppBadgeCount: async () => undefined },
       diagnostics: {
         getMetrics: async () => ({
           main: { residentSet: 0, private: 0, shared: 0 },
@@ -2060,5 +2060,27 @@ describe("DesktopRunnerHost.localHostCapability", () => {
     expect(restartHostServiceIfHostIdle).toHaveBeenCalledWith(input);
     expect(restartHostIfIdle).not.toHaveBeenCalled();
     expect(result).toEqual({ kind: "host-busy" });
+  });
+});
+
+describe("DesktopRunnerHost.appIconBadge", () => {
+  it("reads the header bell and forwards its count to the shell", async () => {
+    const setAppBadgeCount = vi.fn(async () => undefined);
+    const fake = buildFakeBridge(null);
+    const host = new DesktopRunnerHost({
+      bridge: {
+        ...fake.bridge,
+        platform: {
+          ...fake.bridge.platform,
+          app: { setAppBadgeCount },
+        },
+      },
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+
+    expect(host.appIconBadge.countSource).toBe("bell");
+    await host.appIconBadge.setCount(6);
+    expect(setAppBadgeCount).toHaveBeenCalledTimes(1);
+    expect(setAppBadgeCount).toHaveBeenCalledWith(6);
   });
 });

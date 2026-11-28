@@ -1,8 +1,8 @@
 import { captureWindowRegion } from "../app/window-capture";
+import { appIconBadgeWindows } from "../windows/app-icon-badge-windows";
 import { rememberRecentDocument } from "../app/recent-documents";
 import {
   handleFlashFrame,
-  handleSetBadge,
   handleSetContentProtection,
   handleSetDocumentEdited,
   handleSetOverlayIcon,
@@ -122,7 +122,7 @@ import { parseRendererCrashTelemetryInput } from "../../ipc-contracts/renderer-c
  * can call them unconditionally without platform-specific branches.
  */
 export function registerPlatformIpc(
-  bridge: Pick<RunnerIpcBridge, "handleInvoke">,
+  bridge: Pick<RunnerIpcBridge, "handleInvoke" | "resolveSenderWindowId">,
 ): void {
   bridge.handleInvoke(
     RunnerHostInvoke.rendererCrashPersist,
@@ -286,9 +286,20 @@ export function registerPlatformIpc(
   );
 
   bridge.handleInvoke(
-    RunnerHostInvoke.windowSetBadge,
-    (event, text: unknown) => {
-      handleSetBadge(event, text);
+    RunnerHostInvoke.appSetBadgeCount,
+    (event, count: unknown) => {
+      if (
+        typeof count !== "number" ||
+        !Number.isSafeInteger(count) ||
+        count < 0
+      ) {
+        throw new TypeError(
+          "app icon badge count must be a non-negative integer",
+        );
+      }
+      const windowId = bridge.resolveSenderWindowId(event);
+      if (windowId === null) return;
+      appIconBadgeWindows.setCount(windowId, count);
     },
   );
 

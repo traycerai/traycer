@@ -103,6 +103,8 @@ import {
   type CloseToTrayNoticeState,
 } from "../windows/close-to-tray";
 import { voiceLiveWindows } from "../windows/voice-live-windows";
+import { appIconBadgeWindows } from "../windows/app-icon-badge-windows";
+import { installAppIconBadgeOutput } from "../app/app-icon-badge";
 import { createJsonFileStore } from "../app/json-file-store";
 import { trayHostLifecyclePresentation } from "../tray/tray-host-lifecycle";
 import {
@@ -749,6 +751,10 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
         void registry.forceCloseById(windowId);
       });
   }
+  installAppIconBadgeOutput(
+    appIconBadgeWindows,
+    (windowId) => windowRegistry?.getWindowById(windowId) ?? null,
+  );
   windowRegistry = new WindowRegistry({
     createWindow: (request) => {
       const zoomFactor =
