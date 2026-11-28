@@ -26,15 +26,28 @@ import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import { handleHostIds } from "@/lib/registries/epic-session-registry";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import {
+  NO_SERVING_PEER_DECISION,
+  createHostRpcTierPlan,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
+import {
+  POOL_HOST_ID,
+  poolHostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/host-directory";
+import {
   installHostConnectionRegistrySource,
   resetHostConnectionRegistryForTest,
 } from "@traycer-clients/shared/host-client/host-connection-registry";
+import {
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+  getNegotiatedHostMethods,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import { EpicRoute } from "@/routes/epic-tab-route-components";
 import {
   LIST_CLOUD_TASKS_REQUEST,
@@ -55,6 +68,7 @@ const routeMutationState = vi.hoisted(() => ({
 const sessionSnapshotStore = vi.hoisted(() => {
   const listeners = new Set<() => void>();
   let readCount = 0;
+  let publicationCount = 0;
   let snapshot: {
     handle: OpenEpicStoreHandle | null;
     sessionHostId: string | null;
@@ -78,12 +92,14 @@ const sessionSnapshotStore = vi.hoisted(() => {
     readCount: () => readCount,
     set(next: typeof snapshot): void {
       snapshot = next;
+      publicationCount += 1;
       for (const listener of listeners) listener();
     },
     subscribe: (listener: () => void): (() => void) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    publicationCount: () => publicationCount,
   };
 });
 
@@ -113,13 +129,16 @@ type HomeReading = "local" | "no-local-claim" | "unstated";
 
 const homeReadingStore = vi.hoisted(() => {
   let reading: "local" | "no-local-claim" | "unstated" = "unstated";
+  let changeCount = 0;
   const listeners = new Set<() => void>();
   return {
     get: () => reading,
     set(next: typeof reading): void {
       reading = next;
+      changeCount += 1;
       for (const listener of listeners) listener();
     },
+    changeCount: () => changeCount,
     // An arrow PROPERTY, like `get` beside it, and not a method shorthand: this
     // one is passed BY REFERENCE to `useSyncExternalStore`, which a shorthand
     // makes an unbound method (`unbound-method`). Fixed here rather than wrapped
@@ -424,7 +443,7 @@ function renderRoute(queryClient: QueryClient | undefined) {
   return { router, queryClient: client };
 }
 
-function renderBareEpicRoute(queryClient: QueryClient) {
+async function renderBareEpicRoute(queryClient: QueryClient) {
   const rootRoute = createRootRoute({ component: () => <Outlet /> });
   const epicRoute = createRoute({
     getParentRoute: () => rootRoute,
@@ -438,6 +457,7 @@ function renderBareEpicRoute(queryClient: QueryClient) {
     }),
     context: {},
   });
+  await router.load();
   render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
@@ -446,9 +466,64 @@ function renderBareEpicRoute(queryClient: QueryClient) {
   return { router, queryClient };
 }
 
+function createRecordViewedClient(
+  hostId: string,
+  handler: (params: {
+    readonly epicId: string;
+  }) => { readonly viewedAt: number } | Promise<{ readonly viewedAt: number }>,
+  findHostById: ((candidate: string) => HostDirectoryEntry | null) | undefined,
+): {
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly requester: HostClient<HostRpcRegistry>;
+  readonly messenger: MockHostMessenger<HostRpcRegistry>;
+} {
+  const poolEntry = poolHostDirectoryEntry("wss://pool.test/rpc");
+  if (poolEntry === null) {
+    throw new Error("expected the pool directory entry");
+  }
+  const hostEntry =
+    hostId === POOL_HOST_ID ? poolEntry : { ...mockLocalHostEntry, hostId };
+  const resolveTargetById =
+    findHostById ??
+    ((candidate: string) => (candidate === hostId ? hostEntry : null));
+  const resolveHostById = (candidate: string) =>
+    candidate === POOL_HOST_ID ? poolEntry : resolveTargetById(candidate);
+  const messenger = new MockHostMessenger<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => `record-viewed-${hostId}`,
+    handlers: { "epic.recordViewed": handler },
+  });
+  const client = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    messenger,
+    invalidator: { invalidateHostScope: () => undefined },
+    findHostById: resolveHostById,
+    routing: {
+      plan: createHostRpcTierPlan(poolEntry),
+      selectedHostId: () => null,
+      serving: () => NO_SERVING_PEER_DECISION,
+    },
+  });
+  client.setRequestContext(
+    createRequestContextFixture({ origin: "renderer", bearerToken: "test" }),
+  );
+  return {
+    client,
+    requester: client.createRequesterForHostId(hostId),
+    messenger,
+  };
+}
+
 describe("EpicRouteTabSync recency bounded wait (7d521991d)", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    resetNegotiatedManifests();
+    useCloudEpicTasksPagesStore.setState({
+      pagesByIdentity: {},
+      generationByIdentity: {},
+      identitiesWithDisplacedRowsPage: new Set(),
+      deletedEpicIdsByScope: {},
+    });
     window.localStorage.clear();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     homeReadingStore.set("unstated");
@@ -481,6 +556,7 @@ describe("EpicRouteTabSync recency bounded wait (7d521991d)", () => {
     routeMutationState.useRealMutation = false;
     routeMutationState.client = null;
     resetHostConnectionRegistryForTest();
+    resetNegotiatedManifests();
   });
 
   it("fires once with isLocalHome:true when a local-homed session appears before the bound", async () => {
@@ -853,7 +929,210 @@ describe("EpicRouteTabSync recency bounded wait (7d521991d)", () => {
     expect(recordViewed).not.toHaveBeenCalled();
   });
 
-  it("waits for the explicit computer row and sends one addressed unary through teardown", async () => {
+  it("does not record a mismatched session or its retained handle while a pool establishes", async () => {
+    vi.useRealTimers();
+    seedSignedInAuth();
+    const queryClient = new QueryClient();
+    const { client, requester, messenger } = createRecordViewedClient(
+      SESSION_HOST_ID,
+      () => ({ viewedAt: 1_800_000_000_000 }),
+      undefined,
+    );
+    routeMutationState.client = requester;
+    routeMutationState.useRealMutation = true;
+    sessionSnapshotStore.set({
+      handle: null,
+      sessionHostId: null,
+      sessionHostClient: requester,
+      presentation: { kind: "establishing", targetHostId: SESSION_HOST_ID },
+    });
+
+    await renderBareEpicRoute(queryClient);
+    expect(messenger.calls).toHaveLength(0);
+
+    act(() => publishReadySession(SESSION_HOST_ID, requester, "other-host"));
+    expect(messenger.calls).toHaveLength(0);
+    const mismatched = sessionSnapshotStore.get();
+    expect(mismatched.presentation).toEqual({
+      kind: "ready",
+      targetHostId: SESSION_HOST_ID,
+    });
+    expect(mismatched.sessionHostId).toBe(SESSION_HOST_ID);
+
+    const outgoingHandle = mismatched.handle;
+    if (outgoingHandle === null) {
+      throw new Error("expected the retained computer handle");
+    }
+    handleHostIds.set(outgoingHandle, SESSION_HOST_ID);
+    act(() => {
+      sessionSnapshotStore.set({
+        ...mismatched,
+        presentation: { kind: "establishing", targetHostId: POOL_HOST_ID },
+      });
+    });
+    expect(messenger.calls).toHaveLength(0);
+    expect(sessionSnapshotStore.get().handle).toBe(outgoingHandle);
+
+    cleanup();
+    expect(messenger.calls).toHaveLength(0);
+    queryClient.clear();
+    client.dispose();
+  });
+
+  it("keeps a terminal resolution failure silent with an addressable computer", async () => {
+    vi.useRealTimers();
+    seedSignedInAuth();
+    const queryClient = new QueryClient();
+    const { client, requester, messenger } = createRecordViewedClient(
+      SESSION_HOST_ID,
+      () => ({ viewedAt: 1_800_000_000_007 }),
+      undefined,
+    );
+    routeMutationState.client = requester;
+    routeMutationState.useRealMutation = true;
+    publishReadySession(SESSION_HOST_ID, requester, SESSION_HOST_ID);
+    sessionSnapshotStore.set({
+      ...sessionSnapshotStore.get(),
+      presentation: { kind: "failed", targetHostId: SESSION_HOST_ID },
+    });
+
+    await renderBareEpicRoute(queryClient);
+    expect(messenger.calls).toHaveLength(0);
+    cleanup();
+    expect(messenger.calls).toHaveLength(0);
+    queryClient.clear();
+    client.dispose();
+  });
+
+  it("does not send after the real route's unverified home deadline expires", async () => {
+    vi.useFakeTimers();
+    const viewerId = "user-fixture-1";
+    useAuthStore.getState().setUnverifiedSession(
+      {
+        userId: viewerId,
+        userName: "User One",
+        email: "user@example.com",
+      },
+      { userId: viewerId, username: "User One" },
+    );
+    const queryClient = new QueryClient();
+    const { client, requester, messenger } = createRecordViewedClient(
+      SESSION_HOST_ID,
+      () => ({ viewedAt: 1_800_000_000_008 }),
+      undefined,
+    );
+    routeMutationState.client = requester;
+    routeMutationState.useRealMutation = true;
+    publishReadySession(SESSION_HOST_ID, requester, SESSION_HOST_ID);
+
+    await renderBareEpicRoute(queryClient);
+    expect(messenger.calls).toHaveLength(0);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RECENCY_HOME_ANSWER_WAIT_MS);
+    });
+    act(() => homeReadingStore.set("local"));
+    expect(messenger.calls).toHaveLength(0);
+
+    cleanup();
+    expect(messenger.calls).toHaveLength(0);
+    queryClient.clear();
+    client.dispose();
+  });
+
+  it("sends an unverified local-home view to its computer with a pool tier configured", async () => {
+    vi.useRealTimers();
+    const viewerId = "user-fixture-1";
+    useAuthStore.getState().setUnverifiedSession(
+      {
+        userId: viewerId,
+        userName: "User One",
+        email: "user@example.com",
+      },
+      { userId: viewerId, username: "User One" },
+    );
+    const queryClient = new QueryClient();
+    let reply!: (response: { readonly viewedAt: number }) => void;
+    const pendingReply = new Promise<{ readonly viewedAt: number }>(
+      (resolve) => {
+        reply = resolve;
+      },
+    );
+    const { client, requester, messenger } = createRecordViewedClient(
+      SESSION_HOST_ID,
+      () => pendingReply,
+      undefined,
+    );
+    routeMutationState.client = requester;
+    routeMutationState.useRealMutation = true;
+    homeReadingStore.set("local");
+    publishReadySession(SESSION_HOST_ID, requester, SESSION_HOST_ID);
+
+    expect(client.getRpcTierPlan()?.pool?.hostId).toBe(POOL_HOST_ID);
+    expect(useAuthStore.getState().status).toBe("unverified");
+    await renderBareEpicRoute(queryClient);
+    await waitFor(() => expect(messenger.calls).toHaveLength(1));
+    expect(messenger.calls[0]).toMatchObject({
+      method: "epic.recordViewed",
+      params: { epicId: EPIC_ID },
+      authority: { endpoint: { hostId: SESSION_HOST_ID } },
+    });
+
+    cleanup();
+    reply({ viewedAt: 1_800_000_000_005 });
+    await pendingReply;
+    expect(messenger.calls).toHaveLength(1);
+    queryClient.clear();
+    client.dispose();
+  });
+
+  it("keeps one decision for the mounted tab and records a fresh open once", async () => {
+    vi.useRealTimers();
+    seedSignedInAuth();
+    const queryClient = new QueryClient();
+    const { client, requester, messenger } = createRecordViewedClient(
+      SESSION_HOST_ID,
+      () => ({ viewedAt: 1_800_000_000_006 }),
+      undefined,
+    );
+    routeMutationState.client = requester;
+    routeMutationState.useRealMutation = true;
+    publishReadySession(SESSION_HOST_ID, requester, SESSION_HOST_ID);
+
+    const { router } = await renderBareEpicRoute(queryClient);
+    await waitFor(() => expect(messenger.calls).toHaveLength(1));
+    const acceptedSnapshot = sessionSnapshotStore.get();
+    act(() => sessionSnapshotStore.set({ ...acceptedSnapshot }));
+    expect(messenger.calls).toHaveLength(1);
+
+    const freshTabId = "tab-fresh-open";
+    useEpicCanvasStore.setState((state) => ({
+      tabsById: {
+        ...state.tabsById,
+        [freshTabId]: {
+          tabId: freshTabId,
+          epicId: EPIC_ID,
+          name: "Fresh Open",
+        },
+      },
+      openTabOrder: [...state.openTabOrder, freshTabId],
+    }));
+    await act(async () => {
+      router.history.push(`/epics/${EPIC_ID}/${freshTabId}`);
+      await router.load();
+    });
+    await waitFor(() => expect(messenger.calls).toHaveLength(2));
+    expect(messenger.calls.map((call) => call.method)).toEqual([
+      "epic.recordViewed",
+      "epic.recordViewed",
+    ]);
+
+    cleanup();
+    expect(messenger.calls).toHaveLength(2);
+    queryClient.clear();
+    client.dispose();
+  });
+
+  it("waits for the directory row on the same accepted computer snapshot before one addressed unary", async () => {
     vi.useRealTimers();
     const viewerId = "user-fixture-1";
     useAuthStore.getState().setSignedIn(
@@ -868,6 +1147,7 @@ describe("EpicRouteTabSync recency bounded wait (7d521991d)", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, staleTime: Infinity } },
     });
+    const page = { tasks: [], hasMore: false };
     const writerRequest = {
       ...LIST_CLOUD_TASKS_REQUEST,
       sort: "last-viewed" as const,
@@ -887,7 +1167,6 @@ describe("EpicRouteTabSync recency bounded wait (7d521991d)", () => {
       viewerId,
       readerRequest,
     );
-    const page = { tasks: [], hasMore: false };
     queryClient.setQueryData(writerKey, page);
     queryClient.setQueryData(readerKey, page);
     const writerIdentity = cloudEpicTasksPageIdentity(
@@ -903,31 +1182,8 @@ describe("EpicRouteTabSync recency bounded wait (7d521991d)", () => {
     for (const identity of [writerIdentity, readerIdentity]) {
       useCloudEpicTasksPagesStore.getState().appendPage(identity, 0, page);
     }
-    let writerReads = 0;
-    let readerReads = 0;
-    const writerObserver = new QueryObserver(queryClient, {
-      queryKey: writerKey,
-      queryFn: () => {
-        writerReads += 1;
-        return Promise.resolve(page);
-      },
-      staleTime: Infinity,
-    });
-    const readerObserver = new QueryObserver(queryClient, {
-      queryKey: readerKey,
-      queryFn: () => {
-        readerReads += 1;
-        return Promise.resolve(page);
-      },
-      staleTime: Infinity,
-    });
-    const unsubscribeWriter = writerObserver.subscribe(() => undefined);
-    const unsubscribeReader = readerObserver.subscribe(() => undefined);
-    const requestContext = createRequestContextFixture({
-      origin: "renderer",
-      bearerToken: "test",
-    });
     let directoryReady = false;
+    let directoryPublicationCount = 0;
     const directoryListeners = new Set<() => void>();
     const hostEntry = { ...mockLocalHostEntry, hostId: SESSION_HOST_ID };
     const findById = (hostId: string) =>
@@ -938,23 +1194,14 @@ describe("EpicRouteTabSync recency bounded wait (7d521991d)", () => {
         reply = resolve;
       },
     );
-    const messenger = new MockHostMessenger<HostRpcRegistry>({
-      registry: hostRpcRegistry,
-      requestId: () => "route-record-viewed",
-      handlers: {
-        "epic.recordViewed": () => pendingReply,
-      },
-    });
-    const client = new HostClient<HostRpcRegistry>({
-      registry: hostRpcRegistry,
-      messenger,
-      invalidator: { invalidateHostScope: () => undefined },
-      findHostById: findById,
-    });
-    client.setRequestContext(requestContext);
-    const requester = client.createRequesterForHostId(SESSION_HOST_ID);
+    const { client, requester, messenger } = createRecordViewedClient(
+      SESSION_HOST_ID,
+      () => pendingReply,
+      findById,
+    );
     routeMutationState.client = requester;
     routeMutationState.useRealMutation = true;
+    resetHostConnectionRegistryForTest();
     installHostConnectionRegistrySource({
       directory: {
         findById,
@@ -965,78 +1212,271 @@ describe("EpicRouteTabSync recency bounded wait (7d521991d)", () => {
       },
       leases: null,
     });
-    sessionSnapshotStore.set({
-      handle: null,
-      sessionHostId: null,
-      sessionHostClient: null,
-      presentation: { kind: "establishing", targetHostId: SESSION_HOST_ID },
-    });
-    renderBareEpicRoute(queryClient);
-    expect(messenger.calls).toHaveLength(0);
-
-    act(() =>
-      publishReadySession(SESSION_HOST_ID, requester, "different-host"),
-    );
-    expect(messenger.calls).toHaveLength(0);
-    const mismatched = sessionSnapshotStore.get();
-    expect(mismatched.presentation).toEqual({
-      kind: "ready",
-      targetHostId: SESSION_HOST_ID,
-    });
-    expect(mismatched.sessionHostId).toBe(SESSION_HOST_ID);
-    expect(requester.getActiveHostId()).toBeNull();
-
-    const outgoingHandle = mismatched.handle;
-    if (outgoingHandle === null) {
-      throw new Error("expected the retained computer handle");
-    }
-    handleHostIds.set(outgoingHandle, SESSION_HOST_ID);
-    act(() => {
-      sessionSnapshotStore.set({
-        ...mismatched,
-        presentation: { kind: "establishing", targetHostId: POOL_HOST_ID },
-      });
-    });
-    expect(messenger.calls).toHaveLength(0);
-    expect(sessionSnapshotStore.get().handle).toBe(outgoingHandle);
-
-    act(() => publishReadySession(SESSION_HOST_ID, requester, SESSION_HOST_ID));
+    publishReadySession(SESSION_HOST_ID, requester, SESSION_HOST_ID);
     const acceptedSnapshot = sessionSnapshotStore.get();
-    expect(acceptedSnapshot.presentation).toEqual({
-      kind: "ready",
-      targetHostId: SESSION_HOST_ID,
-    });
-    expect(acceptedSnapshot.sessionHostClient).toBe(requester);
+    expect(homeReadingStore.get()).toBe("unstated");
+    expect(
+      acceptedSnapshot.handle?.store.getState().durabilityStatus,
+    ).toBeNull();
     expect(requester.getActiveHostId()).toBeNull();
+
+    await renderBareEpicRoute(queryClient);
     expect(messenger.calls).toHaveLength(0);
-    const controllerReadsBeforeRow = sessionSnapshotStore.readCount();
+    expect(
+      queryClient
+        .getQueryCache()
+        .find({ queryKey: writerKey })
+        ?.getObserversCount(),
+    ).toBe(0);
+    expect(
+      queryClient
+        .getQueryCache()
+        .find({ queryKey: readerKey })
+        ?.getObserversCount(),
+    ).toBe(0);
+    const snapshotReadsBeforeRow = sessionSnapshotStore.readCount();
+    const controllerPublicationsBeforeRow =
+      sessionSnapshotStore.publicationCount();
+    const homeChangesBeforeRow = homeReadingStore.changeCount();
 
     act(() => {
       directoryReady = true;
+      directoryPublicationCount += 1;
       for (const listener of directoryListeners) listener();
     });
     await waitFor(() => expect(messenger.calls).toHaveLength(1));
+    expect(directoryPublicationCount).toBe(1);
     expect(sessionSnapshotStore.readCount()).toBeGreaterThan(
-      controllerReadsBeforeRow,
+      snapshotReadsBeforeRow,
     );
+    expect(sessionSnapshotStore.publicationCount()).toBe(
+      controllerPublicationsBeforeRow,
+    );
+    expect(homeReadingStore.changeCount()).toBe(homeChangesBeforeRow);
     expect(sessionSnapshotStore.get()).toBe(acceptedSnapshot);
     expect(acceptedSnapshot.sessionHostClient).toBe(requester);
     expect(requester.getActiveHostId()).toBe(SESSION_HOST_ID);
     expect(messenger.calls[0]).toMatchObject({
       method: "epic.recordViewed",
       params: { epicId: EPIC_ID },
+      authority: { endpoint: { hostId: SESSION_HOST_ID } },
     });
 
     cleanup();
     reply({ viewedAt: 1_800_000_000_000 });
     await pendingReply;
-    await waitFor(() => expect(writerReads).toBe(1));
-    expect(readerReads).toBe(0);
+    await waitFor(() =>
+      expect(queryClient.getQueryData(writerKey)).toBeUndefined(),
+    );
+    expect(queryClient.getQueryData(readerKey)).toBeDefined();
     expect(cloudEpicTasksPageGeneration(writerIdentity)).toBe(1);
     expect(cloudEpicTasksPageGeneration(readerIdentity)).toBe(0);
     expect(messenger.calls).toHaveLength(1);
-    unsubscribeWriter();
+    queryClient.clear();
+    client.dispose();
+  });
+
+  it("keeps local-only confirmed recency in the writer computer scope", async () => {
+    vi.useRealTimers();
+    const viewerId = "user-fixture-1";
+    useAuthStore.getState().setSignedIn(
+      {
+        userId: viewerId,
+        userName: "User One",
+        email: "user@example.com",
+      },
+      { userId: viewerId, username: "User One" },
+      [],
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    const request = {
+      ...LIST_CLOUD_TASKS_REQUEST,
+      sort: "last-viewed" as const,
+    };
+    const writerKey = cloudEpicTasksQueryKey(
+      SESSION_HOST_ID,
+      viewerId,
+      request,
+    );
+    const readerKey = cloudEpicTasksQueryKey(
+      "separate-history-computer",
+      viewerId,
+      request,
+    );
+    const page = { tasks: [], hasMore: false };
+    queryClient.setQueryData(writerKey, page);
+    queryClient.setQueryData(readerKey, page);
+    const writerIdentity = cloudEpicTasksPageIdentity(
+      SESSION_HOST_ID,
+      viewerId,
+      request,
+    );
+    const readerIdentity = cloudEpicTasksPageIdentity(
+      "separate-history-computer",
+      viewerId,
+      request,
+    );
+    for (const identity of [writerIdentity, readerIdentity]) {
+      useCloudEpicTasksPagesStore.getState().appendPage(identity, 0, page);
+    }
+    let reply!: (response: { readonly viewedAt: number }) => void;
+    const pendingReply = new Promise<{ readonly viewedAt: number }>(
+      (resolve) => {
+        reply = resolve;
+      },
+    );
+    const { client, requester, messenger } = createRecordViewedClient(
+      SESSION_HOST_ID,
+      () => pendingReply,
+      undefined,
+    );
+    routeMutationState.client = requester;
+    routeMutationState.useRealMutation = true;
+    homeReadingStore.set("local");
+    publishReadySession(SESSION_HOST_ID, requester, SESSION_HOST_ID);
+
+    await renderBareEpicRoute(queryClient);
+    await waitFor(() => expect(messenger.calls).toHaveLength(1));
+    expect(messenger.calls[0]).toMatchObject({
+      method: "epic.recordViewed",
+      params: { epicId: EPIC_ID },
+    });
+
+    cleanup();
+    reply({ viewedAt: 1_800_000_000_002 });
+    await pendingReply;
+    await waitFor(() =>
+      expect(queryClient.getQueryData(writerKey)).toBeUndefined(),
+    );
+    expect(queryClient.getQueryData(readerKey)).toBeDefined();
+    expect(cloudEpicTasksPageGeneration(writerIdentity)).toBe(1);
+    expect(cloudEpicTasksPageGeneration(readerIdentity)).toBe(0);
+    expect(messenger.calls).toHaveLength(1);
+    queryClient.clear();
+    client.dispose();
+  });
+
+  it("refreshes a distinct Last Viewed reader only for affirmative computer cloud durability", async () => {
+    vi.useRealTimers();
+    const viewerId = "user-fixture-1";
+    useAuthStore.getState().setSignedIn(
+      {
+        userId: viewerId,
+        userName: "User One",
+        email: "user@example.com",
+      },
+      { userId: viewerId, username: "User One" },
+      [],
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    const readerHostId = "history-answering-computer";
+    const readerRequest = {
+      ...LIST_CLOUD_TASKS_REQUEST,
+      sort: "last-viewed" as const,
+    };
+    const readerKey = cloudEpicTasksQueryKey(
+      readerHostId,
+      viewerId,
+      readerRequest,
+    );
+    const readerIdentity = cloudEpicTasksPageIdentity(
+      readerHostId,
+      viewerId,
+      readerRequest,
+    );
+    const readerPage = { tasks: [], hasMore: false };
+    queryClient.setQueryData(readerKey, readerPage);
+    useCloudEpicTasksPagesStore
+      .getState()
+      .appendPage(readerIdentity, 0, readerPage);
+    let readerReads = 0;
+    const readerObserver = new QueryObserver(queryClient, {
+      queryKey: readerKey,
+      queryFn: () => {
+        readerReads += 1;
+        return Promise.resolve(readerPage);
+      },
+      staleTime: Infinity,
+    });
+    const unsubscribeReader = readerObserver.subscribe(() => undefined);
+    let reply!: (response: { readonly viewedAt: number }) => void;
+    const pendingReply = new Promise<{ readonly viewedAt: number }>(
+      (resolve) => {
+        reply = resolve;
+      },
+    );
+    const { client, requester, messenger } = createRecordViewedClient(
+      SESSION_HOST_ID,
+      () => pendingReply,
+      undefined,
+    );
+    routeMutationState.client = requester;
+    routeMutationState.useRealMutation = true;
+    homeReadingStore.set("no-local-claim");
+    publishReadySession(SESSION_HOST_ID, requester, SESSION_HOST_ID);
+    expect(
+      sessionSnapshotStore.get().handle?.store.getState().durabilityStatus,
+    ).toBe("cloud");
+
+    await renderBareEpicRoute(queryClient);
+    await waitFor(() => expect(messenger.calls).toHaveLength(1));
+    expect(messenger.calls[0]).toMatchObject({
+      method: "epic.recordViewed",
+      params: { epicId: EPIC_ID },
+      authority: { endpoint: { hostId: SESSION_HOST_ID } },
+    });
+    expect(readerReads).toBe(0);
+
+    cleanup();
+    reply({ viewedAt: 1_800_000_000_004 });
+    await pendingReply;
+    await waitFor(() => expect(readerReads).toBe(1));
+    expect(cloudEpicTasksPageGeneration(readerIdentity)).toBe(1);
+    expect(messenger.calls).toHaveLength(1);
     unsubscribeReader();
+    queryClient.clear();
+    client.dispose();
+  });
+
+  it("keeps an explicit unsupported pool manifest silent and does not refresh caches", async () => {
+    vi.useRealTimers();
+    seedSignedInAuth();
+    const queryClient = new QueryClient();
+    const request = {
+      ...LIST_CLOUD_TASKS_REQUEST,
+      sort: "last-viewed" as const,
+    };
+    const page = { tasks: [], hasMore: false };
+    const poolKey = cloudEpicTasksQueryKey(POOL_HOST_ID, "user-1", request);
+    queryClient.setQueryData(poolKey, page);
+    recordNegotiatedHostMethods(POOL_HOST_ID, []);
+    expect(getNegotiatedHostMethods(POOL_HOST_ID)).toEqual(new Set());
+    const { client, requester, messenger } = createRecordViewedClient(
+      POOL_HOST_ID,
+      () => ({ viewedAt: 1_800_000_000_003 }),
+      undefined,
+    );
+    routeMutationState.client = requester;
+    routeMutationState.useRealMutation = true;
+    publishReadySession(POOL_HOST_ID, requester, POOL_HOST_ID);
+
+    await renderBareEpicRoute(queryClient);
+    expect(requester.getActiveHostId()).toBe(POOL_HOST_ID);
+    await waitFor(() => {
+      const [mutation] = queryClient.getMutationCache().getAll();
+      expect(mutation.state.status).toBe("error");
+      expect(mutation.state.error).toMatchObject({
+        code: "E_HOST_UNSUPPORTED",
+        method: "epic.recordViewed",
+      });
+    });
+    expect(messenger.calls).toHaveLength(0);
+    expect(queryClient.getQueryData(poolKey)).toBeDefined();
+    cleanup();
     queryClient.clear();
     client.dispose();
   });
@@ -1143,7 +1583,14 @@ describe("EpicRouteTabSync recency bounded wait (7d521991d)", () => {
     );
     const unsubscribeSamePeer = samePeerObserver.subscribe(() => undefined);
     const unsubscribeRecent = recentObserver.subscribe(() => undefined);
-    const poolEntry = { ...mockLocalHostEntry, hostId: POOL_HOST_ID };
+    const poolEntry = poolHostDirectoryEntry("wss://pool.test/rpc");
+    if (poolEntry === null) {
+      throw new Error("expected the pool directory entry");
+    }
+    recordNegotiatedHostMethods(POOL_HOST_ID, ["epic.recordViewed"]);
+    expect(getNegotiatedHostMethods(POOL_HOST_ID)).toEqual(
+      new Set(["epic.recordViewed"]),
+    );
     let reply!: (response: { readonly viewedAt: number }) => void;
     const pendingReply = new Promise<{ readonly viewedAt: number }>(
       (resolve) => {
@@ -1162,6 +1609,11 @@ describe("EpicRouteTabSync recency bounded wait (7d521991d)", () => {
       messenger,
       invalidator: { invalidateHostScope: () => undefined },
       findHostById: (hostId) => (hostId === POOL_HOST_ID ? poolEntry : null),
+      routing: {
+        plan: createHostRpcTierPlan(poolEntry),
+        selectedHostId: () => null,
+        serving: () => NO_SERVING_PEER_DECISION,
+      },
     });
     client.setRequestContext(
       createRequestContextFixture({ origin: "renderer", bearerToken: "test" }),
