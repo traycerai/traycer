@@ -835,6 +835,16 @@ export type EnvironmentSetupPutRequest = z.infer<
   typeof environmentSetupPutRequestSchema
 >;
 
+export const sandboxSetupAttemptMetadataSchema = lazySchema(() =>
+  z.object({
+    trigger: z.enum(["start", "approval", "checkout"]),
+    startNumber: z.number().int().positive(),
+  }),
+);
+export type SandboxSetupAttemptMetadata = z.infer<
+  typeof sandboxSetupAttemptMetadataSchema
+>;
+
 /**
  * The typed setup-attempt record: attempt id, script content hash, item
  * revision, trigger, started, ended, exit status, stage reached, result. Closed
@@ -853,6 +863,7 @@ export const setupAttemptSchema = lazySchema(() =>
     result: z
       .enum(["succeeded", "failed", "timed_out", "cancelled", "unknown"])
       .nullable(),
+    sandboxSetup: sandboxSetupAttemptMetadataSchema.optional(),
   }),
 );
 export type SetupAttempt = z.infer<typeof setupAttemptSchema>;

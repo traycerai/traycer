@@ -118,6 +118,7 @@ const ATTEMPT: SetupAttempt = {
   exitStatus: 2,
   stageReached: "install",
   result: "failed",
+  sandboxSetup: { trigger: "approval", startNumber: 8 },
 };
 
 const WORKER_PRODUCER: RotationProducer = {
@@ -226,6 +227,7 @@ describe("supportEnvironmentSection", () => {
         exitStatus: 2,
         stageReached: "install",
         result: "failed",
+        sandboxSetup: { trigger: "approval", startNumber: 8 },
       },
     ]);
     expect(section.policy).toEqual({
@@ -303,6 +305,7 @@ describe("supportEnvironmentSection", () => {
       "endedAt",
       "exitStatus",
       "result",
+      "sandboxSetup",
       "scriptHash",
       "stageReached",
       "startedAt",
