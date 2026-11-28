@@ -10,6 +10,8 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { RetryableTransportError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type {
@@ -43,6 +45,7 @@ import {
   requireTeamHostClient,
   resetTeamPageHarness,
 } from "./team-configuration-test-support";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
@@ -67,6 +70,16 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
   useHostCredentialRefusal: () => null,
 }));
+const redialRemoteSessionsFor = vi.hoisted(() => vi.fn());
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/active-remote-sessions",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@traycer-clients/shared/host-transport/remote/active-remote-sessions")
+    >()),
+    redialRemoteSessionsFor,
+  }),
+);
 // The detail dialog reads SKILL.md off disk: the bytes are read again only
 // when the dialog's dependencies move, as a query keyed on them is.
 const skillFile = vi.hoisted(() => ({
@@ -112,6 +125,8 @@ afterEach(() => {
   resetNegotiatedManifests();
   navigation.opened = [];
   nativeScopeTargets.current = [];
+  redialRemoteSessionsFor.mockReset();
+  useSelectionAuthorityStore.setState({ effectiveHostId: null });
 });
 
 /** The providers of the viewing host that list skills, in rail order. */
@@ -391,6 +406,31 @@ describe("The Skills page", () => {
       await userEvent.click(screen.getByRole("button", { name: "Retry" }));
 
       expect(await screen.findByRole("dialog")).toBeTruthy();
+    });
+
+    it("redials the computer the skill's files were read from when that read never reached it", async () => {
+      useSelectionAuthorityStore.setState({
+        effectiveHostId: mockLocalHostEntry.hostId,
+      });
+      await openReview(() => {
+        throw new RetryableTransportError({
+          replaySafetyFromKey: false,
+          code: "RPC_ERROR",
+          message: "The relay did not answer.",
+          requestId: "req-skill",
+          method: "providers.list",
+          fatalDetails: null,
+        });
+      });
+
+      expect((await screen.findByRole("status")).textContent).toBe(
+        "Couldn't read this skill's files.Retry",
+      );
+      await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+      expect(redialRemoteSessionsFor.mock.calls).toEqual([
+        [mockLocalHostEntry.hostId, "user-retry"],
+      ]);
     });
 
     it("says the files could not be found when the read answers without the skill", async () => {

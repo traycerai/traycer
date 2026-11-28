@@ -1,4 +1,5 @@
 import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 import { useStore } from "zustand";
 import {
   Suspense,
@@ -312,7 +313,10 @@ function ReachableTerminalTile(
       <TerminalStartError
         tileId={props.tileId}
         message={controller.migrationError.message}
-        onRetry={controller.retryMigration}
+        onRetry={() => {
+          redialHostForRetry(supportedNode.hostId);
+          controller.retryMigration();
+        }}
       />
     );
   }
@@ -708,6 +712,7 @@ function HostTerminalTileLive(
         message={lifecycle.requestError.message}
         onRetry={() => {
           if (showHostUpdateNeededForGesture(hostId)) return;
+          redialHostForRetry(hostId);
           lifecycle.retry();
         }}
       />

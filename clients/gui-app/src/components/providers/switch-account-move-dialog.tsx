@@ -29,6 +29,7 @@ import { MOVE_ERROR_FALLBACKS } from "./profile-move-copy";
 import type { SwitchAccountSource } from "@/stores/settings/provider-profile-add-flow-store";
 import { alreadySignedInAsText, signedInAsText } from "./profile-sync-copy";
 import { ProfileMoveResults } from "./profile-move-results";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 export const SWITCH_ACCOUNT_TEXT = "Switch account";
 
@@ -171,6 +172,8 @@ function useSwitchAccountMove(session: SwitchAccountMoveSession) {
     pending: commit.isPending,
     previewPending: preview.isFetching,
     retryPreview: () => {
+      const hostId = client?.getActiveHostId() ?? null;
+      if (hostId !== null) redialHostForRetry(hostId);
       void preview.refetch();
     },
     confirm,

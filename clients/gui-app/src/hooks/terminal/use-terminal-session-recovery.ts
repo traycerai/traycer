@@ -23,6 +23,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useRef, useState } from "react";
 import { hostQueryKeys } from "@/lib/query-keys";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 import { getTerminalSessionRegistry } from "@/lib/registries/terminal-session-registry";
 
 const MAX_AUTO_RECOVERIES = 3;
@@ -95,11 +96,12 @@ export function useTerminalSessionRecovery(input: {
   }, []);
 
   const onManualReconnect = useCallback(() => {
+    redialHostForRetry(hostId);
     autoAttemptsRef.current = 0;
     recoveryExhaustionReportedRef.current = false;
     setRecoveryExhausted(false);
     doRecover();
-  }, [doRecover]);
+  }, [doRecover, hostId]);
 
   return {
     recoverNonce,

@@ -1083,6 +1083,46 @@ describe("RemoteSession relink on an own-leg loss", () => {
     );
   });
 
+  describe("a redial request during an attach grant mint", () => {
+    it("does not remember a wake for the failure that is still in flight", async () => {
+      const fixture = await readyFixture({
+        issueKeys: false,
+        revalidate: null,
+      });
+      const { relay, session, grants } = fixture;
+      const pendingGrant: {
+        resolve: ((provision: AttachGrantProvision) => void) | null;
+      } = { resolve: null };
+      grants.mockImplementationOnce(
+        () =>
+          new Promise<AttachGrantProvision>((resolve) => {
+            pendingGrant.resolve = resolve;
+          }),
+      );
+
+      session.forceReconnect("test");
+      await step(0);
+      expect(grants).toHaveBeenCalledTimes(2);
+      const legsBeforeRetry = relay.legs.length;
+
+      session.redialIfWaiting("user-retry");
+      expect(relay.legs).toHaveLength(legsBeforeRetry);
+      const resolveGrant = pendingGrant.resolve;
+      if (resolveGrant === null)
+        throw new Error("the grant mint was never asked");
+      resolveGrant({
+        kind: "unavailable",
+        detail: "the in-flight grant request failed",
+        context: "",
+      });
+      await step(0);
+      await step(250);
+
+      expect(grants).toHaveBeenCalledTimes(2);
+      expect(relay.legs).toHaveLength(legsBeforeRetry);
+    });
+  });
+
   describe("the claim is answered with the same session id", () => {
     it("resolves an in-flight unary and keeps a held-open stream's frame order, numbering attempts per session across legs", async () => {
       const fixture = await readyFixture(LIVE);
@@ -1268,6 +1308,31 @@ describe("RemoteSession relink on an own-leg loss", () => {
       for (const leg of relay.legs.slice(1)) {
         expect(leg.claim).toBe(claimOf(held));
       }
+    });
+
+    it("pulls a failed claim dial's armed wait forward without closing another leg", async () => {
+      const fixture = await readyFixture(LIVE);
+      const { relay, session } = fixture;
+      const held = relay.host();
+      relay.plan = ["refuse", "ack"];
+
+      relay.dropLeg(1006, "net");
+      await step(0);
+      expect(relay.legs).toHaveLength(2);
+      const closesBefore = relay.legs.map((leg) => [...leg.closes]);
+
+      const pressedAt = Date.now();
+      session.redialIfWaiting("user-retry");
+      await advanceUntil(() => relay.legs.length === 3, 1_000);
+
+      expect(relay.legs[2]?.claim).toBe(claimOf(held));
+      expect(
+        (relay.dialTimes[2] ?? Number.POSITIVE_INFINITY) - pressedAt,
+      ).toBeLessThan(250);
+      expect(
+        relay.legs.slice(0, closesBefore.length).map((leg) => leg.closes),
+      ).toEqual(closesBefore);
+      expect(relay.handshakes).toBe(1);
     });
   });
 

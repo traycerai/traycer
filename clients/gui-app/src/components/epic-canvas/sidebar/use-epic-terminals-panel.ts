@@ -17,6 +17,7 @@ import { toast } from "sonner";
 import { useHostDirectory } from "@/lib/host";
 import { hostNameFromLabel } from "@/lib/host/host-name";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 import { useTerminalKillFor } from "@/hooks/terminal/use-terminal-kill-for-mutation";
 import { useTerminalList } from "@/hooks/terminal/use-terminal-list-query";
 import { useTerminalRenameFor } from "@/hooks/terminal/use-terminal-rename-for-mutation";
@@ -173,10 +174,12 @@ export function useEpicTerminalsPanel(args: {
   // this the only recoveries are accidental (collapse/re-expand remounts the
   // body) or the stream-driven `availability-recovered` invalidation.
   const refetchList = list.refetch;
+  const sessionHostId = useEpicSessionHostId();
   const retry = useCallback(() => {
+    if (sessionHostId !== null) redialHostForRetry(sessionHostId);
     void refetchList();
-  }, [refetchList]);
-  const activeHostId = useEpicSessionHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
+  }, [refetchList, sessionHostId]);
+  const activeHostId = sessionHostId ?? UNKNOWN_HOST_PLACEHOLDER;
   const durableAuthority = useHostPlainTerminalAuthority({
     hostId: activeHostId,
     scope: { kind: "epic", epicId },

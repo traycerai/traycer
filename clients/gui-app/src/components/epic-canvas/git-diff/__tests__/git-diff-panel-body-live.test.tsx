@@ -113,6 +113,17 @@ const observedSubscriptionClients: Array<IHostStreamClient<HostStreamRpcRegistry
 // picks a different screen for anything else. Seeding a bare `Error` here
 // would silently exercise the answered-refusal arm while reading like an
 // offline host.
+const redialRemoteSessionsFor = vi.hoisted(() => vi.fn());
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/active-remote-sessions",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@traycer-clients/shared/host-transport/remote/active-remote-sessions")
+    >()),
+    redialRemoteSessionsFor,
+  }),
+);
+
 const bindingsState = vi.hoisted(() => ({
   error: null as HostRpcError | null,
   refetch: vi.fn<() => Promise<unknown>>(),
@@ -1513,6 +1524,18 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
       fireEvent.click(screen.getByTestId("git-host-unreachable-retry"));
 
       expect(bindingsState.refetch).toHaveBeenCalled();
+    });
+
+    it("redials the pinned computer's remote sessions on Retry", () => {
+      renderPinnedToUnreachableHost();
+      redialRemoteSessionsFor.mockClear();
+
+      fireEvent.click(screen.getByTestId("git-host-unreachable-retry"));
+
+      expect(redialRemoteSessionsFor).toHaveBeenCalledExactlyOnceWith(
+        "host-2",
+        "user-retry",
+      );
     });
 
     it("clears the pin on 'Use active host' so the panel returns to effective", async () => {

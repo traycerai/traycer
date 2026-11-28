@@ -25,6 +25,7 @@ import type {
   DiffEditActivationRequest,
   DiffEditActivationResult,
 } from "@/components/diff/use-diff-click-to-edit";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 interface SessionAttachment extends FileEditRuntimeAttachment {
   readonly identityKey: string;
@@ -238,9 +239,11 @@ export function useFileEditSession(props: {
   const flush = useCallback((): void => {
     void attachmentRef.current?.runtime.flush();
   }, []);
+  const hostId = props.identity.hostId;
   const retry = useCallback((): void => {
+    redialHostForRetry(hostId);
     void attachmentRef.current?.runtime.retry();
-  }, []);
+  }, [hostId]);
   const resolveKeepMine = useCallback(async (diskContent: string) => {
     const runtime = attachmentRef.current?.runtime;
     if (runtime === undefined) return;

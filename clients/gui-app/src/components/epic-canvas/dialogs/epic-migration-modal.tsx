@@ -13,6 +13,8 @@ import {
   useEpicMigrationState,
   useEpicRetryMigration,
 } from "@/lib/epic-selectors";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 import { LANDING_ROUTE } from "@/lib/routes";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicMigrationSlice } from "@/stores/epics/open-epic/store";
@@ -64,6 +66,7 @@ export interface EpicMigrationModalProps {
 export function EpicMigrationModal(props: EpicMigrationModalProps): ReactNode {
   const migration = useEpicMigrationState();
   const retryMigration = useEpicRetryMigration();
+  const sessionHostId = useEpicSessionHostId();
   const navigate = useNavigate();
   const modalRootRef = useRef<HTMLDivElement | null>(null);
   const blocking = migration.status !== "idle";
@@ -99,7 +102,11 @@ export function EpicMigrationModal(props: EpicMigrationModalProps): ReactNode {
   } else if (migration.status === "not-allowed") {
     body = <NotAllowedBody onClose={handleClose} />;
   } else {
-    body = <ErrorBody onRetry={retryMigration} onClose={handleClose} />;
+    const handleRetry = (): void => {
+      if (sessionHostId !== null) redialHostForRetry(sessionHostId);
+      retryMigration();
+    };
+    body = <ErrorBody onRetry={handleRetry} onClose={handleClose} />;
   }
 
   return (

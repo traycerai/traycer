@@ -41,6 +41,9 @@ import {
 } from "@/hooks/environment/team/use-environment-skills";
 import { isProviderNativeRpcError } from "@/hooks/providers/native-response-map";
 import { fileContentRevision } from "@/lib/workspace/file-content-revision";
+import { isHostTransportFailure } from "@/lib/host-error-toast";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import type { HostRpcRegistry } from "@/lib/host";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import {
@@ -191,6 +194,7 @@ function useServedSkills() {
   );
   return {
     scope,
+    servingHostId,
     listVersion,
     query,
     state: state.data,
@@ -277,7 +281,15 @@ function EnvironmentSkills(props: {
     return wrap(
       <TeamReadFailed
         message={skillsReadFailed(name)}
-        onRetry={() => void query.refetch()}
+        onRetry={() => {
+          if (
+            served.servingHostId !== null &&
+            isHostTransportFailure(query.error)
+          ) {
+            redialHostForRetry(served.servingHostId);
+          }
+          void query.refetch();
+        }}
       />,
     );
   if (query.data.outcome === "not_served")
@@ -1179,6 +1191,7 @@ function EnvironmentSkillDetail(props: {
 }): ReactNode {
   const source = useConfigurationSource();
   const name = props.configuration;
+  const hostId = useAddressableHostId();
   const list = useProvidersSkillsList({
     providerId: props.providerId,
     scope: "global",
@@ -1200,7 +1213,12 @@ function EnvironmentSkillDetail(props: {
     return (
       <TeamReadFailed
         message="Couldn't read this skill's files."
-        onRetry={() => void list.refetch()}
+        onRetry={() => {
+          if (hostId !== null && isHostTransportFailure(list.error)) {
+            redialHostForRetry(hostId);
+          }
+          void list.refetch();
+        }}
       />
     );
   if (list.data === undefined && row === null) return <MutedAgentSpinner />;

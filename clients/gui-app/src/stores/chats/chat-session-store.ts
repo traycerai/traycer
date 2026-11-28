@@ -2473,6 +2473,16 @@ export interface ChatSessionStoreOptions {
    */
   readonly transportSilentFor?: ((ms: number) => boolean) | null;
   /**
+   * Redials the computer this chat's transport is opened on, for a person's
+   * {@link ChatSessionState.retryFromUser}: a remote session to it that is not
+   * ready stops waiting out its backoff rung. Injected because only the
+   * registry knows the serving host, which can differ from `hostId`.
+   *
+   * OPTIONAL for the reason {@link transportSilentFor} is: absent means no
+   * redial, the behaviour of the suites that build these options by hand.
+   */
+  readonly redialTransportHost?: (() => void) | null;
+  /**
    * Whether an adjudicated fatal close raises the app's "Agent stream closed
    * unexpectedly" notification. `silent` for a session whose surface says the
    * failure itself, in its own view: a bot's channel and threads, whose
@@ -10930,6 +10940,9 @@ export function createChatSessionStoreWithNotificationDependencies(
       },
       retryFromUser: () => {
         if (disposed) return;
+        // A not-ready remote session to the serving computer redials now; a
+        // ready one is left alone, so a blip stays the plain re-subscribe.
+        options.redialTransportHost?.();
         // The escalation, in this order and no other: drop the socket FIRST,
         // then re-subscribe. `wake` writes no store state and drops the
         // session synchronously, so the fresh `chat.subscribe` below is

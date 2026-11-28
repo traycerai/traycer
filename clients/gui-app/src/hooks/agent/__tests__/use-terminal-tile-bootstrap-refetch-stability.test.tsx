@@ -90,6 +90,17 @@ vi.mock("@/hooks/terminal/use-terminal-create-mutation", () => ({
 
 // Capture the args the bootstrap feeds the session handle so the tests can
 // assert on the `enabled` / `reattachMode` the registry would act on.
+const redialRemoteSessionsFor = vi.hoisted(() => vi.fn());
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/active-remote-sessions",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@traycer-clients/shared/host-transport/remote/active-remote-sessions")
+    >()),
+    redialRemoteSessionsFor,
+  }),
+);
+
 vi.mock(
   "@/lib/registries/terminal-session-registry",
   async (importOriginal) => ({
@@ -278,6 +289,22 @@ describe("useTerminalTileBootstrap handle gate across list refetches", () => {
       expect(lastHandleArgs().enabled).toBe(true);
     });
     expect(mockCreate.mutate).not.toHaveBeenCalled();
+  });
+
+  it("redials the terminal's computer when a person retries a failed start", () => {
+    mockList.data = { sessions: [] };
+    mockCreate.isError = true;
+    mockCreate.isIdle = false;
+    mockCreate.error = new Error("connection lost");
+    const { result } = runBootstrap();
+    redialRemoteSessionsFor.mockClear();
+
+    act(() => result.current.retry());
+
+    expect(redialRemoteSessionsFor).toHaveBeenCalledExactlyOnceWith(
+      "host-1",
+      "user-retry",
+    );
   });
 
   it("checks the live directory row on retry and admits a host at the floor", async () => {

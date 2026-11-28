@@ -44,6 +44,7 @@ import {
   SimulatorIdleWindowRow,
   SimulatorRunningNowRow,
 } from "./host-overview-simulator-instances";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 /**
  * Overview ▸ Mobile simulators: the one switch of `config.simulator`, what
@@ -588,7 +589,10 @@ function SimulatorCheckAgainButton(props: {
       size="sm"
       disabled={checking}
       data-testid="settings-simulators-check-again"
-      onClick={recheck}
+      onClick={() => {
+        if (props.hostId !== null) redialHostForRetry(props.hostId);
+        recheck();
+      }}
     >
       {checking ? (
         <AgentSpinningDots

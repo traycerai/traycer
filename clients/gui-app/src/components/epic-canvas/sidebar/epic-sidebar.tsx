@@ -100,6 +100,7 @@ import {
 } from "@/components/epic-canvas/add-node-options";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 import { ArtifactsPanelSkeleton } from "@/components/epic-canvas/skeletons/artifacts-panel-skeleton";
 import { ChatsPanelSkeleton } from "@/components/epic-canvas/skeletons/chats-panel-skeleton";
 import { CommentsPanelSkeleton } from "@/components/epic-canvas/skeletons/comments-panel-skeleton";
@@ -389,8 +390,9 @@ function useFileTreeWorkspaceSelection(
   );
   const { refetch: refetchWorkspaces } = workspacesQuery;
   const retry = useCallback(async (): Promise<void> => {
+    if (hostId !== null) redialHostForRetry(hostId);
     await refetchWorkspaces();
-  }, [refetchWorkspaces]);
+  }, [hostId, refetchWorkspaces]);
   return {
     hostId,
     selectedWorkspacePath,

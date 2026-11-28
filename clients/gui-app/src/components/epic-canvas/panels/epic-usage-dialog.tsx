@@ -1,4 +1,5 @@
 import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 import { useMemo, useRef, useState, type ReactNode } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -239,6 +240,7 @@ function EpicUsageDialogBody(props: {
         error={query.error}
         onRetry={() => {
           if (showHostUpdateNeededForGesture(props.hostId)) return;
+          if (props.hostId !== null) redialHostForRetry(props.hostId);
           void query.refetch();
         }}
       />

@@ -35,6 +35,7 @@ import { useOptionalHostClient, type HostRpcRegistry } from "@/lib/host";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import { providersListReportsNativeMemory } from "@/lib/providers/provider-native-memory";
 import { configMutationKeys, providersMutationKeys } from "@/lib/query-keys";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 const AGENT_MEMORIES_GET = "config.agentMemories.get";
 const AGENT_MEMORIES_SET = "config.agentMemories.set";
@@ -360,7 +361,11 @@ export function useOnboardingAgentMemories(input: {
     setProvider: (providerId, value) =>
       edit((current) => withProviderChoice(current, providerId, value)),
     save,
-    reloadProviders: () => void providersQuery.refetch(),
+    reloadProviders: () => {
+      const hostId = client?.getActiveHostId() ?? null;
+      if (hostId !== null) redialHostForRetry(hostId);
+      void providersQuery.refetch();
+    },
   };
 }
 

@@ -37,6 +37,7 @@ import {
 } from "@/components/ui/dialog";
 import { PROVIDER_STATE_UNREADABLE_COPY } from "@/lib/providers/provider-settings-unreadable-error";
 import type { HostRpcRegistry } from "@/lib/host";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 export function PersonalLeaveSignIn(props: {
   readonly row: EnvironmentMovePersonalProfile;
@@ -93,6 +94,7 @@ export function PersonalLeaveSignIn(props: {
                   variant="outline"
                   disabled={props.metadataQuery.isFetching}
                   onClick={() => {
+                    if (props.hostId !== null) redialHostForRetry(props.hostId);
                     void props.metadataQuery.refetch();
                   }}
                 >

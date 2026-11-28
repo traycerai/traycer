@@ -1,5 +1,10 @@
 import { act, renderHook } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 
 import type { SlashCommand } from "@/lib/composer/types";
 
@@ -44,8 +49,33 @@ vi.mock("@/hooks/composer/use-slash-commands", async (importOriginal) => ({
     data: CATALOG,
     isLoading: false,
     isFetching: false,
+    error: slashLoad.error,
+    refetch: slashLoad.refetch,
   }),
 }));
+
+// Whether the catalog read failed, and the refetch its Retry asks for.
+const slashLoad = vi.hoisted(() => ({
+  error: null as Error | null,
+  refetch: vi.fn(),
+}));
+
+const redialRemoteSessionsFor = vi.hoisted(() => vi.fn());
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/active-remote-sessions",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@traycer-clients/shared/host-transport/remote/active-remote-sessions")
+    >()),
+    redialRemoteSessionsFor,
+  }),
+);
+
+afterEach(() => {
+  slashLoad.error = null;
+  slashLoad.refetch.mockReset();
+  redialRemoteSessionsFor.mockReset();
+});
 
 function openSession(
   store: ComposerPickerStore,
@@ -123,5 +153,48 @@ describe("useSlashItems across a session swap", () => {
 
     expect(store.getState().sessionId).toBe(2);
     expect(store.getState().itemsForQuery).toBe("");
+  });
+});
+
+describe("useSlashItems retry", () => {
+  it("asks the composer's host to redial before reloading a failed catalog", () => {
+    slashLoad.error = new Error("host unreachable");
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: { invalidateHostScope: () => undefined },
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+      messenger: new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => "slash-retry",
+        handlers: {},
+      }),
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({ origin: "renderer", bearerToken: "token" }),
+    );
+    const store = createComposerPickerStore();
+    const view = renderHook(() =>
+      useSlashItems({
+        pickerStore: store,
+        hostClient: spine.createRequester(mockLocalHostEntry),
+        harnessId: "claude",
+        workingDirectories: [],
+        profileId: null,
+        localCommands: [],
+      }),
+    );
+    act(() => {
+      openSession(store, 1, "", "all");
+    });
+    view.rerender();
+
+    store.getState().retryLoad?.();
+
+    expect(redialRemoteSessionsFor).toHaveBeenCalledWith(
+      mockLocalHostEntry.hostId,
+      "user-retry",
+    );
+    expect(slashLoad.refetch).toHaveBeenCalledOnce();
   });
 });

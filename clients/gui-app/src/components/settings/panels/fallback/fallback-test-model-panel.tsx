@@ -32,6 +32,7 @@ import {
 import { resolveSeededProfileId } from "@/lib/composer/resolve-seeded-profile-id";
 import { removedProfilesForProvider } from "@/components/providers/provider-profile-model";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 import {
   harnessCatalogEntryNeedsRefresh,
   useGuiHarnessModelsWarmup,
@@ -308,6 +309,7 @@ export function FallbackTestModelPanel(
     committedTiers,
   });
   const query = useFallbackPolicyTestTierGroupsQuery(request);
+  const hostId = useAddressableHostId();
   const verdict = testVerdictModel({
     incomplete: incompleteTupleText(tuple),
     tuple:
@@ -398,6 +400,7 @@ export function FallbackTestModelPanel(
               : null
           }
           onRetry={() => {
+            if (hostId !== null) redialHostForRetry(hostId);
             void query.refetch();
           }}
           onGoToRow={onGoToRow}
@@ -600,6 +603,7 @@ function useTestModelCatalog(harnessId: GuiHarnessId | null): {
   readonly retry: () => void;
 } {
   const client = useHostClient();
+  const hostId = useAddressableHostId();
   const modelQueries = useGuiHarnessModelsWarmup(client, harnessId, {
     enabled: true,
     subscribed: true,
@@ -633,6 +637,7 @@ function useTestModelCatalog(harnessId: GuiHarnessId | null): {
     models: modelQuery.data === undefined ? null : modelQuery.data.models,
     failed: modelQuery.isError,
     retry: () => {
+      if (hostId !== null) redialHostForRetry(hostId);
       void modelQuery.refetch();
     },
   };

@@ -75,6 +75,7 @@ import { useNotificationsPopoverStore } from "@/stores/notifications/notificatio
 import { useAppLocalNotificationUnreadCount } from "@/stores/notifications/app-local-notifications-store";
 import { useNotificationUnreadCount } from "@/stores/notifications/notifications-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 /** What differs between the bell's center and the strip's Notifications drawer. */
 const VARIANT_CHROME: Readonly<
@@ -1315,6 +1316,8 @@ interface LoadMoreButtonProps {
  * normal control - it never collapses the shell, and retrying just
  * re-invokes the same load action against the still-current cursor. */
 function LoadMoreButton(props: LoadMoreButtonProps): ReactNode {
+  // The pages come from the host that owns the notification streams.
+  const notificationHostId = useNotificationResolveHostId();
   if (props.hasError) {
     return (
       <div
@@ -1326,7 +1329,12 @@ function LoadMoreButton(props: LoadMoreButtonProps): ReactNode {
           type="button"
           variant="destructive-ghost"
           size="xs"
-          onClick={props.onClick}
+          onClick={() => {
+            if (notificationHostId !== null) {
+              redialHostForRetry(notificationHostId);
+            }
+            props.onClick();
+          }}
           data-testid={`${props.testId}-retry`}
           className="h-auto"
         >

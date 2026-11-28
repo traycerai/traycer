@@ -459,6 +459,7 @@ function fakeRemoteSession(): FakeRemoteSession {
     notifyCloudVerdictChanged: vi.fn(),
     wake: vi.fn(),
     forceReconnect: vi.fn(),
+    redialIfWaiting: vi.fn(),
     onClosed: () => () => undefined,
     subscribeAvailabilityRecovered: () => () => undefined,
     subscribeReadinessLost: () => () => undefined,

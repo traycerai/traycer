@@ -22,6 +22,7 @@ import {
   useHostReachability,
 } from "@/hooks/agent/use-host-reachability";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 /**
  * Lifted out of `chat-tile.tsx` so the host it targets is
@@ -193,7 +194,10 @@ export function useChatCloneOnHostSwitch(
             client: targetClient,
             targetHostLabel,
             chooseProfile: (profileId) => runAttempt({ profileId }),
-            retry: () => runAttempt(null),
+            retry: () => {
+              redialHostForRetry(targetHostId);
+              runAttempt(null);
+            },
             cancel: () => {
               cancelRef.current?.();
               cancelRef.current = null;

@@ -40,6 +40,7 @@ import {
   sendFollowedSave,
   type PendingSettingsSave,
 } from "@/lib/environment/settings-save-follow";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 interface PressedEnvRename {
   readonly prepare: PrepareSettingsSave;
@@ -336,6 +337,7 @@ export function useRpcShellConfigController(props: {
     config: configQuery.data,
     configError: configQuery.error ?? envListQuery.error,
     retryConfig: () => {
+      if (hostId !== null) redialHostForRetry(hostId);
       void configQuery.refetch();
       void shellListQuery.refetch();
       void envListQuery.refetch();

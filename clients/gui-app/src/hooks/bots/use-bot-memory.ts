@@ -26,6 +26,7 @@ import {
   type SharedStreamSubscription,
   type SharedStreamSubscriptionRegistry,
 } from "@/hooks/pr/shared-stream-subscription";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 export type { BotMemory };
 
@@ -183,6 +184,7 @@ export function useBotMemory(args: {
   });
 
   const retry = useCallback(() => {
+    redialHostForRetry(hostId);
     // A memory the host could not read leaves the session open; it is
     // replaced, as a closed one is, so the host is asked again.
     const current = sessionKey === null ? undefined : sessions.get(sessionKey);
@@ -191,7 +193,7 @@ export function useBotMemory(args: {
       current.unsubscribeFromStream();
     }
     sendRefresh();
-  }, [sessionKey, sendRefresh]);
+  }, [hostId, sessionKey, sendRefresh]);
 
   return useMemo((): BotMemoryReading => {
     if (support === "unsupported") return { kind: "unsupported" };

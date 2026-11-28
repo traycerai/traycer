@@ -1,4 +1,5 @@
 import { useHostStatusReading } from "@/components/settings/host-scope/use-host-read-refusal";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
 import { HostRestartSessions } from "@/components/host/host-restart-sessions";
 import {
@@ -2059,6 +2060,7 @@ export function HostOverviewPanel(props: {
               failed={identity === null && identityQuery.errorUpdateCount > 0}
               retrying={identityQuery.isFetching}
               onRetry={() => {
+                if (scope.hostId !== null) redialHostForRetry(scope.hostId);
                 void identityQuery.refetch();
               }}
               onEdit={rename.startEditing}

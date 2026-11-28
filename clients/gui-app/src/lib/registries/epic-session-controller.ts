@@ -121,6 +121,7 @@ import {
 } from "@traycer-clients/shared/host-client/minimum-host-version";
 import { remoteAwareOwnerIdentityKey } from "@/lib/host/transport-key";
 import { streamPresentsSignIn } from "@/lib/host/stream-presents-sign-in";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -2126,6 +2127,10 @@ function createEpicSessionController(): EpicSessionController {
       heldHandle === undefined
         ? undefined
         : handleStreamClients.get(heldHandle);
+    // The computer the failure card names. Its remote sessions that are not
+    // ready redial now, which also covers a failed first open with no handle.
+    const failedHostId = entry.presentation.targetHostId;
+    if (failedHostId !== null) redialHostForRetry(failedHostId);
     if (streamClient?.isSilentFor?.(SESSION_SILENCE_TIMEOUT_MS) === true) {
       streamClient.reconnectAll(EPIC_RETRY_FORCE_RECONNECT_REASON, {
         probeFirst: false,

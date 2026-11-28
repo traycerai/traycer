@@ -10,6 +10,8 @@ import { useNowMs } from "@/components/settings/panels/host-settings-panel-hooks
 import { useSimulatorCatalogContext } from "@/components/epic-canvas/renderers/simulator-catalog-context";
 import type { SimulatorCatalogModel } from "@/hooks/simulator/use-simulator-catalog-inventory";
 import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 import { simulatorTileId } from "@/stores/epics/canvas/tile-schema/simulator-tile";
 import {
   simulatorPendingOpensForEpic,
@@ -253,6 +255,8 @@ const COUNTDOWN_TICK_MS = 30_000;
 /** The Mobile simulators panel's rows, shared by the rail panel and the switcher. */
 export function useSimulatorListModel(epicId: string): SimulatorListModel {
   const catalog = useSimulatorCatalogContext();
+  // The catalog is read on the Epic session's host client.
+  const catalogHostId = useEpicSessionHostId();
   const byRequestId = useSimulatorPendingOpensStore(
     (state) => state.byRequestId,
   );
@@ -286,6 +290,12 @@ export function useSimulatorListModel(epicId: string): SimulatorListModel {
     rowCount,
     loading: status === "loading" && rowCount === 0,
     nowMs,
-    refresh: catalog?.refetch ?? (() => undefined),
+    refresh:
+      catalog === null
+        ? () => undefined
+        : () => {
+            if (catalogHostId !== null) redialHostForRetry(catalogHostId);
+            catalog.refetch();
+          },
   };
 }

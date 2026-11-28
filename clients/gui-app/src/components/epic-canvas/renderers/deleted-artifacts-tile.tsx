@@ -1,4 +1,5 @@
 import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 import { Trash2 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import type { DeletedArtifactEntry } from "@traycer/protocol/host/epic/artifact-versions";
@@ -106,10 +107,9 @@ function DeletedArtifactsTileContent(props: {
             revive.isPending ? revive.variables.artifactId : null
           }
           onRetry={() => {
-            if (
-              showHostUpdateNeededForGesture(client?.getActiveHostId() ?? null)
-            )
-              return;
+            const hostId = client?.getActiveHostId() ?? null;
+            if (showHostUpdateNeededForGesture(hostId)) return;
+            if (hostId !== null) redialHostForRetry(hostId);
             void deleted.refetch();
           }}
           onSelect={(artifactId) => {
@@ -182,8 +182,9 @@ function DeletedArtifactPreviewPane(props: {
       loading={preview.isLoading}
       failed={preview.isError}
       onRetry={() => {
-        if (showHostUpdateNeededForGesture(client?.getActiveHostId() ?? null))
-          return;
+        const hostId = client?.getActiveHostId() ?? null;
+        if (showHostUpdateNeededForGesture(hostId)) return;
+        if (hostId !== null) redialHostForRetry(hostId);
         void preview.refetch();
       }}
     />

@@ -12,6 +12,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { queryKeys } from "@/lib/query-keys";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 import { useHostDoorState } from "@/stores/host/host-door-state-store";
 import { useHostNegotiatedMethodVersions } from "@/hooks/host/use-host-negotiated-method-version";
 
@@ -61,6 +62,7 @@ export function useHostReadRefusal(hostId: string | null): HostReadRefusal {
     useSyncExternalStore(subscribe, readStatusFailed) && !statusAbsent;
   const retryStatus = useCallback(() => {
     if (hostId === null) return;
+    redialHostForRetry(hostId);
     void queryClient.refetchQueries({ queryKey: statusQueryKey(hostId) });
   }, [queryClient, hostId]);
   return {

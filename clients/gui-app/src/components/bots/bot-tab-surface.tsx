@@ -189,6 +189,7 @@ import {
 import { useCloudRecoveryRing } from "@/hooks/host/use-cloud-recovery-ring";
 import { isTransientCloudFailure } from "@/lib/host/transient-cloud-failure";
 import { cn } from "@/lib/utils";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 type BotTabView = TracyChannelView;
 
@@ -388,6 +389,7 @@ function TracySurfaceShell(props: {
                   botList.status === "error" || environments.status === "error"
                 }
                 onRetry={retryLists}
+                hostId={hostId}
                 level2={level2}
               />
             </BotUnselectedLevel2Pane>
@@ -632,6 +634,7 @@ function TracyUnselected(props: {
   readonly unavailable: ReadonlySet<string>;
   readonly listsFailed: boolean;
   readonly onRetry: () => void;
+  readonly hostId: string;
   readonly level2: MobileLevel2Form | null;
 }): ReactNode {
   const { groups } = props;
@@ -640,6 +643,7 @@ function TracyUnselected(props: {
       <ErrorNotice
         text="Couldn't load this channel."
         onRetry={props.onRetry}
+        hostId={props.hostId}
         className="m-4"
       />
     ) : (
@@ -806,6 +810,7 @@ function TracyChannelPane(props: {
       <ErrorNotice
         text="Couldn't load this channel."
         onRetry={retry}
+        hostId={hostId}
         className="m-4"
       />,
     );
@@ -1009,6 +1014,7 @@ function BotTabBody(props: {
       <ErrorNotice
         text={`Couldn't open this bot: ${openState.message}`}
         onRetry={reopen}
+        hostId={hostId}
         className="m-4"
       />,
     );
@@ -1028,6 +1034,7 @@ function BotTabBody(props: {
       <ErrorNotice
         text={`Couldn't reach this bot: ${subscription.error}`}
         onRetry={resubscribe}
+        hostId={hostId}
         className="m-4"
       />,
     );
@@ -2024,6 +2031,7 @@ function BotTabContent(props: {
                     <ErrorNotice
                       text={`Couldn't reach this bot: ${streamError}`}
                       onRetry={onRetry}
+                      hostId={hostId}
                       className="mx-4 mt-2"
                     />
                   )}
@@ -2032,6 +2040,7 @@ function BotTabContent(props: {
                       failure={reopenFailure}
                       onReopen={onReopen}
                       pending={reopenPending}
+                      hostId={hostId}
                     />
                   )}
                   {pausedReason === null ? null : (
@@ -2192,6 +2201,7 @@ function ReopenFailureNotice(props: {
   readonly failure: BotTabOpenFailure;
   readonly onReopen: () => void;
   readonly pending: boolean;
+  readonly hostId: string;
 }): ReactNode {
   const { failure, onReopen, pending } = props;
   if (failure.transient) {
@@ -2207,6 +2217,7 @@ function ReopenFailureNotice(props: {
     <ErrorNotice
       text={`Couldn't open this bot: ${failure.message}`}
       onRetry={onReopen}
+      hostId={props.hostId}
       className="mx-4 mt-2"
     />
   );
@@ -2259,8 +2270,11 @@ function OpenReconnecting(props: {
 function ErrorNotice(props: {
   readonly text: string;
   readonly onRetry: (() => void) | null;
+  /** The host the failed request went to, which Retry asks to redial. */
+  readonly hostId: string;
   readonly className: string;
 }): ReactNode {
+  const { onRetry, hostId } = props;
   return (
     <div
       role="alert"
@@ -2271,12 +2285,15 @@ function ErrorNotice(props: {
       )}
     >
       <span>{props.text}</span>
-      {props.onRetry === null ? null : (
+      {onRetry === null ? null : (
         <Button
           type="button"
           variant="outline"
           size="sm"
-          onClick={props.onRetry}
+          onClick={() => {
+            redialHostForRetry(hostId);
+            onRetry();
+          }}
         >
           Retry
         </Button>

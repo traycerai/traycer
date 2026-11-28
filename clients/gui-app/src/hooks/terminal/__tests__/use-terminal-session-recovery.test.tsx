@@ -4,6 +4,17 @@ import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { useTerminalSessionRecovery } from "@/hooks/terminal/use-terminal-session-recovery";
 
+const redialRemoteSessionsFor = vi.hoisted(() => vi.fn());
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/active-remote-sessions",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@traycer-clients/shared/host-transport/remote/active-remote-sessions")
+    >()),
+    redialRemoteSessionsFor,
+  }),
+);
+
 function withQueryClient(
   queryClient: QueryClient,
 ): (props: { readonly children: ReactNode }) => ReactNode {
@@ -273,5 +284,39 @@ describe("useTerminalSessionRecovery", () => {
 
     expect(result.current.recoveryExhausted).toBe(false);
     await waitFor(() => expect(result.current.recoverNonce).toBe(4));
+  });
+
+  it("a manual reconnect after budget exhaustion redials the terminal's computer", async () => {
+    redialRemoteSessionsFor.mockClear();
+    const queryClient = createTestQueryClient();
+    const { result } = renderHook(
+      () =>
+        useTerminalSessionRecovery({
+          hostId: "host-1",
+          instanceId: "instance-1",
+          onRecoveryExhausted: () => undefined,
+        }),
+      { wrapper: withQueryClient(queryClient) },
+    );
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      act(() => {
+        result.current.onSessionLost();
+      });
+      await waitFor(() => expect(result.current.recoverNonce).toBe(attempt));
+    }
+    act(() => {
+      result.current.onSessionLost();
+    });
+    expect(result.current.recoveryExhausted).toBe(true);
+    expect(redialRemoteSessionsFor).not.toHaveBeenCalled();
+
+    act(() => {
+      result.current.onManualReconnect();
+    });
+
+    expect(redialRemoteSessionsFor).toHaveBeenCalledExactlyOnceWith(
+      "host-1",
+      "user-retry",
+    );
   });
 });

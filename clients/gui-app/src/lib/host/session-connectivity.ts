@@ -5,6 +5,8 @@ import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { isMobileApp } from "@/lib/mobile-app";
 import { startVisibleInterval } from "@/lib/dom/visible-interval";
+import { redialRemoteSessionsFor } from "@traycer-clients/shared/host-transport/remote/active-remote-sessions";
+import { forgetKeptRefusalFor } from "@/lib/host/host-messenger";
 
 /**
  * The SESSION plane of host connectivity: whether this device's own live
@@ -418,4 +420,17 @@ export function useHostSessionWake(): () => void {
       wakeProbe: null,
     });
   }, [streamClient]);
+}
+
+/**
+ * A person's Retry on one computer, named by id: the press makes an attempt.
+ * The runtime messenger drops the ordinary final refusal it keeps for that
+ * computer (`forgetKeptRefusalFor`), and each remote session to it that is waiting out
+ * a backoff rung dials now (`redialRemoteSessionsFor`). A session in any other
+ * state, and a local host, are left alone. Call it immediately before the
+ * Retry's own action.
+ */
+export function redialHostForRetry(hostId: string): void {
+  forgetKeptRefusalFor(hostId);
+  redialRemoteSessionsFor(hostId, SESSION_WAKE_REASON);
 }

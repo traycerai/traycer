@@ -16,6 +16,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 /**
  * The words a tile shows while it is waiting on its host, and the words it
@@ -139,11 +140,21 @@ export function BoundedTileLoad(props: {
     pending: true,
   });
   if (load.kind === "timed-out" || load.kind === "dead") {
+    const retry = props.onRetry;
     return (
       <TileHostLoadState
         load={load}
         subject={props.subject}
-        onRetry={props.onRetry}
+        onRetry={
+          retry === null
+            ? null
+            : () => {
+                // The host did not answer, so its session may be waiting out a
+                // backoff rung: the person's retry redials it now.
+                redialHostForRetry(props.hostId);
+                retry();
+              }
+        }
         testId={props.testId}
       />
     );

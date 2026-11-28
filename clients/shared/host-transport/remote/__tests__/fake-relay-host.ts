@@ -213,6 +213,7 @@ export class FakeRelayHost {
   silentMethods = new Set<string>();
   unaryResponseDelayMs: number | null = null;
   stallNoiseReply = false;
+  stallOpenIndex: number | null = null;
   noiseInitiatorMessages = 0;
   readonly unaryResponses: {
     method: string;
@@ -609,7 +610,7 @@ export class FakeRelayHost {
     this.openGrants.push(grant);
     this.openIdentities.push(message.json?.clientIdentity);
     this.openAuthz.push(message.json?.authz);
-    if (this.stallOpens) {
+    if (this.stallOpens || this.stallOpenIndex === openIndex) {
       // The host decides on the token in `authz`.
       this.stalledOpens.push({ connection, bearer: grant, openIndex });
       return;

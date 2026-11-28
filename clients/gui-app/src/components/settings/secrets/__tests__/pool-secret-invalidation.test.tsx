@@ -1,4 +1,14 @@
 const openLinkMock = vi.hoisted(() => vi.fn<OpenLink>());
+const redialRemoteSessionsFor = vi.hoisted(() => vi.fn());
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/active-remote-sessions",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@traycer-clients/shared/host-transport/remote/active-remote-sessions")
+    >()),
+    redialRemoteSessionsFor,
+  }),
+);
 vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => openLinkMock,
 }));
@@ -27,6 +37,7 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
 
 import { settleProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import type {
   EnvironmentSecretRemovalV12,
   EnvironmentSecretV12,
@@ -99,6 +110,8 @@ interface SecretHostState {
   removal: EnvironmentSecretRemovalV12 | null;
   rotation: Rotation;
   revision: number;
+  /** Fails `environment.secrets.list` while set. */
+  listError: Error | null;
 }
 
 function secretFixture(
@@ -189,6 +202,7 @@ function stateWithSecret(overrides: Partial<SecretHostState>): SecretHostState {
     removal: null,
     rotation: null,
     revision: 1,
+    listError: null,
     ...overrides,
   };
 }
@@ -213,10 +227,10 @@ function handlersFor(state: SecretHostState): MockHandlerMap<HostRpcRegistry> {
     "environment.configuration.revision": () => ({
       revision: String(state.revision),
     }),
-    "environment.secrets.list": () => ({
-      secrets: [...state.secrets],
-      removed: [...state.removed],
-    }),
+    "environment.secrets.list": () => {
+      if (state.listError !== null) throw state.listError;
+      return { secrets: [...state.secrets], removed: [...state.removed] };
+    },
     "environment.secrets.versions": () => ({
       versions: [...state.versions],
       removal: state.removal,
@@ -475,7 +489,30 @@ afterEach(() => {
   resetTeamPageHarness();
   useSelectionAuthorityStore.getState().reset();
   openLinkMock.mockReset();
+  redialRemoteSessionsFor.mockReset();
   useSettingsEnvironmentPickStore.setState({ pick: null });
+});
+
+describe("Retry on a build with a server pool", () => {
+  it("redials the pool, which serves the list, not the page's computer", async () => {
+    const state = stateWithSecret({
+      listError: new Error("the pool did not answer"),
+    });
+    const harness = mountPage(state, { includeProbe: false });
+    const pageHostId = requireTeamHostClient().getActiveHostId();
+    expect(pageHostId).not.toBeNull();
+    expect(pageHostId).not.toBe(POOL_HOST_ID);
+
+    const error = await screen.findByTestId("secrets-page-error");
+    state.listError = null;
+    fireEvent.click(within(error).getByRole("button", { name: "Retry" }));
+
+    expect(redialRemoteSessionsFor.mock.calls).toEqual([
+      [POOL_HOST_ID, "user-retry"],
+    ]);
+    expect(await screen.findByText("STRIPE_KEY")).toBeTruthy();
+    expect(hostIdsOf(harness, "environment.secrets.list")).toEqual([]);
+  });
 });
 
 describe("secret writes on a build with a server pool", () => {

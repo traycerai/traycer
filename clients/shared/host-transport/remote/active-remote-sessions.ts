@@ -589,6 +589,13 @@ export function acquireRemoteSession<
       }
       session.forceReconnect(reason);
     },
+    redialIfWaiting: (reason) => {
+      // Same ownership guard as `wake`.
+      if (released || entry.superseded || session.isClosed()) {
+        return;
+      }
+      session.redialIfWaiting(reason);
+    },
     onClosed: (listener) => session.onClosed(listener),
     subscribeAvailabilityRecovered: (listener) =>
       session.subscribeAvailabilityRecovered(listener),
@@ -844,6 +851,33 @@ export function wakeHeldRemoteSessions(
     } else {
       entry.session.forceReconnect(reason);
     }
+  }
+}
+
+/**
+ * A person's Retry on one computer: every cached remote session to `hostId`
+ * that is waiting out a backoff rung dials now (`redialIfWaiting`). A session
+ * in any other state (ready, dialling, holding or resuming a leg, parked
+ * before admission) has no armed wait and is left exactly as it is, so a press
+ * can never interrupt a recovery in progress.
+ *
+ * A closed or superseded entry is skipped, and so is a replay-unsafe one, for
+ * the reason {@link wakeHeldRemoteSessions} gives. A lingering entry that no
+ * consumer holds right now is included: the read the Retry starts acquires it
+ * next. Local hosts are reached by their own transport and have no entry here,
+ * so this never touches one.
+ */
+export function redialRemoteSessionsFor(hostId: string, reason: string): void {
+  for (const entry of entriesByKey.values()) {
+    if (
+      entry.identity.hostId !== hostId ||
+      entry.superseded ||
+      entry.session.isClosed() ||
+      !entry.proactiveWakeEligible
+    ) {
+      continue;
+    }
+    entry.session.redialIfWaiting(reason);
   }
 }
 

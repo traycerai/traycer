@@ -9,6 +9,8 @@ import {
 } from "@/components/ui/dialog";
 import { useEpicStore } from "@/hooks/use-epic-store";
 import { useEpicWriteCommands } from "@/lib/epic-selectors";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 import {
   describeEpicWriteCommandIntent,
   presentEpicWriteCommand,
@@ -40,6 +42,7 @@ export function EpicWriteCommandsDialog(props: EpicWriteCommandsDialogProps) {
   const commands = useEpicWriteCommands();
   const retryWriteCommand = useEpicStore((s) => s.retryWriteCommand);
   const discardWriteCommand = useEpicStore((s) => s.discardWriteCommand);
+  const sessionHostId = useEpicSessionHostId();
 
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
@@ -74,6 +77,8 @@ export function EpicWriteCommandsDialog(props: EpicWriteCommandsDialogProps) {
                 <WriteCommandRow
                   command={command}
                   onRetry={() => {
+                    if (sessionHostId !== null)
+                      redialHostForRetry(sessionHostId);
                     retryWriteCommand(command.commandId);
                   }}
                   onDiscard={() => {

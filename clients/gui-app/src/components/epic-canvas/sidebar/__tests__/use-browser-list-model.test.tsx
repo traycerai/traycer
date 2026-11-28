@@ -55,6 +55,20 @@ vi.mock("@/components/epic-canvas/renderers/browser-sessions-provider", () => ({
   BrowserSessionsHostBoundary: (props: { readonly children: ReactNode }) =>
     props.children,
 }));
+// The Epic session the catalog is read through.
+vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
+  useEpicSessionHostId: () => "host-work",
+}));
+const redialRemoteSessionsFor = vi.hoisted(() => vi.fn());
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/active-remote-sessions",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@traycer-clients/shared/host-transport/remote/active-remote-sessions")
+    >()),
+    redialRemoteSessionsFor,
+  }),
+);
 
 const EPIC = "epic-1";
 
@@ -375,5 +389,19 @@ describe("useBrowserListModel", () => {
     ]);
     expect(result.current.status).toBe("error");
     expect(result.current.loading).toBe(false);
+  });
+
+  it("redials the catalog's computer, then refetches, when a failed list is retried", () => {
+    const failed = catalog(RECORDS, { status: "error" });
+    const { result } = render(failed, idleLive(), "");
+    redialRemoteSessionsFor.mockClear();
+
+    result.current.refresh();
+
+    expect(redialRemoteSessionsFor).toHaveBeenCalledExactlyOnceWith(
+      "host-work",
+      "user-retry",
+    );
+    expect(failed.refetch).toHaveBeenCalledOnce();
   });
 });

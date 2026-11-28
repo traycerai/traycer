@@ -64,6 +64,8 @@ import { cn } from "@/lib/utils";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import "./onboarding-agents.css";
+import { useOptionalHostClient } from "@/lib/host";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 type InstallState = "detected" | "missing" | "pending";
 
 function installStateFor(state: ProviderCliState | undefined): InstallState {
@@ -1151,6 +1153,9 @@ export function OnboardingDetectedAgents() {
   // The agents act is on-screen and active while mounted, so keep the query
   // both enabled and subscribed to cache updates.
   const providersQuery = useProvidersList({ enabled: true, subscribed: true });
+  // The list is read through this surface's host client, the computer its
+  // Try again asks to redial.
+  const providersHostClient = useOptionalHostClient();
   // Read from the shared host list every picker in the app reads, not
   // Settings' scoped `useHostScope`.
   const { hosts } = useHostOptions();
@@ -1312,7 +1317,11 @@ export function OnboardingDetectedAgents() {
         {providersQuery.isError ? (
           <button
             type="button"
-            onClick={() => void providersQuery.refetch()}
+            onClick={() => {
+              const hostId = providersHostClient?.getActiveHostId() ?? null;
+              if (hostId !== null) redialHostForRetry(hostId);
+              void providersQuery.refetch();
+            }}
             className="shrink-0 rounded text-ui-xs text-foreground underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
           >
             Try again

@@ -1274,6 +1274,14 @@ describe("RemoteSession host-leg resume", () => {
       expect(fixture.statuses).toEqual([HELD]);
       expect(fixture.stream.getNegotiatedSchemaVersion()).toEqual(negotiated);
 
+      const heldSocket = host.live().socket;
+      const heldDialCount = host.connections.length;
+      const heldStatuses = [...fixture.statuses];
+      session.redialIfWaiting("user-retry");
+      expect(heldSocket.closed).toBe(false);
+      expect(host.connections).toHaveLength(heldDialCount);
+      expect(fixture.statuses).toEqual(heldStatuses);
+
       await step(15_000);
       host.attach();
       await until(() => session.isReady());
@@ -1339,6 +1347,31 @@ describe("RemoteSession host-leg resume", () => {
       expect(host.connections).toHaveLength(1);
       expect(host.handshakes).toBe(1);
       expect(fixture.statuses).toEqual([HELD, CONTINUED]);
+    });
+
+    it("leaves a held detached leg alone while the resume exchange is in flight", async () => {
+      const fixture = await readyFixture(LIVE);
+      const { host, session } = fixture;
+      host.resumeReply = "silent";
+
+      host.detach();
+      await step(1_000);
+      host.attach();
+      await until(() => host.resumes.length === 1);
+      const socket = host.live().socket;
+      const resumeCount = host.resumes.length;
+      const statuses = [...fixture.statuses];
+      const connectionCount = host.connections.length;
+
+      session.redialIfWaiting("user-retry");
+
+      expect(socket.closed).toBe(false);
+      expect(host.connections).toHaveLength(connectionCount);
+      expect(host.resumes).toHaveLength(resumeCount);
+      expect(fixture.statuses).toEqual(statuses);
+      expect(session.isReady()).toBe(true);
+
+      session.close();
     });
 
     it("delivers a client frame sent while a stream is held exactly once, after the gap, on resume", async () => {

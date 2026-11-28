@@ -23,6 +23,16 @@ vi.mock("@/components/settings/host-scope/use-host-options", async () => {
 vi.mock("@/hooks/host/use-host-client-for", () => ({
   useHostClientFor: () => null,
 }));
+const redialRemoteSessionsFor = vi.hoisted(() => vi.fn());
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/active-remote-sessions",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@traycer-clients/shared/host-transport/remote/active-remote-sessions")
+    >()),
+    redialRemoteSessionsFor,
+  }),
+);
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -95,6 +105,7 @@ afterEach(() => {
   cleanup();
   resetNegotiatedManifests();
   hostMock.client = null;
+  redialRemoteSessionsFor.mockReset();
 });
 
 /** The window host's status read, which the unresolved page observes. */
@@ -211,5 +222,18 @@ describe("<UnresolvedEnvironmentPage /> a failed settings read", () => {
     await waitFor(() => {
       expect(screen.queryByTestId("host-scope-unreachable")).toBeNull();
     });
+  });
+
+  it("redials the page's computer when Retry is pressed after the computer never answered", async () => {
+    renderPage("transport");
+    const notice = await screen.findByTestId("host-scope-unreachable");
+
+    await userEvent.click(
+      within(notice).getByRole("button", { name: "Retry" }),
+    );
+
+    expect(redialRemoteSessionsFor.mock.calls).toEqual([
+      ["host-a", "user-retry"],
+    ]);
   });
 });

@@ -44,6 +44,7 @@ import { TeamViewingHostBinding } from "./team-viewing-host-binding";
 import { TeamViewingHostPicker } from "./team-viewing-host-picker";
 import { TeamContentNeedsHost } from "./team-content-needs-host";
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { usePickedTeamLabel } from "./team-pick-label";
@@ -155,7 +156,11 @@ function TeamRoutingDefaults(props: {
     state = (
       <TeamReadFailed
         message="Couldn't read this host's default model tiers."
-        onRetry={() => void query.refetch()}
+        onRetry={() => {
+          const hostId = scope.viewingHost?.hostId ?? null;
+          if (hostId !== null) redialHostForRetry(hostId);
+          void query.refetch();
+        }}
       />
     );
   }
@@ -357,7 +362,11 @@ function TeamRoutingEditor(props: {
           )}
           previewPending={preview.isFetching}
           previewUnavailable={preview.isError}
-          onRetryPreview={() => void preview.refetch()}
+          onRetryPreview={() => {
+            const hostId = scope.viewingHost?.hostId ?? null;
+            if (hostId !== null) redialHostForRetry(hostId);
+            void preview.refetch();
+          }}
           onChange={editGroups}
           onCommit={editGroups}
           onUndo={(inverse) => {

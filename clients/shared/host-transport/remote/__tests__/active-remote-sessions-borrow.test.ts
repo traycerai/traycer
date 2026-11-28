@@ -52,6 +52,7 @@ function fakeSession(): FakeSession {
     isSilentFor: () => false,
     sendUnary: vi.fn(async () => ({}) as never),
     forceReconnect: vi.fn(),
+    redialIfWaiting: vi.fn(),
     subscribe: vi.fn(() => {
       throw new Error("not exercised by these tests");
     }),

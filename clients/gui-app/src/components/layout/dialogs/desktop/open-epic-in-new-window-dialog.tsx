@@ -19,6 +19,7 @@ import { epicDisplayTitle } from "@/lib/display-title";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
 import { RefreshIcon } from "@/components/refresh-icon";
 import type { OpenEpicInNewWindowDialogProps } from "./types";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 const OPEN_EPIC_REFRESH_TIMEOUT_MS = 10_000;
 
@@ -80,7 +81,10 @@ export function OpenEpicInNewWindowDialog(
               hasNextPage,
               isFetchingNextPage,
             })}
-            onRetry={refresh.trigger}
+            onRetry={() => {
+              if (hostId !== null) redialHostForRetry(hostId);
+              refresh.trigger();
+            }}
             onSelect={(row) => {
               const tabId = useEpicCanvasStore
                 .getState()

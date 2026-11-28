@@ -56,6 +56,23 @@ vi.mock("@/hooks/providers/use-providers-plugins-list-query", () => ({
   },
 }));
 
+const DISCOVERY_HOST_ID = "host-discovery";
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useOptionalHostClient: () => ({ getActiveHostId: () => DISCOVERY_HOST_ID }),
+}));
+
+const redialRemoteSessionsFor = vi.hoisted(() => vi.fn());
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/active-remote-sessions",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@traycer-clients/shared/host-transport/remote/active-remote-sessions")
+    >()),
+    redialRemoteSessionsFor,
+  }),
+);
+
 function providerState(enabled: boolean, installed: boolean): ProviderCliState {
   return {
     providerId: "codex",
@@ -173,6 +190,7 @@ describe("OnboardingProviderDiscovery", () => {
     queryMocks.pluginCalls = [];
     queryMocks.skillRefetch.mockReset();
     queryMocks.pluginRefetch.mockReset();
+    redialRemoteSessionsFor.mockReset();
   });
 
   afterEach(cleanup);
@@ -297,6 +315,22 @@ describe("OnboardingProviderDiscovery", () => {
     ).toBeTruthy();
     expect(screen.queryByText("Skills · 0")).toBeNull();
     expect(screen.queryByText("Plugins · 0 enabled")).toBeNull();
+  });
+
+  it("asks the computer the lists are read from to redial on Try again", () => {
+    queryMocks.skillsError = true;
+    renderDiscovery(true, providerState(true, false));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Discoveries for Codex" }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+
+    expect(redialRemoteSessionsFor).toHaveBeenCalledWith(
+      DISCOVERY_HOST_ID,
+      "user-retry",
+    );
+    expect(queryMocks.skillRefetch).toHaveBeenCalledOnce();
   });
 
   it("does not query discovery for a provider that is neither enabled nor installed", () => {

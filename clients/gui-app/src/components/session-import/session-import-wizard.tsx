@@ -79,6 +79,7 @@ import {
   type SessionImportRunStatus,
 } from "@/stores/session-import/session-import-run-store";
 import { useFeatureAnnouncementsStore } from "@/stores/settings/feature-announcements-store";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 export interface SessionImportSecondaryAction {
   readonly label: string;
@@ -390,7 +391,10 @@ export function SessionImportWizard(props: {
             variant="outline"
             size="sm"
             disabled={statusQuery.isFetching}
-            onClick={() => void statusQuery.refetch()}
+            onClick={() => {
+              if (hostId !== null) redialHostForRetry(hostId);
+              void statusQuery.refetch();
+            }}
           >
             Try again
           </Button>

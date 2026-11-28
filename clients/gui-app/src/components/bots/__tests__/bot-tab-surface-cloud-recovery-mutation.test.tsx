@@ -107,6 +107,17 @@ vi.mock(
   () => doorbellStreamClientForMock,
 );
 
+const redialRemoteSessionsFor = vi.hoisted(() => vi.fn());
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/active-remote-sessions",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@traycer-clients/shared/host-transport/remote/active-remote-sessions")
+    >()),
+    redialRemoteSessionsFor,
+  }),
+);
+
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => mocks.navigate,
 }));
@@ -502,6 +513,7 @@ afterEach(() => {
   openHost.client = null;
   resetHostConnectionRegistryForTest();
   resetDoorbellHosts();
+  redialRemoteSessionsFor.mockReset();
 });
 
 describe("<BotTabSurface /> a ring while a re-open is in flight", () => {
@@ -548,6 +560,22 @@ describe("<BotTabSurface /> when a re-open fails for another reason", () => {
     );
     expect(within(alert).getByRole("button", { name: "Retry" })).toBeTruthy();
     expect(screen.queryByTestId("bot-tab-reconnecting")).toBeNull();
+  });
+
+  it("asks the tab's computer to redial when its Retry is pressed", async () => {
+    const user = userEvent.setup();
+    render(tree());
+    const mounted = await failMountOpens(TRANSIENT);
+    await ringAsking(mounted + 1);
+    await settle(heldOpen(mounted), (open) => open.reject(PERMANENT));
+    const alert = await screen.findByTestId("bot-tab-error");
+
+    await user.click(within(alert).getByRole("button", { name: "Retry" }));
+
+    expect(redialRemoteSessionsFor).toHaveBeenCalledWith(
+      TAB_HOST,
+      "user-retry",
+    );
   });
 });
 

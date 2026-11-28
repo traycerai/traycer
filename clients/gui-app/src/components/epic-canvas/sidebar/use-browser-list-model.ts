@@ -11,6 +11,8 @@ import type { BrowserPanelPreferences } from "@/stores/epics/browser-panel-store
 import { useBrowserCatalogContext } from "@/components/epic-canvas/renderers/browser-catalog-context";
 import { useBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 import { useBrowserPanelPreferences } from "@/stores/epics/browser-panel-store";
 import { browserSessionTileId } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import {
@@ -140,6 +142,8 @@ export function useBrowserListModel(
 ): BrowserListModel {
   const catalog = useBrowserCatalogContext();
   const live = useBrowserSessionsContext();
+  // The catalog is read on the Epic session's host client.
+  const catalogHostId = useEpicSessionHostId();
   const heldStates = useHeldBrowserStates(epicId);
   const options = useHostOptions();
   const preferences = useBrowserPanelPreferences(epicId);
@@ -194,6 +198,15 @@ export function useBrowserListModel(
         query,
       ).length > 0,
     filteredEmpty: rows.length > 0 && visible.length === 0,
-    refresh: catalog?.refetch ?? live.retry,
+    refresh:
+      catalog === null
+        ? () => {
+            if (live.hostId !== null) redialHostForRetry(live.hostId);
+            live.retry();
+          }
+        : () => {
+            if (catalogHostId !== null) redialHostForRetry(catalogHostId);
+            catalog.refetch();
+          },
   };
 }

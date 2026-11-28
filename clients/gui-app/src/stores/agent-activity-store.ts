@@ -27,6 +27,7 @@ import {
   isReopenableHostStreamClose,
   type HostReconnectEngine,
 } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 /**
  * One host's agent-activity view.
@@ -342,6 +343,7 @@ export function openAgentActivityStream(
 
   openClient();
   const reread = (): void => {
+    redialHostForRetry(hostId);
     const client = currentClient;
     currentClient = null;
     client?.close();

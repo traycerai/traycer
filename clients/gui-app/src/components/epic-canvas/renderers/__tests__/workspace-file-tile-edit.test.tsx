@@ -79,6 +79,16 @@ vi.mock("@/hooks/workspace/use-read-file-query", () => ({
 vi.mock("@/hooks/workspace/use-workspace-write-file-mutation", () => ({
   useWorkspaceWriteFile: () => ({ mutateAsync: state.writeFile }),
 }));
+const redialRemoteSessionsFor = vi.hoisted(() => vi.fn());
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/active-remote-sessions",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@traycer-clients/shared/host-transport/remote/active-remote-sessions")
+    >()),
+    redialRemoteSessionsFor,
+  }),
+);
 
 vi.mock(
   "@/components/epic-canvas/workspace-file/workspace-file-renderer",
@@ -196,6 +206,7 @@ describe("<WorkspaceFileTile /> editing", () => {
   afterEach(() => {
     cleanup();
     fileEditRuntimeRegistry.resetForTesting();
+    redialRemoteSessionsFor.mockReset();
   });
 
   it("starts from the source click, writes nothing on activation, and flushes the changed draft on blur", async () => {
@@ -396,6 +407,24 @@ describe("<WorkspaceFileTile /> editing", () => {
       status: "conflict",
       isDirty: true,
     });
+  });
+
+  it("redials the file's computer once when Retry follows a save that never reached it", async () => {
+    state.writeFile.mockRejectedValue(
+      new Error("The computer did not answer."),
+    );
+    renderTile();
+    fireEvent.click(screen.getByRole("button", { name: "Click source" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Change source" }),
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Offline" }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(redialRemoteSessionsFor.mock.calls).toEqual([
+      [NODE.hostId, "user-retry"],
+    ]);
   });
 
   it("seeds the editor with raw CRLF content instead of a normalized copy", async () => {

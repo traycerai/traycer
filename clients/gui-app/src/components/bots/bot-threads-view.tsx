@@ -91,6 +91,7 @@ import { useRelativeTimestamp } from "@/lib/relative-time";
 import { useAuthStore, type AuthProfile } from "@/stores/auth/auth-store";
 import type { BotTurnOpen } from "@/stores/bots/bot-open-thread-store";
 import { useBotThreadFoldStore } from "@/stores/bots/bot-thread-fold-store";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 const EMPTY_BOTS: ReadonlyArray<BotRecord> = [];
 const NO_EPIC_IDS: ReadonlyArray<string> = [];
@@ -239,7 +240,10 @@ function BotThreadsBody(props: {
     return botList.isError ? (
       <BotReadFailure
         message="Couldn't load your threads."
-        onRetry={() => void botList.refetch()}
+        onRetry={() => {
+          redialHostForRetry(hostId);
+          void botList.refetch();
+        }}
         testId="bot-threads-error"
       />
     ) : (

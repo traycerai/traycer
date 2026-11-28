@@ -33,6 +33,8 @@ import {
 import { useBrowserSavedLoginSitesQuery } from "@/hooks/browser/use-browser-saved-login-sites-query";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 import { useHostBinding } from "@/lib/host";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { appLogger } from "@/lib/logger";
@@ -190,6 +192,7 @@ function BrowserSavedLoginsRows(props: {
   readonly enabled: boolean;
 }): ReactNode {
   const sites = useBrowserSavedLoginSitesQuery({ enabled: true });
+  const hostId = useAddressableHostId();
   const importTriggerRef = useRef<HTMLButtonElement>(null);
   const [importOpened, setImportOpened] = useState(false);
   const requested = useBrowserFocusStore((state) => state.openImportLogins);
@@ -231,6 +234,10 @@ function BrowserSavedLoginsRows(props: {
             setImportOpen(true);
           }}
           onRefresh={() => {
+            void sites.refetch();
+          }}
+          onRetry={() => {
+            if (hostId !== null) redialHostForRetry(hostId);
             void sites.refetch();
           }}
         />
@@ -365,6 +372,7 @@ function SavedWebsiteSessionsRow(props: {
   readonly importTriggerRef: RefObject<HTMLButtonElement | null>;
   readonly onImport: () => void;
   readonly onRefresh: () => void;
+  readonly onRetry: () => void;
 }): ReactNode {
   const [cleared, setCleared] = useState<readonly string[]>([]);
   const data = props.data;
@@ -409,7 +417,7 @@ function SavedWebsiteSessionsRow(props: {
               }
             </HostReadFailure>
           }
-          onRetry={props.onRefresh}
+          onRetry={props.onRetry}
           onRemoveAll={null}
         />
       );

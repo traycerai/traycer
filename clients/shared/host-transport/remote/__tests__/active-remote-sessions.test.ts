@@ -123,6 +123,10 @@ function fakeSession(): FakeSession {
       wakeReasons.push(`forced:${reason}`);
       wakeProbes.push(null);
     },
+    redialIfWaiting: (reason) => {
+      wakeReasons.push(`if-waiting:${reason}`);
+      wakeProbes.push(null);
+    },
     onClosed: (listener) => {
       closedListeners.add(listener);
       return () => closedListeners.delete(listener);

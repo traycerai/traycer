@@ -70,6 +70,7 @@ import { useFallbackPolicyPatternLines } from "@/hooks/providers/use-fallback-po
 import { legacyFamilyTiersNameDestinationFor } from "@/components/settings/panels/fallback/fallback-legacy-family-routing";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 import {
   globalLastRunSettingsAreHostOwned,
   selectGlobalLastRunSettings,
@@ -547,6 +548,7 @@ function FallbackPolicyEditor(props: {
     [patternLines.patterns, state.draft.tierGroups, catalog.catalogsByHarness],
   );
 
+  const previewHostId = useAddressableHostId();
   const previewQuery = useFallbackPolicyPreviewTierGroupsQuery(
     previewableTierGroups({
       keyed: state.keyedTierGroups,
@@ -1302,6 +1304,7 @@ function FallbackPolicyEditor(props: {
             // failed", which is exactly the state a retry can fix.
             previewUnavailable={previewQuery.isError}
             onRetryPreview={() => {
+              if (previewHostId !== null) redialHostForRetry(previewHostId);
               void previewQuery.refetch();
             }}
             onChange={(next, groups) => {

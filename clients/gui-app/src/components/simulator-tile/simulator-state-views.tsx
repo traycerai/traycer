@@ -15,6 +15,7 @@ import { simulatorVersionLabel } from "@/lib/simulator-view/simulator-labels";
 import type { SimulatorTileTarget } from "@/lib/simulator-view/simulator-tile-target";
 import { orderSimulators } from "@/lib/simulator-view/simulator-sessions-coordinator";
 import { cn } from "@/lib/utils";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 /**
  * The tile's non-streaming states. Each says what is true on the host the
@@ -248,7 +249,10 @@ export function SimulatorFailedView(props: {
   readonly title: string;
   readonly reason: string | null;
   readonly onRetry: (() => void) | null;
+  /** The computer the simulators run on, which Try again asks to redial. */
+  readonly hostId: string;
 }) {
+  const { onRetry, hostId } = props;
   return (
     <SimulatorStateFrame
       icon={
@@ -260,12 +264,15 @@ export function SimulatorFailedView(props: {
       {props.reason === null ? null : (
         <p className="break-words text-foreground/80">{props.reason}</p>
       )}
-      {props.onRetry === null ? null : (
+      {onRetry === null ? null : (
         <Button
           type="button"
           variant="outline"
           size="sm"
-          onClick={props.onRetry}
+          onClick={() => {
+            redialHostForRetry(hostId);
+            onRetry();
+          }}
         >
           Try again
         </Button>

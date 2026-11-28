@@ -44,7 +44,10 @@ type OnboardingScript = { setup: BotOnboardingSetup | null } | "fails";
 const mocks = vi.hoisted(() => {
   const initialSupport = (): boolean | null => true;
   const initialOnboardingReads = (): Record<string, OnboardingScript> => ({});
-  const hostClient = { stub: "host-client" };
+  const hostClient = {
+    stub: "host-client",
+    getActiveHostId: (): string | null => "host-home",
+  };
   const environmentRefetch = vi.fn(() => Promise.resolve());
   const botRefetch = vi.fn(() => Promise.resolve());
   return {
@@ -122,6 +125,16 @@ vi.mock("@/lib/links/open-link", () => ({
 vi.mock("@/lib/host/runtime", () => ({
   useHostClient: () => mocks.hostClient,
 }));
+const redialRemoteSessionsFor = vi.hoisted(() => vi.fn());
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/active-remote-sessions",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@traycer-clients/shared/host-transport/remote/active-remote-sessions")
+    >()),
+    redialRemoteSessionsFor,
+  }),
+);
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => mocks.state.hostId,
 }));
@@ -361,6 +374,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  redialRemoteSessionsFor.mockReset();
 });
 
 describe("HomeBotsSection capability gate", () => {
@@ -562,6 +576,9 @@ describe("HomeBotsSection supported states", () => {
     await user.click(within(error).getByRole("button", { name: "Retry" }));
     expect(mocks.environmentRefetch).toHaveBeenCalledTimes(1);
     expect(mocks.botRefetch).toHaveBeenCalledTimes(1);
+    expect(redialRemoteSessionsFor.mock.calls).toEqual([
+      ["host-home", "user-retry"],
+    ]);
   });
 
   it("shows the error when only the environment read failed", () => {
