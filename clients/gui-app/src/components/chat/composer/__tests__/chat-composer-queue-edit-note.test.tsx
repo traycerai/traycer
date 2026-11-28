@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
+import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -19,29 +20,7 @@ import { ChatComposer } from "../chat-composer";
  */
 
 const captured = vi.hoisted(() => ({
-  toolbarStore: null as {
-    readonly getState: () => {
-      readonly setSelection: (next: {
-        readonly harnessId: "claude";
-        readonly modelSlug: string;
-        readonly profileId: string | null;
-      }) => void;
-      readonly applySeed: (
-        seedKey: string,
-        values: {
-          readonly permission: "supervised";
-          readonly selection: {
-            readonly harnessId: "claude";
-            readonly modelSlug: string;
-            readonly profileId: string | null;
-          };
-          readonly reasoning: string;
-          readonly serviceTier: string;
-          readonly ultracode: boolean;
-        },
-      ) => void;
-    };
-  } | null,
+  toolbarStore: null as ComposerToolbarStore | null,
 }));
 
 // A chat composer on a sandbox host refuses an unrunnable agent at Send;

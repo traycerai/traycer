@@ -66,6 +66,7 @@ import type {
   TraycerUninstallResult,
   FreePortAndRestartInput,
   FreePortAndRestartResult,
+  IAppIconBadgeHost,
   IHostManagement,
   IHostTray,
   IFileDropHost,
@@ -717,7 +718,7 @@ export interface DesktopPlatformBridge {
     setVisibleOnAllWorkspaces(visible: boolean): Promise<void>;
   };
   app: {
-    setBadge(text: string): Promise<void>;
+    setAppBadgeCount(count: number): Promise<void>;
   };
   diagnostics: {
     getMetrics(): Promise<ProcessMetricsSnapshot>;
@@ -1002,6 +1003,7 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly tokenStore: ITokenStore;
   readonly hostTokens: HostTokenSource;
   readonly notifications: INotificationHost;
+  readonly deliveredNotifications: null = null;
   readonly tray: ITrayState;
   readonly workspaceFolders: IWorkspaceFoldersHost;
   readonly fileDrops: IFileDropHost;
@@ -1030,6 +1032,8 @@ export class DesktopRunnerHost implements IRunnerHost {
   // No OS push on the desktop: notifications here are native `show` calls, not
   // an APNs/FCM permission the user can revoke from a settings app.
   readonly pushPermission: null = null;
+  // The Dock, taskbar and launcher show the header bell's number.
+  readonly appIconBadge: IAppIconBadgeHost;
   // No OS back request on the desktop: back is the header arrows, the mouse
   // buttons and the keybinding, all of which the GUI owns itself.
   readonly systemBack: null = null;
@@ -1063,6 +1067,11 @@ export class DesktopRunnerHost implements IRunnerHost {
     this.globalShortcuts = options.bridge.globalShortcuts;
     this.support = options.bridge.support;
     this.platform = options.bridge.platform;
+    const badgeApp = options.bridge.platform.app;
+    this.appIconBadge = {
+      countSource: "bell",
+      setCount: (count) => badgeApp.setAppBadgeCount(count),
+    };
     this.crashTelemetry = options.bridge.platform.crashTelemetry;
     this.power = options.bridge.power;
     this.browserView = options.bridge.browserView;

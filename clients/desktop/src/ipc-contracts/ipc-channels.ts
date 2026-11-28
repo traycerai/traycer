@@ -284,7 +284,7 @@ export const RunnerHostInvoke = {
   windowCaptureRegion: "runnerHost:window:captureRegion",
   windowFlashFrame: "runnerHost:window:flashFrame",
   windowSetProgressBar: "runnerHost:window:setProgressBar",
-  windowSetBadge: "runnerHost:app:setBadge",
+  appSetBadgeCount: "runnerHost:app:setBadgeCount",
   windowSetRepresentedFilename: "runnerHost:window:setRepresentedFilename",
   windowSetDocumentEdited: "runnerHost:window:setDocumentEdited",
   windowSetContentProtection: "runnerHost:window:setContentProtection",

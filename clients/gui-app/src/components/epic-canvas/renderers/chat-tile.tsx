@@ -3796,12 +3796,6 @@ function useChatTileSessionViewModel(
     ],
   );
 
-  // The one rebind-consent gate for every send-shaped path this tile owns —
-  // composer submits, next-step clicks, implement-plan, compaction, and the
-  // save of a queued message's edit that changes its folders. A path
-  // that calls `chatActions.sendMessage` without passing through here
-  // reopens one of two holes: a phantom disclosure on a no-op draft, or a
-  // staged rebind committing silently.
   // A gated send's rebind, judged when the gate runs and again at confirm:
   // `null` when the queued message whose edit it judges has left the queue.
   const judgeGatedSend = useCallback(
@@ -3904,6 +3898,12 @@ function useChatTileSessionViewModel(
     ],
   );
 
+  // The one rebind-consent gate for every send-shaped path this tile owns —
+  // composer submits, next-step clicks, implement-plan, compaction, and the
+  // save of a queued message's edit that changes its folders. A path
+  // that calls `chatActions.sendMessage` without passing through here
+  // reopens one of two holes: a phantom disclosure on a no-op draft, or a
+  // staged rebind committing silently.
   const submitThroughRebindGate = useCallback(
     (send: GatedChatSend): GatedChatSendOutcome => {
       const { submit, dispatch } = send;

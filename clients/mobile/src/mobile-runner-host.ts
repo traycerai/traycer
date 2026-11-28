@@ -216,6 +216,10 @@ import {
   type TraycerModelsFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
+  fetchNotificationEntryStatesViaHttp,
+  type NotificationEntryStatesFetchResult,
+} from "@traycer-clients/shared/host-client/notification-entry-states";
+import {
   fetchTeamChatAutoArchiveViaHttp,
   putTeamChatAutoArchiveViaHttp,
   type TeamChatAutoArchiveReadResult,
@@ -257,6 +261,14 @@ import type {
 import type { MobileAuthSheet } from "./auth-sheet";
 import type { MobileVoiceAudio } from "./voice-audio";
 import type { MobilePushRegistration } from "./push-registration";
+import { MobileAppIconBadge, type AppBadgePluginSlice } from "./app-badge";
+import { SignedInUser } from "./signed-in-user";
+import {
+  MobileDeliveredNotifications,
+  type DeliveredNotificationsPlatform,
+  type DeliveredNotificationsPluginSlice,
+} from "./delivered-notifications";
+import { webCryptoSha256Hex } from "@traycer-clients/shared/cloud-chat/bytes";
 
 /**
  * One selection-fleet member: a host id, whether it is a sandbox and whether
@@ -387,6 +399,21 @@ export interface MobileRunnerHostOptions {
    * see `IRunnerHost.deviceDictation`. Decided by the entry point.
    */
   readonly deviceDictation: IDeviceDictationHost | null;
+  /**
+   * The app icon count (see `app-badge.ts`), or `null` where the app has no
+   * icon (the dev web entry, tests). `plugin` is the native writer, `null`
+   * where the OS has no badge call (Android): the count is then kept and
+   * never written.
+   */
+  readonly appBadge: { readonly plugin: AppBadgePluginSlice | null } | null;
+  /**
+   * The OS list of delivered notifications (see `delivered-notifications.ts`),
+   * or `null` where there is none (the dev web entry, tests).
+   */
+  readonly deliveredNotifications: {
+    readonly plugin: DeliveredNotificationsPluginSlice;
+    readonly platform: DeliveredNotificationsPlatform;
+  } | null;
 }
 
 const STEP_UP_EXPIRY_SKEW_MS = 5_000;
@@ -468,6 +495,8 @@ export class MobileRunnerHost implements IRunnerHost {
    * wherever it would have nothing to report or no working button.
    */
   readonly pushPermission: IPushPermissionHost | null;
+  readonly appIconBadge: MobileAppIconBadge | null;
+  readonly deliveredNotifications: MobileDeliveredNotifications | null;
   readonly systemBack: ISystemBackHost | null;
   readonly statusBarTap: IStatusBarTapHost | null;
   private retainedStepUpCredential: RetainedStepUpCredential | null = null;
@@ -558,6 +587,28 @@ export class MobileRunnerHost implements IRunnerHost {
       this.systemResume,
       this.tokenStore,
     );
+    this.appIconBadge =
+      options.appBadge === null
+        ? null
+        : new MobileAppIconBadge(
+            options.appBadge.plugin,
+            this.tokenStore,
+            this.systemResume,
+          );
+    this.deliveredNotifications =
+      options.deliveredNotifications === null
+        ? null
+        : new MobileDeliveredNotifications({
+            plugin: options.deliveredNotifications.plugin,
+            platform: options.deliveredNotifications.platform,
+            signIn: this.tokenStore,
+            lookup: (bearerToken, entryIds) =>
+              this.getNotificationEntryStates(bearerToken, entryIds),
+            foreground: this.systemResume,
+            networkRecovered: this.networkPath,
+            sha256Hex: webCryptoSha256Hex,
+          });
+    this.deliveredNotifications?.start();
     this.deviceFlow = new MobileDeviceFlowHost(
       options.authnBaseUrl,
       options.hostLabel,
@@ -583,19 +634,23 @@ export class MobileRunnerHost implements IRunnerHost {
     // phone's signed-in identity (there is no separate auth-session process).
     // The generation advances only when the USER changes - `syncSelectionId`
     // compares ids before setting - so a routine token rotation never wipes
-    // the authority's evidence.
-    this.tokenStore.subscribe((change) => {
-      this.syncSelectionIdentity(change.userId);
-    });
-    // Seed both ports from whatever credential survived the last launch; the
-    // fleet publish rides behind the identity so its generation stamp is the
-    // seeded one, not the initial null's.
-    void this.tokenStore.get().then((stored) => {
-      this.syncSelectionIdentity(stored?.user.id ?? null);
-      if (stored === null) {
-        void this.refreshHostFleet();
-      }
-    });
+    // the authority's evidence. The first answer seeds both ports from
+    // whatever credential survived the last launch; the fleet publish rides
+    // behind the identity so its generation stamp is the seeded one, not the
+    // initial null's. A first read that fails is read again on the next
+    // resume or network change.
+    const selectionSignIn = new SignedInUser(
+      this.tokenStore,
+      (userId, previous) => {
+        this.syncSelectionIdentity(userId);
+        if (previous === undefined && userId === null) {
+          void this.refreshHostFleet();
+        }
+      },
+    );
+    selectionSignIn.start();
+    this.systemResume.subscribe(() => selectionSignIn.readIfUnknown());
+    this.networkPath.subscribe(() => selectionSignIn.readIfUnknown());
   }
 
   /**
@@ -986,6 +1041,19 @@ export class MobileRunnerHost implements IRunnerHost {
 
   getTraycerModels(bearerToken: string): Promise<TraycerModelsFetchResult> {
     return fetchTraycerModelsViaHttp(this.serverBaseUrl, bearerToken, null);
+  }
+
+  // The read and cleared state of the Traycer notifications the phone shows,
+  // from the person's own feed, whatever computer the phone is connected to.
+  getNotificationEntryStates(
+    bearerToken: string,
+    entryIds: readonly string[],
+  ): Promise<NotificationEntryStatesFetchResult> {
+    return fetchNotificationEntryStatesViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      entryIds,
+    );
   }
 
   getVoiceAvailability(
