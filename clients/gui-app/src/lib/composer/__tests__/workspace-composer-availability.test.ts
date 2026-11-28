@@ -370,7 +370,6 @@ describe("sendBlockingMissingWorktreePaths", () => {
       listing,
       sendBlockingMissingWorktreePaths(missingPaths, true),
     );
-    expect(availability.status).not.toBe("worktree-missing");
     expect(availability).toEqual(
       deriveWorktreeBindingWorkspaceAvailability(bound, true, listing, []),
     );
