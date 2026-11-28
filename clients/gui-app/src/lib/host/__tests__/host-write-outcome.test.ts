@@ -30,6 +30,7 @@ function receivedPeerError(
 
 describe("hostWriteFailureOutcome", () => {
   it.each([
+    ["E_WRITE_NOT_STARTED", "The authoritative write did not start.", METHOD],
     ["E_INVALID_ARGUMENT", "The request is invalid.", METHOD],
     [
       "E_INVALID_ARGUMENT",
@@ -71,6 +72,17 @@ describe("hostWriteFailureOutcome", () => {
     );
 
     expect(hostWriteFailureOutcome(error, COMPUTER_HOST_ID)).toBe("refused");
+    expect(hostWriteFailureOutcome(error, POOL_HOST_ID)).toBe("unknown");
+  });
+
+  it("keeps an earlier keyed dispatch unknown when a later attempt answers E_WRITE_NOT_STARTED", () => {
+    const error = receivedPeerError(
+      "E_WRITE_NOT_STARTED",
+      "The authoritative write did not start.",
+      METHOD,
+    );
+    markMayHaveReachedHost(error);
+
     expect(hostWriteFailureOutcome(error, POOL_HOST_ID)).toBe("unknown");
   });
 

@@ -12,6 +12,7 @@ import {
 import {
   HostRpcError,
   RetryableTransportError,
+  type IHostMessenger,
   type RequiredHostMethodVersion,
   type RequestOfMethod,
   type ResponseOfMethod,
@@ -26,9 +27,15 @@ import { poolHostDirectoryEntry } from "@traycer-clients/shared/host-client/host
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
+  isTargetAnswer,
   markTargetAnswer,
   transportFailureBeforeSend,
 } from "@traycer/protocol/host-transport/remote/rpc-types";
+import {
+  createRetryingMessenger,
+  finalRefusalOf,
+} from "@traycer-clients/shared/host-transport/retrying-messenger";
+import { hostWriteFailureOutcome } from "@/lib/host/host-write-outcome";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import {
   classifyEpicWriteCommandFailure,
@@ -116,6 +123,27 @@ function requesterThatNeverSends(): HostRequester<typeof hostRpcRegistry> {
   };
 }
 
+function openPoolRequester(messenger: IHostMessenger<typeof hostRpcRegistry>) {
+  const queryClient = new QueryClient();
+  const spine = new HostClient<typeof hostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) => (hostId === POOL_HOST_ID ? POOL_ENTRY : null),
+    messenger,
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({
+      origin: "renderer",
+      bearerToken: "pool-write-test-token",
+    }),
+  );
+  return {
+    queryClient,
+    spine,
+    requester: spine.createRequesterForHostId(POOL_HOST_ID),
+  };
+}
+
 describe("classifyEpicWriteCommandFailure", () => {
   it("keeps a queued title unknown after the exact received pool wire answer", async () => {
     const messenger = new MockHostMessenger<typeof hostRpcRegistry>({
@@ -137,20 +165,7 @@ describe("classifyEpicWriteCommandFailure", () => {
         },
       },
     });
-    const queryClient = new QueryClient();
-    const spine = new HostClient<typeof hostRpcRegistry>({
-      registry: hostRpcRegistry,
-      invalidator: createHostQueryInvalidator(queryClient),
-      findHostById: (hostId) => (hostId === POOL_HOST_ID ? POOL_ENTRY : null),
-      messenger,
-    });
-    spine.setRequestContext(
-      createRequestContextFixture({
-        origin: "renderer",
-        bearerToken: "pool-write-test-token",
-      }),
-    );
-    const requester = spine.createRequesterForHostId(POOL_HOST_ID);
+    const { queryClient, spine, requester } = openPoolRequester(messenger);
     const unknownCommandIds: string[] = [];
     let nextCommandId = 0;
     const queue = createCommandQueue<EpicWriteCommandIntent>({
@@ -212,6 +227,167 @@ describe("classifyEpicWriteCommandFailure", () => {
       queue.dispose();
       spine.dispose();
       queryClient.clear();
+    }
+  });
+
+  it("keeps an unfamiliar ordinary pool error as a marked generic answer on a real title request", async () => {
+    const decodedErrors: HostRpcError[] = [];
+    const messenger = new MockHostMessenger<typeof hostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "legacy-pool-title-request",
+      handlers: {
+        "epic.updateTitle": () => {
+          const error = HostRpcError.fromWireEnvelope(
+            {
+              code: "E_LEGACY_WORKER_BUSY",
+              message: "The pool could not run this write.",
+            },
+            "legacy-pool-title-request",
+            "epic.updateTitle",
+          );
+          markTargetAnswer(error);
+          decodedErrors.push(error);
+          throw error;
+        },
+      },
+    });
+    const { queryClient, spine, requester } = openPoolRequester(messenger);
+
+    try {
+      const failure = await dispatchEpicWriteCommand(
+        {
+          epicId: "epic-pool-legacy-error",
+          requester: () => requester,
+        },
+        "legacy-pool-command",
+        { kind: "update-epic-title", title: "target-a", updatedAt: 100 },
+      ).then(
+        () => null,
+        (error: unknown) => classifyEpicWriteCommandFailure(error),
+      );
+
+      expect(failure).toMatchObject({ kind: "unknown-outcome" });
+      const decodedError = decodedErrors[0];
+      expect(decodedError.code).toBe("RPC_ERROR");
+      expect(isTargetAnswer(decodedError)).toBe(true);
+      expect(hostWriteFailureOutcome(decodedError, POOL_HOST_ID)).toBe(
+        "unknown",
+      );
+      expect(messenger.calls).toHaveLength(1);
+      expect(messenger.calls[0]).toMatchObject({
+        method: "epic.updateTitle",
+        idempotencyKey: "legacy-pool-command",
+        authority: { endpoint: { hostId: POOL_HOST_ID } },
+      });
+    } finally {
+      spine.dispose();
+      queryClient.clear();
+    }
+  });
+
+  it("keeps a prior keyed send unknown when the retry receives E_WRITE_NOT_STARTED", async () => {
+    let requestCount = 0;
+    const finalAnswers: HostRpcError[] = [];
+    const retryEpisodeErrors: unknown[] = [];
+    const baseMessenger = new MockHostMessenger<typeof hostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => `retry-title-request-${String(requestCount + 1)}`,
+      handlers: {
+        "epic.updateTitle": () => {
+          requestCount += 1;
+          if (requestCount === 1) {
+            throw new RetryableTransportError({
+              replaySafetyFromKey: true,
+              code: "RPC_ERROR",
+              message: "The first response was lost.",
+              requestId: "first-title-attempt",
+              method: "epic.updateTitle",
+              fatalDetails: null,
+            });
+          }
+          const error = HostRpcError.fromWireEnvelope(
+            {
+              code: "E_WRITE_NOT_STARTED",
+              message: "The retry's authoritative write did not start.",
+            },
+            "retry-title-request-2",
+            "epic.updateTitle",
+          );
+          markTargetAnswer(error);
+          finalAnswers.push(error);
+          throw error;
+        },
+      },
+    });
+    const requesterRig = openPoolRequester(
+      createRetryingMessenger(baseMessenger, {
+        maxRetries: 1,
+        initialDelayMs: 0,
+        maxDelayMs: 0,
+        sleep: () => Promise.resolve(),
+        random: () => 0,
+      }),
+    );
+
+    try {
+      const replyOutcome = await requesterRig.requester
+        .requestWithIdempotencyKey(
+          "epic.updateTitle",
+          {
+            epicDelta: {
+              id: "epic-pool-retry-episode",
+              title: "target-b",
+              updatedAt: 200,
+            },
+          },
+          "retry-episode-command",
+        )
+        .then(
+          () => "success" as const,
+          (error: unknown) => {
+            retryEpisodeErrors.push(error);
+            if (!(error instanceof HostRpcError)) {
+              throw new Error("the retry reply was not a host RPC error");
+            }
+            return hostWriteFailureOutcome(error, POOL_HOST_ID);
+          },
+        );
+      const finalAnswer = finalAnswers[0];
+      const retryEpisodeError = retryEpisodeErrors[0];
+      if (retryEpisodeError === undefined) {
+        throw new Error("the retry episode did not return an error");
+      }
+      const failure = classifyEpicWriteCommandFailure(retryEpisodeError);
+      const preservedRefusal = finalRefusalOf(retryEpisodeError);
+
+      expect(replyOutcome).toBe("unknown");
+      expect(failure).toMatchObject({ kind: "unknown-outcome" });
+      expect(requestCount).toBe(2);
+      expect(baseMessenger.calls.map((call) => call.idempotencyKey)).toEqual([
+        "retry-episode-command",
+        "retry-episode-command",
+      ]);
+      expect(finalAnswer.code).toBe("E_WRITE_NOT_STARTED");
+      expect(isTargetAnswer(finalAnswer)).toBe(true);
+      expect(hostWriteFailureOutcome(finalAnswer, POOL_HOST_ID)).toBe(
+        "refused",
+      );
+      expect(retryEpisodeError).toBeInstanceOf(HostRpcError);
+      expect(preservedRefusal).toBeInstanceOf(HostRpcError);
+      expect(
+        hostWriteFailureOutcome(
+          retryEpisodeError instanceof HostRpcError
+            ? retryEpisodeError
+            : finalAnswer,
+          POOL_HOST_ID,
+        ),
+      ).toBe("unknown");
+      expect(
+        preservedRefusal instanceof HostRpcError ? preservedRefusal.code : null,
+      ).toBe("E_WRITE_NOT_STARTED");
+    } finally {
+      requesterRig.spine.dispose();
+      requesterRig.queryClient.clear();
     }
   });
 

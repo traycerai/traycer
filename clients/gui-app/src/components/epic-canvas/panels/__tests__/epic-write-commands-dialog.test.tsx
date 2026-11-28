@@ -5,6 +5,8 @@ import type { CommandRecord } from "@traycer-clients/shared/replica-runtime";
 import { EpicWriteCommandsDialog } from "@/components/epic-canvas/panels/epic-write-commands-dialog";
 import { presentEpicWriteCommand } from "@/lib/epic-write-command-copy";
 import type { EpicWriteCommandIntent } from "@/stores/epics/open-epic/runtime/epic-write-command";
+import { UNCONFIRMED_WRITE_EXPIRY } from "@/stores/epics/open-epic/runtime/epic-write-command";
+import { HOST_UNKNOWN_OUTCOME_NOTICE } from "@/lib/host-error-toast";
 
 const mocks = vi.hoisted(() => ({
   retryWriteCommand: vi.fn<(commandId: string) => void>(),
@@ -91,6 +93,25 @@ function unknownOutcomeCommand(
     attempts: 1,
     expectedEntityVersion: null,
     resolution: null,
+  };
+}
+
+function expiredUnknownOutcomeCommand(
+  commandId: string,
+): CommandRecord<EpicWriteCommandIntent> {
+  return {
+    commandId,
+    intent: { kind: "delete-artifact", artifactId: "a3" },
+    state: "superseded",
+    delivery: "settled",
+    issuedAtMs: 1000,
+    attempts: 1,
+    expectedEntityVersion: null,
+    resolution: {
+      kind: "superseded",
+      observedAtMs: 31_000,
+      via: UNCONFIRMED_WRITE_EXPIRY,
+    },
   };
 }
 
@@ -211,6 +232,25 @@ describe("<EpicWriteCommandsDialog />", () => {
     expect(
       within(row).getByTestId("epic-write-command-status").textContent,
     ).toBe(presentEpicWriteCommand(command).statusLabel);
+  });
+
+  it("shows an expired result as Outcome unknown and lets the user dismiss it without retry", async () => {
+    const user = userEvent.setup();
+    const command = expiredUnknownOutcomeCommand("cmd-expired-unknown");
+    renderDialog([command]);
+    const row = rowFor(command.commandId);
+
+    expect(row.getAttribute("data-stage")).toBe("unknown-outcome");
+    expect(
+      within(row).getByTestId("epic-write-command-status").textContent,
+    ).toBe("Outcome unknown");
+    expect(within(row).getByText(HOST_UNKNOWN_OUTCOME_NOTICE)).toBeTruthy();
+    expect(within(row).queryByTestId("epic-write-command-retry")).toBeNull();
+    await user.click(within(row).getByTestId("epic-write-command-discard"));
+
+    expect(mocks.retryWriteCommand).not.toHaveBeenCalled();
+    expect(mocks.discardWriteCommand).toHaveBeenCalledTimes(1);
+    expect(mocks.discardWriteCommand).toHaveBeenCalledWith(command.commandId);
   });
 
   it("shows committed (host-committed) copy on a committed record", () => {

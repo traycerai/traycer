@@ -22,6 +22,9 @@ import {
 import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import type { ListTasksResponse } from "@traycer/protocol/host/epic/unary-schemas";
 import { toast } from "sonner";
+import { HOST_UNKNOWN_OUTCOME_NOTICE } from "@/lib/host-error-toast";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { markTargetAnswer } from "@traycer/protocol/host-transport/remote/rpc-types";
 import { MobileEpicHeaderTitle } from "@/components/epic-canvas/mobile/epic-mobile-header-actions";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useTabsStore } from "@/stores/tabs/store";
@@ -81,6 +84,24 @@ vi.mock("@/stores/tabs/use-header-tabs", async (importOriginal) => {
 });
 
 const EPIC_ID = "mobile-title-test-task";
+
+function targetedTitleWriteError(
+  code: "E_IDEMPOTENCY_OUTCOME_UNKNOWN" | "E_WRITE_NOT_STARTED",
+): HostRpcError {
+  const error = HostRpcError.fromWireEnvelope(
+    {
+      code,
+      message:
+        code === "E_IDEMPOTENCY_OUTCOME_UNKNOWN"
+          ? "The pool could not confirm whether the title was saved."
+          : "The pool refused the title write before starting it.",
+    },
+    "task-title-request",
+    "epic.updateTitle",
+  );
+  markTargetAnswer(error);
+  return error;
+}
 
 function renderWithQueryClient(
   element: ReactElement,
@@ -210,6 +231,112 @@ describe("MobileEpicHeaderTitle requester fallback", () => {
         ?.light?.title,
     ).toBe("Pool task title");
   });
+
+  it.each([
+    ["unknown outcome", "E_IDEMPOTENCY_OUTCOME_UNKNOWN"],
+    ["write not started", "E_WRITE_NOT_STARTED"],
+  ] as const)(
+    "keeps the mobile title truthful for an exact pool %s answer",
+    async (_answer, code) => {
+      const queryClient = new QueryClient({
+        defaultOptions: {
+          queries: { retry: false },
+          mutations: { retry: false },
+        },
+      });
+      const requesterFixture = createTitleRequesterFixture();
+      requesterFixture.messenger.setHandlers({
+        "epic.updateTitle": () => {
+          throw targetedTitleWriteError(code);
+        },
+      });
+      titleRequesterState.client = requesterFixture.client;
+      mountPoolServingWithHomeOffline();
+      seedPoolCloudHistoryRow(queryClient, EPIC_ID);
+      const pageKey = cloudEpicTasksQueryKey(
+        POOL_HOST_ID,
+        TITLE_TEST_USER_ID,
+        LIST_CLOUD_TASKS_REQUEST,
+      );
+      expect(queryClient.getQueryState(pageKey)?.isInvalidated).toBe(false);
+      const noticesBefore = toast.getToasts().length;
+      const session = registerEditableEpicSession({
+        epicId: EPIC_ID,
+        title: "Task title",
+        userId: TITLE_TEST_USER_ID,
+        hostId: TITLE_TEST_HOME_HOST_ID,
+        writes: [],
+      });
+      handleHostIds.set(session.handle, TITLE_TEST_HOME_HOST_ID);
+      const tabRef = openFocusedEpicTab();
+      const projection = renderHook(() => useHeaderTabForRef(tabRef));
+      const renameSuccess = vi.spyOn(toast, "success");
+      const renameError = vi.spyOn(toast, "error");
+      renderTitle(queryClient);
+      const input = openMobileTitleEdit();
+
+      act(() => {
+        session.release();
+      });
+      await waitFor(() => {
+        expect(projection.result.current).toMatchObject({
+          kind: "epic",
+          hostId: null,
+        });
+        expect(screen.getByTestId("mobile-epic-header-title-input")).toBe(
+          input,
+        );
+      });
+      submitMobileTitle(input, "Pool mobile title");
+
+      await waitFor(() => {
+        expect(titleUpdateCalls(requesterFixture.messenger)).toEqual([
+          {
+            hostId: POOL_HOST_ID,
+            epicId: EPIC_ID,
+            title: "Pool mobile title",
+          },
+        ]);
+        if (code === "E_IDEMPOTENCY_OUTCOME_UNKNOWN") {
+          expect(queryClient.getQueryState(pageKey)?.isInvalidated).toBe(true);
+          expect(
+            toast
+              .getToasts()
+              .slice(noticesBefore)
+              .filter(
+                (notice) =>
+                  "title" in notice &&
+                  notice.title === HOST_UNKNOWN_OUTCOME_NOTICE,
+              ),
+          ).toHaveLength(1);
+        } else {
+          expect(renameError).toHaveBeenCalledWith("Couldn't rename epic.");
+        }
+      });
+      expect(renameSuccess).not.toHaveBeenCalled();
+      expect(titleUpdateCalls(requesterFixture.messenger)).toHaveLength(1);
+      const poolPage = queryClient.getQueryData<ListTasksResponse>(pageKey);
+      expect(
+        poolPage?.tasks.find((task) => task.epic?.light?.id === EPIC_ID)?.epic
+          ?.light?.title,
+      ).toBe("Task title");
+      if (code === "E_IDEMPOTENCY_OUTCOME_UNKNOWN") {
+        expect(renameError).not.toHaveBeenCalled();
+      } else {
+        expect(
+          toast
+            .getToasts()
+            .slice(noticesBefore)
+            .filter(
+              (notice) =>
+                "title" in notice &&
+                notice.title === HOST_UNKNOWN_OUTCOME_NOTICE,
+            ),
+        ).toHaveLength(0);
+        expect(queryClient.getQueryState(pageKey)?.isInvalidated).toBe(false);
+      }
+    },
+  );
 
   it("prefers a published pinned tab host over pool evidence after detachment", async () => {
     const queryClient = new QueryClient({
