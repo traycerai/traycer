@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import * as Y from "yjs";
 import "../../../../../__tests__/test-browser-apis";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -31,6 +31,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { fleetHost } from "@traycer-clients/shared/host-selection/__tests__/selection-authority-harness";
 import { epicStateSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/state-subscribe";
 import { artifactSubscribeServerFrameSchemaV13 } from "@traycer/protocol/host/epic/artifact-subscribe";
 import { epicStatusSubscribeServerFrameSchemaV12 } from "@traycer/protocol/host/epic/status-subscribe";
@@ -56,6 +57,7 @@ import { encodeDocStateVectorBase64 } from "@/stores/epics/open-epic/runtime/dir
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 import { EpicConnectionPill } from "@/components/epic-canvas/panels/epic-connection-pill";
+import { CLOUD_LINK_GRACE_MS } from "@/components/epic-canvas/panels/use-cloud-link-grace";
 import { useEpicDurabilityPlane } from "@/components/epic-canvas/panels/epic-durability-plane";
 import { useCreateCommentThreadForClient } from "@/hooks/comments/use-comment-thread-mutations";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
@@ -66,6 +68,11 @@ import {
   EpicSessionContext,
 } from "@/lib/registries/epic-session-registry";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
+import {
+  __resetAgentActivityStoreForTests,
+  __setHostAgentActivityHealthForTests,
+} from "@/stores/agent-activity-store";
 import {
   openStoreForTestAtHost,
   type OpenStoreForTestOptions,
@@ -76,6 +83,44 @@ const EPIC_ID = "epic-durability-open-session";
 const BODY_ARTIFACT_ID = "artifact-status-coverage";
 const INITIAL_TITLE = "Durability evidence";
 const POOL_EPOCH = "pool-mux-epoch-1";
+const PRESENCE_HOST_ID = "status-pill-presence-feed";
+const COMPUTER_HOST_ID = "status-pill-computer";
+const STREAM_DOWN_GRACE_MS = 2_000;
+const STALE_AGENT_MESSAGE =
+  "Live agent activity is unavailable. Agent status may be stale or unknown until it reconnects.";
+
+interface PresenceHostRouting {
+  localHostId: string | null;
+  servingHostId: string | null;
+}
+
+const presenceHostRouting = vi.hoisted((): PresenceHostRouting => ({
+  localHostId: null,
+  servingHostId: null,
+}));
+
+vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
+  useReactiveLocalHostId: () => presenceHostRouting.localHostId,
+}));
+
+vi.mock(
+  "@/hooks/host/use-notifications-serving-host-entry",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/host/use-notifications-serving-host-entry")
+      >();
+    const { useState } = await import("react");
+    function useMockNotificationsServingHostId(): string | null {
+      useState(0);
+      return presenceHostRouting.servingHostId;
+    }
+    return {
+      ...actual,
+      useNotificationsServingHostId: useMockNotificationsServingHostId,
+    };
+  },
+);
 
 // Captured from task-read-protocol.test.ts through the pool's real mux status
 // subscription. The pool's @1.6 status producer emits cloud durability at the
@@ -94,6 +139,131 @@ const POOL_SNAPSHOT: EpicStatusSnapshotFrame = parseStatusSnapshot({
 });
 const UNKNOWN_COMMENT_NOTICE =
   "No reply came back from the Traycer host, so this may or may not have gone through.";
+function routePresenceFeed(hostId: string | null): void {
+  presenceHostRouting.localHostId = hostId;
+  presenceHostRouting.servingHostId = hostId;
+}
+
+function setStreamDownPresenceFeed(): void {
+  routePresenceFeed(PRESENCE_HOST_ID);
+  __setHostAgentActivityHealthForTests(PRESENCE_HOST_ID, {
+    connectionStatus: "reconnecting",
+  });
+}
+
+function setHealthyPresenceFeed(): void {
+  routePresenceFeed(PRESENCE_HOST_ID);
+  __setHostAgentActivityHealthForTests(PRESENCE_HOST_ID, {
+    connectionStatus: "open",
+    cloudSyncStatus: "connected",
+  });
+}
+
+function setCloudDownPresenceFeed(): void {
+  routePresenceFeed(PRESENCE_HOST_ID);
+  __setHostAgentActivityHealthForTests(PRESENCE_HOST_ID, {
+    connectionStatus: "open",
+    cloudSyncStatus: "disconnected",
+  });
+}
+
+function statusSnapshotWithArtifactSync(
+  authorityEpoch: string,
+  rooms: "retrying" | "stopped",
+): EpicStatusSnapshotFrame {
+  return parseStatusSnapshot({
+    ...POOL_SNAPSHOT,
+    authorityEpoch,
+    artifactSync: { rooms, waitingNewArtifacts: 1 },
+  });
+}
+
+function statusSnapshotForComputerWithArmedProtection(): EpicStatusSnapshotFrame {
+  return parseStatusSnapshot({
+    ...POOL_SNAPSHOT,
+    authorityEpoch: "computer-armed-status-epoch-1",
+    dirty: false,
+    localProtection: "armed",
+    freshness: {
+      kind: "lastCloudSyncAt",
+      reconciledAtEpochMs: 1_000,
+      state: "current",
+    },
+  });
+}
+
+function advanceClock(milliseconds: number): void {
+  act(() => {
+    vi.advanceTimersByTime(milliseconds);
+  });
+}
+
+function useGraceClock(): void {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+}
+
+function pillText(): string {
+  return pill().textContent;
+}
+
+interface PillPresentation {
+  readonly status: string | null;
+  readonly source: string | null;
+  readonly text: string;
+  readonly className: string;
+  readonly ariaLabel: string | null;
+}
+
+function readPillPresentation(): PillPresentation {
+  const button = pill();
+  return {
+    status: button.getAttribute("data-status"),
+    source: button.getAttribute("data-source"),
+    text: button.textContent,
+    className: button.className,
+    ariaLabel: button.getAttribute("aria-label"),
+  };
+}
+
+async function captureIconOnlySaveStages(
+  epicId: string,
+  handle: OpenedStoreForTest,
+): Promise<{
+  readonly synced: PillPresentation;
+  readonly saving: PillPresentation;
+}> {
+  const view = renderStatusForEpic(epicId, handle, undefined);
+  await waitForPill();
+  await waitForSyncedPill();
+  const synced = readPillPresentation();
+  await act(async () => {
+    handle.doc.getMap("epic").set("title", `${epicId} is saving`);
+    await drain(handle);
+  });
+  const saving = readPillPresentation();
+  view.unmount();
+  return { synced, saving };
+}
+
+function pillLiveRegion(container: HTMLElement): HTMLElement {
+  const region = container.querySelector<HTMLElement>(
+    '[role="status"][aria-live="polite"]',
+  );
+  if (region === null) throw new Error("the pill live region was not rendered");
+  return region;
+}
+
+async function waitForPill(): Promise<void> {
+  await waitFor(() => {
+    expect(screen.queryByTestId("epic-connection-pill")).not.toBeNull();
+  });
+}
+
+async function waitForSyncedPill(): Promise<void> {
+  await waitFor(() => {
+    expect(pill().getAttribute("data-status")).toBe("synced");
+  });
+}
 
 function buildRunnerHost(): MockRunnerHost {
   return new MockRunnerHost({
@@ -106,6 +276,9 @@ function buildRunnerHost(): MockRunnerHost {
     traycerCli: undefined,
   });
 }
+
+const emptyRemoteFetcher = () =>
+  Promise.resolve({ kind: "hosts" as const, entries: [] });
 
 function hostMessengerFactory(args: {
   readonly registry: HostRpcRegistry;
@@ -250,6 +423,36 @@ async function openStatusRig(
   writeCommand: OpenStoreForTestOptions["writeCommand"],
   artifactId: string | null,
 ): Promise<StatusRig> {
+  return openStatusRigForEpic({
+    epicId: EPIC_ID,
+    hostId,
+    snapshot,
+    writeCommand,
+    artifactId,
+    stateAuthorityEpoch: snapshot?.authorityEpoch ?? POOL_EPOCH,
+  });
+}
+
+interface OpenStatusRigForEpicOptions {
+  readonly epicId: string;
+  readonly hostId: string;
+  readonly snapshot: EpicStatusSnapshotFrame | null;
+  readonly writeCommand: OpenStoreForTestOptions["writeCommand"];
+  readonly artifactId: string | null;
+  readonly stateAuthorityEpoch: string;
+}
+
+async function openStatusRigForEpic(
+  options: OpenStatusRigForEpicOptions,
+): Promise<StatusRig> {
+  const {
+    epicId,
+    hostId,
+    snapshot,
+    writeCommand,
+    artifactId,
+    stateAuthorityEpoch,
+  } = options;
   const laneCallbacks: {
     status: EpicStatusStreamCallbacks | null;
     state: EpicStateStreamCallbacks | null;
@@ -289,7 +492,7 @@ async function openStatusRig(
   };
   const handle = openStoreForTestAtHost(
     {
-      epicId: EPIC_ID,
+      epicId,
       userId: "user-a",
       factories: {
         streamClientFactory: () => {
@@ -309,9 +512,7 @@ async function openStatusRig(
   callbacks.onConnectionStatus("open", null, null, null);
   stateCallbacks.onConnectionStatus("open", null, null, null);
   if (snapshot !== null) callbacks.onSnapshot(snapshot, true);
-  stateCallbacks.onSnapshot(
-    stateSnapshot(snapshot?.authorityEpoch ?? POOL_EPOCH, artifactId),
-  );
+  stateCallbacks.onSnapshot(stateSnapshot(stateAuthorityEpoch, artifactId));
   await drain(handle);
   return { handle, callbacks, stateCallbacks, artifactLanes };
 }
@@ -323,11 +524,14 @@ function CommentAvailability() {
   );
 }
 
-function StatusPill(props: { readonly children?: ReactNode }) {
+function StatusPill(props: {
+  readonly epicId: string;
+  readonly children: ReactNode;
+}) {
   const durability = useEpicDurabilityPlane();
   return (
     <>
-      <EpicConnectionPill epicId={EPIC_ID} durability={durability} />
+      <EpicConnectionPill epicId={props.epicId} durability={durability} />
       <CommentAvailability />
       {props.children}
     </>
@@ -335,29 +539,54 @@ function StatusPill(props: { readonly children?: ReactNode }) {
 }
 
 function renderStatus(handle: OpenedStoreForTest, children: ReactNode) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: 0 } },
-  });
-  return render(
-    <RunnerHostProvider runnerHost={buildRunnerHost()}>
+  return renderStatusForEpic(EPIC_ID, handle, children);
+}
+
+interface StatusTreeSession {
+  readonly epicId: string;
+  readonly handle: OpenedStoreForTest;
+}
+
+function statusTree(
+  session: StatusTreeSession,
+  children: ReactNode,
+  queryClient: QueryClient,
+  runnerHost: MockRunnerHost,
+) {
+  const { epicId, handle } = session;
+  return (
+    <RunnerHostProvider runnerHost={runnerHost}>
       <QueryClientProvider client={queryClient}>
         <HostRuntimeProvider
           registry={hostRpcRegistry}
           messengerFactory={hostMessengerFactory}
           invalidator={null}
           requestId={null}
-          remoteFetcher={() => Promise.resolve({ kind: "hosts", entries: [] })}
+          remoteFetcher={emptyRemoteFetcher}
           fallback={<div data-testid="runtime-fallback">runtime loading</div>}
         >
           <EpicSessionContext.Provider value={handle}>
             <TooltipProvider>
-              <StatusPill>{children}</StatusPill>
+              <StatusPill epicId={epicId}>{children}</StatusPill>
               <Toaster />
             </TooltipProvider>
           </EpicSessionContext.Provider>
         </HostRuntimeProvider>
       </QueryClientProvider>
-    </RunnerHostProvider>,
+    </RunnerHostProvider>
+  );
+}
+
+function renderStatusForEpic(
+  epicId: string,
+  handle: OpenedStoreForTest,
+  children: ReactNode,
+) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  return render(
+    statusTree({ epicId, handle }, children, queryClient, buildRunnerHost()),
   );
 }
 
@@ -436,10 +665,18 @@ function expectNoRedDot(): void {
   expect(pill().innerHTML).not.toContain("bg-destructive");
 }
 
+beforeEach(() => {
+  routePresenceFeed(null);
+  __resetAgentActivityStoreForTests();
+});
+
 afterEach(() => {
+  vi.useRealTimers();
   toast.dismiss();
   cleanup();
   __getOpenEpicRegistryForTests().disposeAll();
+  __resetAgentActivityStoreForTests();
+  routePresenceFeed(null);
   useAuthStore.getState().setSignedOut();
 });
 
@@ -911,6 +1148,490 @@ describe("open-session durability status in the connection pill", () => {
       expectNoRedDot();
     } finally {
       handle.dispose();
+    }
+  });
+
+  it("keeps pool artifact saving and synced icon-only while stream-down stays secondary", async () => {
+    const answer = Promise.withResolvers<{ readonly hostId: string }>();
+    const rig = await openStatusRig(
+      POOL_HOST_ID,
+      POOL_SNAPSHOT,
+      () => answer.promise,
+      null,
+    );
+    setHealthyPresenceFeed();
+
+    try {
+      const rendered = renderStatus(rig.handle, undefined);
+      await waitForPill();
+      await waitForSyncedPill();
+      useGraceClock();
+      act(() => {
+        setStreamDownPresenceFeed();
+      });
+      advanceClock(STREAM_DOWN_GRACE_MS);
+
+      expect(pill().getAttribute("data-source")).toBe("artifact");
+      expect(pill().getAttribute("data-status")).toBe("synced");
+      expect(pillText()).toBe("");
+      expect(pill().querySelector(".truncate")).toBeNull();
+      expect(pill().getAttribute("aria-label")).toContain("All changes synced");
+      expect(pill().getAttribute("aria-label")).toContain(STALE_AGENT_MESSAGE);
+      expect(pillLiveRegion(rendered.container).textContent).toBe("");
+
+      vi.useRealTimers();
+      fireEvent.focus(pill());
+      const tooltip = await screen.findByRole("tooltip");
+      expect(tooltip.textContent).toContain("All changes synced");
+      expect(tooltip.textContent).toContain(STALE_AGENT_MESSAGE);
+
+      const commandId = await rig.handle.store.getState().enqueueWriteCommand({
+        kind: "update-epic-title",
+        title: "Pool title still saving",
+        updatedAt: 2000,
+      });
+      if (commandId === null)
+        throw new Error("the title command was not queued");
+      await act(async () => {
+        await drain(rig.handle);
+      });
+      expect(pill().getAttribute("data-source")).toBe("artifact");
+      expect(pill().getAttribute("data-status")).toBe("syncing");
+      expect(pillText()).toBe("");
+      expect(pill().getAttribute("aria-label")).toContain("Saving changes");
+      expect(pill().getAttribute("aria-label")).toContain(STALE_AGENT_MESSAGE);
+      expect(pillLiveRegion(rendered.container).textContent).toBe("");
+
+      await act(async () => {
+        rig.stateCallbacks.onDelta(
+          titleDelta(POOL_EPOCH, "Pool title still saving"),
+        );
+        await drain(rig.handle);
+        answer.resolve({ hostId: POOL_HOST_ID });
+        await drain(rig.handle);
+      });
+      await waitForSyncedPill();
+
+      const settled = rig.handle.store
+        .getState()
+        .writeCommands.find((command) => command.commandId === commandId);
+      expect(settled?.state).toBe("committed");
+      expect(pill().getAttribute("data-source")).toBe("artifact");
+      expect(pill().getAttribute("data-status")).toBe("synced");
+      expect(pillText()).toBe("");
+      expect(pill().getAttribute("aria-label")).toContain("All changes synced");
+      expect(pill().getAttribute("aria-label")).toContain(STALE_AGENT_MESSAGE);
+      expect(pillLiveRegion(rendered.container).textContent).toBe("");
+    } finally {
+      rig.handle.dispose();
+    }
+  });
+
+  it("keeps ordinary pool and computer save visuals icon-only", async () => {
+    const poolRig = await openStatusRigForEpic({
+      epicId: "status-pill-icon-only-pool",
+      hostId: POOL_HOST_ID,
+      snapshot: POOL_SNAPSHOT,
+      writeCommand: null,
+      artifactId: null,
+      stateAuthorityEpoch: POOL_EPOCH,
+    });
+    const computerRig = await openStatusRigForEpic({
+      epicId: "status-pill-icon-only-computer",
+      hostId: COMPUTER_HOST_ID,
+      snapshot: statusSnapshotForComputerWithArmedProtection(),
+      writeCommand: null,
+      artifactId: null,
+      stateAuthorityEpoch: "computer-armed-status-epoch-1",
+    });
+
+    try {
+      routePresenceFeed(null);
+      const poolStages = await captureIconOnlySaveStages(
+        "status-pill-icon-only-pool",
+        poolRig.handle,
+      );
+      const computerStages = await captureIconOnlySaveStages(
+        "status-pill-icon-only-computer",
+        computerRig.handle,
+      );
+
+      expect(poolStages.synced).toEqual(computerStages.synced);
+      expect(poolStages.saving).toEqual(computerStages.saving);
+      expect(poolStages.synced.text).toBe("");
+      expect(poolStages.saving.text).toBe("");
+      expect(poolStages.synced.source).toBe("artifact");
+      expect(poolStages.saving.source).toBe("artifact");
+    } finally {
+      poolRig.handle.dispose();
+      computerRig.handle.dispose();
+    }
+  });
+
+  it("keeps an existing artifact-sync warning ahead of pool stream-down", async () => {
+    const epicId = "status-pill-stopped-warning";
+    const control = await openStatusRigForEpic({
+      epicId,
+      hostId: POOL_HOST_ID,
+      snapshot: POOL_SNAPSHOT,
+      writeCommand: null,
+      artifactId: null,
+      stateAuthorityEpoch: POOL_EPOCH,
+    });
+    const artifactSync = await openStatusRigForEpic({
+      epicId,
+      hostId: POOL_HOST_ID,
+      snapshot: statusSnapshotWithArtifactSync(POOL_EPOCH, "stopped"),
+      writeCommand: null,
+      artifactId: null,
+      stateAuthorityEpoch: POOL_EPOCH,
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const runnerHost = buildRunnerHost();
+    setHealthyPresenceFeed();
+
+    try {
+      const rendered = render(
+        statusTree(
+          { epicId, handle: control.handle },
+          undefined,
+          queryClient,
+          runnerHost,
+        ),
+      );
+      await waitForPill();
+      useGraceClock();
+      act(() => {
+        setStreamDownPresenceFeed();
+      });
+      rendered.rerender(
+        statusTree(
+          { epicId, handle: artifactSync.handle },
+          undefined,
+          queryClient,
+          runnerHost,
+        ),
+      );
+      advanceClock(CLOUD_LINK_GRACE_MS);
+
+      expect(pill().getAttribute("data-source")).toBe("artifact-sync");
+      expect(pillText()).toBe("");
+      expect(pill().getAttribute("aria-label")).toContain(STALE_AGENT_MESSAGE);
+      expect(pillLiveRegion(rendered.container).textContent).toContain(
+        STALE_AGENT_MESSAGE,
+      );
+
+      fireEvent.focus(pill());
+      advanceClock(500);
+      expect(screen.getByRole("tooltip").textContent).toContain(
+        STALE_AGENT_MESSAGE,
+      );
+    } finally {
+      control.handle.dispose();
+      artifactSync.handle.dispose();
+    }
+  });
+
+  it("leaves the artifact-sync retry activity tie ahead of pool stream-down", async () => {
+    const epicId = "status-pill-retry-activity";
+    const control = await openStatusRigForEpic({
+      epicId,
+      hostId: POOL_HOST_ID,
+      snapshot: POOL_SNAPSHOT,
+      writeCommand: null,
+      artifactId: null,
+      stateAuthorityEpoch: POOL_EPOCH,
+    });
+    const artifactSync = await openStatusRigForEpic({
+      epicId,
+      hostId: POOL_HOST_ID,
+      snapshot: statusSnapshotWithArtifactSync(POOL_EPOCH, "retrying"),
+      writeCommand: null,
+      artifactId: null,
+      stateAuthorityEpoch: POOL_EPOCH,
+    });
+    await act(async () => {
+      artifactSync.handle.doc
+        .getMap("epic")
+        .set("title", "A local edit is saving");
+      await drain(artifactSync.handle);
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const runnerHost = buildRunnerHost();
+    setHealthyPresenceFeed();
+
+    try {
+      const rendered = render(
+        statusTree(
+          { epicId, handle: control.handle },
+          undefined,
+          queryClient,
+          runnerHost,
+        ),
+      );
+      await waitForPill();
+      useGraceClock();
+      act(() => {
+        setStreamDownPresenceFeed();
+      });
+      rendered.rerender(
+        statusTree(
+          { epicId, handle: artifactSync.handle },
+          undefined,
+          queryClient,
+          runnerHost,
+        ),
+      );
+      advanceClock(CLOUD_LINK_GRACE_MS);
+
+      expect(pill().getAttribute("data-source")).toBe("artifact-sync");
+      expect(pill().getAttribute("data-status")).toBe("syncing");
+      expect(pillText()).toBe("");
+      expect(pill().getAttribute("aria-label")).toContain(STALE_AGENT_MESSAGE);
+      expect(pillLiveRegion(rendered.container).textContent).toBe("");
+    } finally {
+      control.handle.dispose();
+      artifactSync.handle.dispose();
+    }
+  });
+
+  it("keeps cloud-down as the presence winner on a pool-served session", async () => {
+    const rig = await openStatusRig(POOL_HOST_ID, POOL_SNAPSHOT, null, null);
+    const authority = mountTestSelectionAuthority({
+      hosts: [fleetHost(COMPUTER_HOST_ID, "remote")],
+      savedPick: COMPUTER_HOST_ID,
+      readyComputers: [COMPUTER_HOST_ID],
+    });
+    expect(authority.snapshot().servingPeer).toEqual({
+      kind: "computer",
+      hostId: COMPUTER_HOST_ID,
+    });
+    setHealthyPresenceFeed();
+
+    try {
+      const rendered = renderStatus(rig.handle, undefined);
+      await waitForPill();
+      await waitForSyncedPill();
+      useGraceClock();
+      act(() => {
+        setCloudDownPresenceFeed();
+      });
+      advanceClock(CLOUD_LINK_GRACE_MS);
+
+      expect(pill().getAttribute("data-source")).toBe("agent-activity");
+      expect(pillText()).toBe("Remote agent status unavailable");
+      expect(pill().getAttribute("aria-label")).toContain(
+        "This device can’t reach the cloud right now",
+      );
+      expect(pillLiveRegion(rendered.container).textContent).toContain(
+        "This device can’t reach the cloud right now",
+      );
+    } finally {
+      rig.handle.dispose();
+    }
+  });
+
+  it.each([{ route: "computer" }, { route: "pool" }])(
+    "keeps computer stream-down visible when the account route says $route",
+    async ({ route }) => {
+      const rig = await openStatusRig(
+        COMPUTER_HOST_ID,
+        statusSnapshotForComputerWithArmedProtection(),
+        null,
+        null,
+      );
+      const authority = mountTestSelectionAuthority({
+        hosts: [fleetHost(COMPUTER_HOST_ID, "remote")],
+        savedPick: COMPUTER_HOST_ID,
+        readyComputers: [COMPUTER_HOST_ID],
+      });
+      expect(authority.snapshot().servingPeer).toEqual({
+        kind: "computer",
+        hostId: COMPUTER_HOST_ID,
+      });
+      if (route === "pool") {
+        act(() => {
+          expect(authority.goCold(COMPUTER_HOST_ID).servingPeer).toEqual({
+            kind: "pool",
+          });
+        });
+      }
+      setHealthyPresenceFeed();
+
+      try {
+        const rendered = renderStatus(rig.handle, undefined);
+        await waitForPill();
+        await waitForSyncedPill();
+        useGraceClock();
+        act(() => {
+          setStreamDownPresenceFeed();
+        });
+        advanceClock(STREAM_DOWN_GRACE_MS);
+
+        expect(pill().getAttribute("data-source")).toBe("agent-activity");
+        expect(pillText()).toBe("Agent status may be stale");
+        expect(pill().getAttribute("aria-label")).toContain(
+          STALE_AGENT_MESSAGE,
+        );
+        expect(pillLiveRegion(rendered.container).textContent).toContain(
+          STALE_AGENT_MESSAGE,
+        );
+      } finally {
+        rig.handle.dispose();
+      }
+    },
+  );
+
+  it("follows the published handle across computer, pool and computer without restarting the feed grace", async () => {
+    const epicId = "status-pill-serving-handle-transition";
+    const computerA = await openStatusRigForEpic({
+      epicId,
+      hostId: COMPUTER_HOST_ID,
+      snapshot: statusSnapshotForComputerWithArmedProtection(),
+      writeCommand: null,
+      artifactId: null,
+      stateAuthorityEpoch: "computer-armed-status-epoch-1",
+    });
+    const poolCandidate = await openStatusRigForEpic({
+      epicId,
+      hostId: POOL_HOST_ID,
+      snapshot: null,
+      writeCommand: null,
+      artifactId: null,
+      stateAuthorityEpoch: POOL_EPOCH,
+    });
+    const computerB = await openStatusRigForEpic({
+      epicId,
+      hostId: COMPUTER_HOST_ID,
+      snapshot: null,
+      writeCommand: null,
+      artifactId: null,
+      stateAuthorityEpoch: "computer-armed-status-epoch-1",
+    });
+    const authority = mountTestSelectionAuthority({
+      hosts: [fleetHost(COMPUTER_HOST_ID, "remote")],
+      savedPick: COMPUTER_HOST_ID,
+      readyComputers: [COMPUTER_HOST_ID],
+    });
+    expect(authority.snapshot().servingPeer).toEqual({
+      kind: "computer",
+      hostId: COMPUTER_HOST_ID,
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const runnerHost = buildRunnerHost();
+    setHealthyPresenceFeed();
+
+    try {
+      const rendered = render(
+        statusTree(
+          { epicId, handle: computerA.handle },
+          undefined,
+          queryClient,
+          runnerHost,
+        ),
+      );
+      await waitForPill();
+      await waitForSyncedPill();
+      useGraceClock();
+      act(() => {
+        setStreamDownPresenceFeed();
+      });
+      advanceClock(STREAM_DOWN_GRACE_MS);
+      expect(pill().getAttribute("data-source")).toBe("agent-activity");
+      expect(pillText()).toBe("Agent status may be stale");
+
+      act(() => {
+        expect(authority.goCold(COMPUTER_HOST_ID).servingPeer).toEqual({
+          kind: "pool",
+        });
+      });
+      expect(
+        poolCandidate.handle.store.getState().hasFreshCloudSyncStatus,
+      ).toBe(false);
+      rendered.rerender(
+        statusTree(
+          { epicId, handle: computerA.handle },
+          undefined,
+          queryClient,
+          runnerHost,
+        ),
+      );
+      expect(pill().getAttribute("data-source")).toBe("agent-activity");
+      expect(pillText()).toBe("Agent status may be stale");
+
+      vi.useRealTimers();
+      await act(async () => {
+        poolCandidate.callbacks.onSnapshot(POOL_SNAPSHOT, true);
+        await drain(poolCandidate.handle);
+      });
+      expect(
+        poolCandidate.handle.store.getState().hasFreshCloudSyncStatus,
+      ).toBe(true);
+      rendered.rerender(
+        statusTree(
+          { epicId, handle: poolCandidate.handle },
+          undefined,
+          queryClient,
+          runnerHost,
+        ),
+      );
+      expect(pill().getAttribute("data-source")).toBe("artifact");
+      expect(pill().getAttribute("data-status")).toBe("synced");
+      expect(pillText()).toBe("");
+      expect(pill().getAttribute("aria-label")).toContain(STALE_AGENT_MESSAGE);
+
+      act(() => {
+        expect(authority.connectComputer(COMPUTER_HOST_ID).servingPeer).toEqual(
+          { kind: "pool" },
+        );
+        expect(authority.finishReturnDamping().servingPeer).toEqual({
+          kind: "computer",
+          hostId: COMPUTER_HOST_ID,
+        });
+      });
+      rendered.rerender(
+        statusTree(
+          { epicId, handle: poolCandidate.handle },
+          undefined,
+          queryClient,
+          runnerHost,
+        ),
+      );
+      expect(pill().getAttribute("data-source")).toBe("artifact");
+      expect(pill().getAttribute("data-status")).toBe("synced");
+      expect(pillText()).toBe("");
+
+      expect(computerB.handle.store.getState().hasFreshCloudSyncStatus).toBe(
+        false,
+      );
+      await act(async () => {
+        computerB.callbacks.onSnapshot(
+          statusSnapshotForComputerWithArmedProtection(),
+          true,
+        );
+        await drain(computerB.handle);
+      });
+      rendered.rerender(
+        statusTree(
+          { epicId, handle: computerB.handle },
+          undefined,
+          queryClient,
+          runnerHost,
+        ),
+      );
+      expect(pill().getAttribute("data-source")).toBe("agent-activity");
+      expect(pillText()).toBe("Agent status may be stale");
+      expect(pill().getAttribute("aria-label")).toContain(STALE_AGENT_MESSAGE);
+    } finally {
+      computerA.handle.dispose();
+      poolCandidate.handle.dispose();
+      computerB.handle.dispose();
     }
   });
 });
