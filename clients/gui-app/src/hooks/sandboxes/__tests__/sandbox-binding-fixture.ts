@@ -46,6 +46,7 @@ type KeepSandbox = (sandboxId: string) => Promise<SandboxVerbFetchResult>;
 
 /** The AuthService methods the sandbox mutations and the tab-open wake call. */
 export interface FakeSandboxAuth {
+  readonly getSandboxReadEra: () => string | null;
   /** `null` is a build that can reach the control plane; a string is why not. */
   readonly sandboxControlUnavailableReason: Mock<() => string | null>;
   readonly getTeamEnvironment: Mock<
@@ -73,6 +74,7 @@ export interface FakeSandboxBinding {
 export function createFakeSandboxBinding(): FakeSandboxBinding {
   return {
     auth: {
+      getSandboxReadEra: () => "fixture-wake-era",
       sandboxControlUnavailableReason: vi.fn<() => string | null>(() => null),
       getTeamEnvironment: vi.fn<
         (teamId: string) => Promise<TeamEnvironmentFetchResult>

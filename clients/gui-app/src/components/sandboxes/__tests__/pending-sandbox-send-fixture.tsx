@@ -415,6 +415,7 @@ const mocks = vi.hoisted(() => ({
   listReadSentAt: null as number | null,
   refetchSandboxes: vi.fn<() => Promise<undefined>>(),
   /** The sandbox wake the staged run asks for, by host. */
+  usePhysicalWake: false,
   wake: vi.fn<
     (
       hostId: string,
@@ -879,14 +880,30 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => null,
 }));
 
-vi.mock("@/lib/sandboxes/sandbox-wake", () => ({
-  startSandboxWake: (
-    _queryClient: unknown,
-    _binding: unknown,
-    hostId: string,
-    gesture: SandboxVerbGesture,
-  ) => mocks.wake(hostId, gesture),
-}));
+vi.mock("@/lib/sandboxes/sandbox-wake", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/sandboxes/sandbox-wake")>();
+  return {
+    startSandboxWake: (
+      client: Parameters<typeof actual.startSandboxWake>[0],
+      binding: Parameters<typeof actual.startSandboxWake>[1],
+      hostId: string,
+      gesture: SandboxVerbGesture,
+    ) =>
+      mocks.usePhysicalWake
+        ? actual.startSandboxWake(client, binding, hostId, gesture)
+        : mocks.wake(hostId, gesture),
+    startClaimedSandboxWake: (
+      ...args: Parameters<typeof actual.startClaimedSandboxWake>
+    ) => {
+      if (mocks.usePhysicalWake) return actual.startClaimedSandboxWake(...args);
+      const [, , hostId, observer] = args;
+      return observer.onStart(nextAccountRequestOrder())
+        ? mocks.wake(hostId, "send")
+        : Promise.resolve(null);
+    },
+  };
+});
 
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({ data: mocks.authUser }),
@@ -1565,7 +1582,7 @@ export function installImmediateExclusiveLocks(): () => void {
         _name: string,
         _options: LockOptions,
         callback: () => Promise<void>,
-      ) => callback(),
+      ) => Promise.resolve(callback()),
     },
   });
   return () => {
@@ -1720,6 +1737,7 @@ beforeEach(() => {
   mocks.modelCache.clear();
   mocks.modelRefetches.length = 0;
   mocks.harnessRefetches = 0;
+  mocks.usePhysicalWake = false;
   mocks.wake.mockReset();
   mocks.wake.mockResolvedValue({ kind: "awake" });
   resetNegotiatedManifests();
@@ -1817,40 +1835,70 @@ function restoreRecordMapStorage(
   for (const [key, value] of entries) localStorage.setItem(key, value);
 }
 
-/** A foreign window holds the send's lock: ours queues and its callback never runs. */
-export function queueBehindForeignHolder(): () => void {
+/** A foreign renderer's primary lock and its current acquisition witness. */
+export function installForeignSendTenure() {
   const original = Object.getOwnPropertyDescriptor(navigator, "locks");
+  const primary = "traycer:pending-sandbox-send:" + SEND_ID;
+  const owner =
+    usePendingSandboxSendStore.getState().sends[SEND_ID]?.dispatchView?.stamp
+      ?.owner;
+  const witness = primary + ":tenure:" + owner?.episode;
+  let liveWitness = witness;
+  const pending = new Set<() => void>();
+  const snapshot = (): LockManagerSnapshot => ({
+    held: [primary, liveWitness].map((name) => ({
+      name,
+      clientId: "fixture-owner",
+      mode: "exclusive",
+    })),
+  });
+  const query = vi.fn<() => Promise<LockManagerSnapshot>>(() =>
+    Promise.resolve(snapshot()),
+  );
   Object.defineProperty(navigator, "locks", {
     configurable: true,
     value: {
-      query: () =>
-        Promise.resolve({
-          held: [
-            {
-              name: "traycer:pending-sandbox-send:" + SEND_ID,
-              clientId: "fixture-owner",
+      query,
+      request: (name: string, options: LockOptions, callback: () => void) => {
+        if (options.mode === "shared" && name !== liveWitness) {
+          callback();
+          return Promise.resolve();
+        }
+        return new Promise<void>((resolve) => {
+          const wake = () => {
+            callback();
+            resolve();
+          };
+          if (options.mode === "shared") pending.add(wake);
+          options.signal?.addEventListener(
+            "abort",
+            () => {
+              pending.delete(wake);
+              resolve();
             },
-          ],
-        }),
-      request: (
-        _name: string,
-        options: LockOptions,
-        _callback: () => Promise<void>,
-      ) =>
-        new Promise<void>((_resolve, reject) => {
-          options.signal?.addEventListener("abort", () =>
-            reject(new DOMException("Aborted", "AbortError")),
+            { once: true },
           );
-        }),
+        });
+      },
     },
   });
-  return () => {
-    if (original === undefined) {
-      Reflect.deleteProperty(navigator, "locks");
-    } else {
-      Object.defineProperty(navigator, "locks", original);
-    }
+  return {
+    query,
+    snapshot,
+    reacquire: () => {
+      liveWitness = primary + ":tenure:replacement";
+      for (const wake of pending) wake();
+      pending.clear();
+    },
+    restore: () => {
+      if (original === undefined) Reflect.deleteProperty(navigator, "locks");
+      else Object.defineProperty(navigator, "locks", original);
+    },
   };
+}
+
+export function queueBehindForeignHolder(): () => void {
+  return installForeignSendTenure().restore;
 }
 
 /** The Drafts actions navigate; where this window's route goes is not under test. */

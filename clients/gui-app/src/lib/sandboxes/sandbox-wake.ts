@@ -20,6 +20,7 @@ import type { HostDirectoryService } from "@/lib/host";
 import { getHostBindingSnapshot } from "@/lib/host/runtime";
 import { queryClient } from "@/lib/query-client";
 import { authQueryKeys, sandboxMutationKeys } from "@/lib/query-keys";
+import { nextAccountRequestOrder } from "@/lib/auth/verified-account-orders";
 import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import { formatCreditsRequired } from "@/lib/sandboxes/sandbox-pricing";
 import {
@@ -47,7 +48,7 @@ const WAKE_TIMEOUT_MS = 120_000;
  * account is fenced (see `readSandboxFacts`), so a caller signed in as someone
  * else never joins it and is never handed its outcome.
  */
-const wakesInFlight = new Map<string, Promise<SandboxWakeOutcome>>();
+const wakesInFlight = new Map<string, PhysicalSandboxWake>();
 
 function wakeKey(startedBy: string | null, hostId: string): string {
   return JSON.stringify([startedBy, hostId]);
@@ -60,6 +61,22 @@ function wakeKey(startedBy: string | null, hostId: string): string {
 interface SandboxWakeAttempt {
   readonly outcome: Promise<SandboxWakeOutcome>;
   readonly settled: Promise<void>;
+}
+
+interface WakeAccount {
+  readonly auth: AuthService;
+  readonly userId: string | null;
+  readonly era: string | null;
+}
+
+interface PhysicalSandboxWake extends SandboxWakeAttempt {
+  readonly order: number;
+  readonly account: WakeAccount;
+}
+
+interface ClaimedWakeObserver {
+  readonly era: string;
+  readonly onStart: (order: number) => boolean;
 }
 
 /**
@@ -94,10 +111,15 @@ class SandboxWakeAccountChangedError extends Error {
   }
 }
 
-function assertStillSignedIn(startedBy: string | null): void {
-  if (signedInUserId() !== startedBy) {
-    throw new SandboxWakeAccountChangedError();
-  }
+function wakeAccountCurrent(account: WakeAccount): boolean {
+  return (
+    signedInUserId() === account.userId &&
+    (account.era === null || account.auth.getSandboxReadEra() === account.era)
+  );
+}
+
+function assertStillSignedIn(account: WakeAccount): void {
+  if (!wakeAccountCurrent(account)) throw new SandboxWakeAccountChangedError();
 }
 
 /**
@@ -107,13 +129,12 @@ function assertStillSignedIn(startedBy: string | null): void {
  * flight.
  */
 async function readSandboxFacts(
-  auth: AuthService,
+  account: WakeAccount,
   hostId: string,
-  startedBy: string | null,
 ): Promise<SandboxFactsRead> {
-  assertStillSignedIn(startedBy);
-  const result = await auth.listSandboxes();
-  assertStillSignedIn(startedBy);
+  assertStillSignedIn(account);
+  const result = await account.auth.listSandboxes();
+  assertStillSignedIn(account);
   if (result.kind !== "ok") return { kind: "unread" };
   const row = result.response.sandboxes.find((s) => s.hostId === hostId);
   if (row === undefined) return { kind: "unread" };
@@ -125,18 +146,22 @@ async function readSandboxFacts(
 }
 
 function startWakeAttempt(
-  auth: AuthService,
+  account: WakeAccount,
   hostId: string,
-  startedBy: string | null,
   gesture: SandboxVerbGesture | null,
 ): SandboxWakeAttempt {
   let verbRequest: Promise<unknown> = Promise.resolve();
   const outcome = wakeSandboxHost(
-    auth,
+    account,
     hostId,
-    startedBy,
     (sandboxId, verb, timeoutMs) => {
-      const request = auth.runSandboxVerb(sandboxId, verb, gesture, timeoutMs);
+      assertStillSignedIn(account);
+      const request = account.auth.runSandboxVerb(
+        sandboxId,
+        verb,
+        gesture,
+        timeoutMs,
+      );
       verbRequest = request;
       return request;
     },
@@ -151,12 +176,12 @@ function startWakeAttempt(
 }
 
 async function wakeSandboxHost(
-  auth: AuthService,
+  account: WakeAccount,
   hostId: string,
-  startedBy: string | null,
   wake: EnsureSandboxAwakeDeps["wake"],
 ): Promise<SandboxWakeOutcome> {
-  const first = await readSandboxFacts(auth, hostId, startedBy);
+  const first = await readSandboxFacts(account, hostId);
+  assertStillSignedIn(account);
   // The directory already said this host is a sandbox, so a failed first
   // read is a failure to retry, never "it no longer exists".
   if (first.kind === "unread") {
@@ -167,7 +192,8 @@ async function wakeSandboxHost(
     initial: first.facts,
     wake,
     readFacts: async () => {
-      const read = await readSandboxFacts(auth, hostId, startedBy);
+      const read = await readSandboxFacts(account, hostId);
+      assertStillSignedIn(account);
       // A failed poll says nothing about the sandbox: keep waiting on what
       // was last known rather than calling it gone.
       if (read.kind === "unread") return last;
@@ -196,22 +222,36 @@ function startBudget(ms: number): SandboxWakeBudget {
 }
 
 async function runSharedWake(
-  auth: AuthService,
+  account: WakeAccount,
   hostId: string,
-  startedBy: string | null,
   gesture: SandboxVerbGesture | null,
-): Promise<SandboxWakeRun> {
-  const key = wakeKey(startedBy, hostId);
+  observer: ClaimedWakeObserver | null,
+): Promise<SandboxWakeRun | null> {
+  if (
+    !wakeAccountCurrent(account) ||
+    (observer !== null && observer.era !== account.era)
+  )
+    return null;
+  const key = wakeKey(account.userId, hostId);
   const running = wakesInFlight.get(key);
   if (running !== undefined) {
-    return { outcome: await running, joined: true };
+    if (
+      observer !== null &&
+      (running.account.era !== observer.era || !observer.onStart(running.order))
+    )
+      return null;
+    return { outcome: await running.outcome, joined: true };
   }
-  const attempt = startWakeAttempt(auth, hostId, startedBy, gesture);
-  wakesInFlight.set(key, attempt.outcome);
+  const order = nextAccountRequestOrder();
+  if (observer !== null && !observer.onStart(order)) return null;
+  const attempt = {
+    ...startWakeAttempt(account, hostId, gesture),
+    account,
+    order,
+  };
+  wakesInFlight.set(key, attempt);
   void attempt.settled.then(() => {
-    if (wakesInFlight.get(key) === attempt.outcome) {
-      wakesInFlight.delete(key);
-    }
+    if (wakesInFlight.get(key) === attempt) wakesInFlight.delete(key);
   });
   return { outcome: await attempt.outcome, joined: false };
 }
@@ -337,6 +377,36 @@ export function startSandboxWake(
   hostId: string,
   gesture: SandboxVerbGesture | null,
 ): Promise<SandboxWakeOutcome | null> {
+  return startSandboxWakeRequest(client, binding, {
+    hostId,
+    gesture,
+    observer: null,
+  });
+}
+
+export function startClaimedSandboxWake(
+  client: QueryClient,
+  binding: SandboxWakeBinding | null,
+  hostId: string,
+  observer: ClaimedWakeObserver,
+): Promise<SandboxWakeOutcome | null> {
+  return startSandboxWakeRequest(client, binding, {
+    hostId,
+    gesture: "send",
+    observer,
+  });
+}
+
+function startSandboxWakeRequest(
+  client: QueryClient,
+  binding: SandboxWakeBinding | null,
+  request: {
+    readonly hostId: string;
+    readonly gesture: SandboxVerbGesture | null;
+    readonly observer: ClaimedWakeObserver | null;
+  },
+): Promise<SandboxWakeOutcome | null> {
+  const { hostId } = request;
   // Signed out there is no sandbox row to wake, and nothing a retry fixes.
   if (binding === null) return Promise.resolve(null);
   const { auth, directory } = binding;
@@ -359,7 +429,7 @@ export function startSandboxWake(
       configuration = { kind: "personal" };
     }
   }
-  return runSandboxWake({ client, binding, hostId, configuration, gesture });
+  return runSandboxWake({ client, binding, configuration, ...request });
 }
 
 function runSandboxWake(input: {
@@ -368,19 +438,31 @@ function runSandboxWake(input: {
   readonly hostId: string;
   readonly configuration: SandboxConfigurationCopy | null;
   readonly gesture: SandboxVerbGesture | null;
+  readonly observer: ClaimedWakeObserver | null;
 }): Promise<SandboxWakeOutcome | null> {
-  const { client, binding, hostId, configuration, gesture } = input;
+  const {
+    client,
+    binding,
+    hostId,
+    configuration,
+    gesture,
+    observer: wakeObserver,
+  } = input;
   const { auth, directory } = binding;
   // The account this wake runs for. A wake that ends under another account
   // stops polling (see `readSandboxFacts`), and reports and refreshes nothing:
   // its outcome, a credit shortfall included, is the first account's. The next
   // wake under the right account starts fresh.
-  const startedBy = signedInUserId();
-  const observer = new QueryMutationObserver<SandboxWakeRun>(client, {
+  const account = {
+    auth,
+    userId: signedInUserId(),
+    era: auth.getSandboxReadEra(),
+  };
+  const observer = new QueryMutationObserver<SandboxWakeRun | null>(client, {
     mutationKey: sandboxMutationKeys.wake(hostId),
-    mutationFn: () => runSharedWake(auth, hostId, startedBy, gesture),
+    mutationFn: () => runSharedWake(account, hostId, gesture, wakeObserver),
     onSuccess: (run) => {
-      if (run.joined || signedInUserId() !== startedBy) return;
+      if (run === null || run.joined || !wakeAccountCurrent(account)) return;
       void directory.refresh();
       void client.invalidateQueries({
         queryKey: authQueryKeys.registeredHostsAll(),
@@ -388,7 +470,7 @@ function runSandboxWake(input: {
       toastWakeOutcome(run.outcome, configuration);
     },
     onError: () => {
-      if (signedInUserId() !== startedBy) return;
+      if (!wakeAccountCurrent(account)) return;
       toastWakeFailed();
     },
   });
@@ -398,7 +480,7 @@ function runSandboxWake(input: {
   return observer
     .mutate()
     .then(
-      (run) => run.outcome,
+      (run) => run?.outcome ?? null,
       () => null,
     )
     .finally(unsubscribe);

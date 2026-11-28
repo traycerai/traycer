@@ -1,3 +1,4 @@
+import { v4 as uuidv4 } from "uuid";
 import { claimedSandboxScope } from "@/lib/sandboxes/claimed-sandbox-evidence";
 import { collectAnnotationImageHashes } from "@/lib/browser-view/annotation/browser-annotation-record";
 import {
@@ -37,6 +38,7 @@ import { recordMapStorageKey } from "@/lib/persist/keys";
 import {
   createPendingSendStorage,
   requestPendingDispatchRetry,
+  pendingDispatchRetryInMailbox,
   type PendingDispatchRetryRequest,
 } from "@/lib/sandboxes/pending-stage-storage";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -136,10 +138,16 @@ export interface PendingDispatchView {
   readonly retryAvailable: boolean;
   readonly stamp?: {
     readonly owner: PendingSendOwnerStamp;
+    readonly publicationId?: string;
     readonly era: string;
     readonly boundary: number;
     readonly scope: SandboxRowScope | null;
   };
+}
+
+export interface PendingDispatchInvocation {
+  readonly view: PendingDispatchView | null;
+  readonly readEra: () => string | null;
 }
 
 /**
@@ -248,7 +256,10 @@ interface PendingSandboxSendStoreState {
     id: string,
     owner: PendingSendOwnerStamp,
   ) => void;
-  readonly requestDispatchRetry: (id: string) => Promise<string | null>;
+  readonly requestDispatchRetry: (
+    id: string,
+    invocation: PendingDispatchInvocation,
+  ) => Promise<string | null>;
   readonly refuseDispatch: (
     id: string,
     dispatch: PendingSandboxSendDispatch,
@@ -604,6 +615,65 @@ export function pendingSandboxDispatchViewCurrent(
     JSON.stringify(stamp.scope) === JSON.stringify(scope) &&
     JSON.stringify(stored.dispatchView) === JSON.stringify(view)
   );
+}
+
+/** The effect and the final authority check run in the same continuation. */
+export async function withCurrentPendingDispatchPublication<T>(
+  id: string,
+  { view, readEra }: PendingDispatchInvocation,
+  perform: (publicationId: string) => T,
+): Promise<T | null> {
+  const era = readEra();
+  const localOwner = pendingSandboxSendOwnerStamp(id);
+  const stamp = view?.stamp;
+  if (era === null || view === null || stamp?.publicationId === undefined)
+    return null;
+  if (
+    !(await pendingSandboxSendOwnerIsCurrent(id, stamp.owner)) ||
+    readEra() !== era ||
+    !pendingSandboxSendFacts(id, UNKNOWN_PENDING_SEND_FACTS).accountActive ||
+    !pendingSandboxDispatchViewCurrent(id, view)
+  )
+    return null;
+  const owner = pendingSandboxSendOwnerStamp(id);
+  if (localOwner !== null && owner !== localOwner) return null;
+  if (owner !== null && (owner.episode !== stamp.owner.episode || stamp.era !== era)) return null;
+  return perform(stamp.publicationId);
+}
+
+export function pendingSandboxDispatchRetryCurrent(
+  send: PendingSandboxSend,
+  era: string | null,
+): boolean {
+  const { dispatchView: view, retryRequest: request, retryHandledId } = send;
+  if (
+    era === null ||
+    view?.retryAvailable !== true ||
+    view.stamp?.publicationId === undefined ||
+    view.stamp.era !== era ||
+    request?.publicationId !== view.stamp.publicationId ||
+    request.id === retryHandledId
+  )
+    return false;
+  return (
+    pendingSandboxSendOwnerStamp(send.id)?.episode ===
+      view.stamp.owner.episode &&
+    pendingSandboxDispatchViewCurrent(send.id, view) &&
+    pendingDispatchRetryInMailbox(send.id, request)
+  );
+}
+
+function stampedDispatchView(
+  previous: PendingDispatchView | undefined,
+  view: PendingDispatchView,
+  stamp: NonNullable<PendingDispatchView["stamp"]>,
+): PendingDispatchView {
+  const priorId = previous?.stamp?.publicationId;
+  const current = { ...view, stamp: { ...stamp, publicationId: priorId } };
+  return priorId !== undefined &&
+    JSON.stringify(previous) === JSON.stringify(current)
+    ? current
+    : { ...view, stamp: { ...stamp, publicationId: uuidv4() } };
 }
 
 /** An accepted or withdrawn record can never be replaced by a late RPC outcome. */
@@ -967,7 +1037,12 @@ export const usePendingSandboxSendStore =
             boundary === undefined ||
             boundary !== send.observationRequestedAt
               ? undefined
-              : { ...view, stamp: { owner, era, boundary, scope } };
+              : stampedDispatchView(send.dispatchView, view, {
+                  owner,
+                  era,
+                  boundary,
+                  scope,
+                });
           const serialized = JSON.stringify(dispatchView);
           const durable = () => JSON.stringify(storedSend(id)?.dispatchView);
           if (
@@ -1006,38 +1081,38 @@ export const usePendingSandboxSendStore =
             // Without a current owner or a matching boundary a view is inert.
           }
         },
-        requestDispatchRetry: async (id) => {
-          const { sends } = get();
-          if (!Object.hasOwn(sends, id)) return null;
-          const send = sends[id];
-          const dispatch = send.dispatch ?? null;
-          const view = send.dispatchView;
-          const stamp = view?.stamp;
-          if (
-            dispatch === null ||
-            view?.retryAvailable !== true ||
-            stamp === undefined ||
-            !(await pendingSandboxSendOwnerIsCurrent(id, stamp.owner))
-          )
-            return null;
-          if (
-            !pendingSandboxDispatchViewCurrent(id, view) ||
-            !pendingDecision(
-              send,
-              "request-dispatch-retry",
-              UNKNOWN_PENDING_SEND_FACTS,
-            ).effects.includes("request-dispatch-retry")
-          )
-            return null;
-          const request = requestPendingDispatchRetry({
+        requestDispatchRetry: (id, invocation) => {
+          if (invocation.view?.retryAvailable !== true)
+            return Promise.resolve(null);
+          return withCurrentPendingDispatchPublication(
             id,
-            userId: send.userId,
-            chatId: dispatch.input.chatId,
-            hostId: dispatch.input.hostId,
-          });
-          if (request !== null)
-            void usePendingSandboxSendStore.persist.rehydrate();
-          return request;
+            invocation,
+            (publicationId) => {
+              const { sends } = get();
+              if (!Object.hasOwn(sends, id)) return null;
+              const send = sends[id];
+              const dispatch = send.dispatch ?? null;
+              if (
+                dispatch === null ||
+                !pendingDecision(
+                  send,
+                  "request-dispatch-retry",
+                  UNKNOWN_PENDING_SEND_FACTS,
+                ).effects.includes("request-dispatch-retry")
+              )
+                return null;
+              const request = requestPendingDispatchRetry({
+                id,
+                publicationId,
+                userId: send.userId,
+                chatId: dispatch.input.chatId,
+                hostId: dispatch.input.hostId,
+              });
+              if (request !== null)
+                void usePendingSandboxSendStore.persist.rehydrate();
+              return request;
+            },
+          );
         },
         refuseDispatch: (id, captured) =>
           set((state) => ({

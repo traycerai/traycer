@@ -58,7 +58,10 @@ interface ClaimObservationInput extends ClaimIdentity {
 interface ClaimObservation {
   readonly decision: ClaimedSandboxDecision;
   readonly canContinue: () => boolean;
-  readonly beginWake: (boundary: number) => (awake: boolean) => void;
+  readonly beginWake: (
+    boundary: number,
+    order: number,
+  ) => (awake: boolean) => void;
   readonly isDecisionCurrent: () => boolean;
   readonly refetch: () => Promise<void>;
 }
@@ -142,8 +145,7 @@ export function useClaimedSandboxEvidence(
     return isCurrent() && !latest.passive && !latest.state.retired;
   }, [reader, isCurrent]);
   const beginWake = useCallback(
-    (boundary: number) => {
-      const order = nextAccountRequestOrder();
+    (boundary: number, order: number) => {
       reader.feed({ kind: "wake-start", order, boundary });
       return (awake: boolean) => {
         if (!isCurrent()) return;

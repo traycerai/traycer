@@ -4,7 +4,10 @@ import {
 } from "@/lib/environment/__tests__/environment-test-support";
 import { appServerClock } from "@/lib/clock/app-server-clock";
 import { AuthService } from "@/lib/auth/auth-service";
-import type { SandboxWakeOutcome } from "@traycer-clients/shared/host-client/sandbox-control";
+import type {
+  SandboxLifecycleVerbFetchResult,
+  SandboxWakeOutcome,
+} from "@traycer-clients/shared/host-client/sandbox-control";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation";
 import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
 // Load the shared boundary mocks before importing the components under test.
@@ -69,6 +72,7 @@ import {
   flattenKeys,
   sendOf,
   queueBehindForeignHolder,
+  installForeignSendTenure,
   navigateNowhere,
   reloadTaskDrafts,
   sendFromTaskComposer,
@@ -76,8 +80,10 @@ import {
   openTask,
 } from "./pending-sandbox-send-fixture";
 
+import { useHostBinding } from "@/lib/host";
+import { startSandboxWake } from "@/lib/sandboxes/sandbox-wake";
 import { sandboxListQueryOptions } from "@/hooks/sandboxes/use-sandbox-list-query";
-import { authQueryKeys } from "@/lib/query-keys";
+import { authQueryKeys, sandboxMutationKeys } from "@/lib/query-keys";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import { providerProfile } from "@/components/chat/fallback/__tests__/fallback-fixtures";
 
@@ -2037,7 +2043,7 @@ describe("a send whose task may not exist yet", () => {
           _name: string,
           _options: LockOptions,
           callback: () => Promise<void>,
-        ) => callback(),
+        ) => Promise.resolve(callback()),
       },
     });
     try {
@@ -6176,6 +6182,14 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
     });
   }
 
+  function retryInvocation(id: string) {
+    const { sends } = usePendingSandboxSendStore.getState();
+    return {
+      view: Object.hasOwn(sends, id) ? (sends[id].dispatchView ?? null) : null,
+      readEra: pendingSandboxAuth.getSandboxReadEra,
+    };
+  }
+
   /** A strip mounted by itself sees only the owner decision already published. */
   async function publishOwnerView(
     expected: Partial<PendingDispatchView>,
@@ -7020,6 +7034,101 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
     },
   );
 
+  it.each(["awake first", "failure first"] as const)(
+    "uses the physical wake order when the claim joins another caller, %s",
+    async (first) => {
+      const { auth } = installRealAccountVerification(() =>
+        Promise.resolve({ kind: "network-error" }),
+      );
+      const input = await seedClaim(
+        "chat",
+        "uncertain",
+        SANDBOX_ID,
+        TEAM_SANDBOX_SCOPE,
+      );
+      const verb = deferred<SandboxLifecycleVerbFetchResult>();
+      const request = vi
+        .spyOn(auth, "runSandboxVerb")
+        .mockReturnValue(verb.promise);
+      const asleep = teamRow("suspended");
+      const awake = teamRow("awake");
+      sandboxListState.real = true;
+      mocks.usePhysicalWake = true;
+      mocks.listSandboxes.mockResolvedValue(listAnswers([asleep]));
+      answerHost(SANDBOX_HOST, CODEX_READY);
+      const mounted = mount();
+      const list = sandboxListQueryOptions(auth, "user-1", true);
+      await screen.findByTestId("pending-sandbox-dispatch-retry");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+        await mounted.client.fetchQuery(list);
+      });
+      const retry = await screen.findByTestId("pending-sandbox-dispatch-retry");
+      const binding = renderHook(() => useHostBinding());
+      const independent = new QueryClient({
+        defaultOptions: { mutations: { retry: false } },
+      });
+      const physical = startSandboxWake(
+        independent,
+        binding.result.current,
+        SANDBOX_HOST,
+        null,
+      );
+      await waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+
+      const result = deferred<SandboxListFetchResult>();
+      mocks.listSandboxes.mockReturnValueOnce(result.promise);
+      const aheadOfJoin = independent.fetchQuery(list);
+      const create = deferred<CreateChatResponseV12>();
+      mocks.createChatDeferred = create.promise;
+      try {
+        fireEvent.click(retry);
+        await waitFor(() => expect(usePendingSandboxSendStore.getState().sends[SEND_ID].retryRequest).toBeDefined());
+        await waitFor(() => expect(usePendingSandboxSendStore.getState().sends[SEND_ID].retryHandledId).toBeDefined());
+        await waitFor(() =>
+          expect(
+            mounted.client.isMutating({
+              mutationKey: sandboxMutationKeys.wake(SANDBOX_HOST),
+            }),
+          ).toBe(1),
+        );
+        await settleAsyncWork();
+        const deliverAwake = () =>
+          act(async () => {
+            result.resolve(listAnswers([awake]));
+            mounted.client.setQueryData(list.queryKey, await aheadOfJoin);
+          });
+        const failWake = () =>
+          act(async () => {
+            verb.resolve({ kind: "network-error", detail: "wake failed" });
+            await physical;
+          });
+        if (first === "awake first") {
+          await deliverAwake();
+          await waitForCreateChats(1);
+          await failWake();
+        } else {
+          await failWake();
+          await deliverAwake();
+          await waitForCreateChats(1);
+        }
+        expect(request).toHaveBeenCalledTimes(1);
+        expect(createChatCalls()[0]?.input).toEqual(input);
+        expect(
+          usePendingSandboxSendStore.getState().sends[SEND_ID].dispatch
+            ?.blocker,
+        ).not.toBe("wake");
+      } finally {
+        await resolvePendingCreate(create);
+        await act(async () => {
+          result.resolve(listAnswers([awake]));
+          verb.resolve({ kind: "network-error", detail: "wake finished" });
+          await physical;
+        });
+      }
+    },
+  );
+
   it.each(["park first", "press first"] as const)(
     "does not acknowledge an unrun Retry when %s",
     async (first) => {
@@ -7047,7 +7156,7 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
       expect(
         await usePendingSandboxSendStore
           .getState()
-          .requestDispatchRetry(SEND_ID),
+          .requestDispatchRetry(SEND_ID, retryInvocation(SEND_ID)),
       ).toBeNull();
       const send = usePendingSandboxSendStore.getState().sends[SEND_ID];
       expect(send.retryRequest?.id).toBe(requested);
@@ -8004,7 +8113,9 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
       );
       expect(screen.queryByTestId("pending-sandbox-dispatch-retry")).toBeNull();
       await expect(
-        usePendingSandboxSendStore.getState().requestDispatchRetry(SEND_ID),
+        usePendingSandboxSendStore
+          .getState()
+          .requestDispatchRetry(SEND_ID, retryInvocation(SEND_ID)),
       ).resolves.toBeNull();
       expect(
         usePendingSandboxSendStore.getState().sends[SEND_ID].dispatch?.input,
@@ -8044,7 +8155,9 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
       await waitFor(() => expect(failed).toBe(true));
       expect(screen.queryByTestId("pending-sandbox-dispatch-retry")).toBeNull();
       await expect(
-        usePendingSandboxSendStore.getState().requestDispatchRetry(SEND_ID),
+        usePendingSandboxSendStore
+          .getState()
+          .requestDispatchRetry(SEND_ID, retryInvocation(SEND_ID)),
       ).resolves.toBeNull();
       expect(
         usePendingSandboxSendStore.getState().sends[SEND_ID].retryRequest,
@@ -8057,6 +8170,116 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
       ).toBeTruthy();
     },
   );
+
+  it.each(["Retry", "Retry applying"] as const)(
+    "rejects the foreign %s press when its tenure query straddles sign-out",
+    async (action) => {
+      await seedClaim("chat", "uncertain", SANDBOX_ID, TEAM_SANDBOX_SCOPE);
+      if (action === "Retry applying") {
+        mocks.settingsStatus = {
+          principal: { kind: "personal" },
+          items: [{ kind: "variable", status: "failed" }],
+        };
+      }
+      answerSandboxRows([teamRow("awake")], FRESH);
+      answerHost(SANDBOX_HOST, CODEX_READY);
+      await publishOwnerView(
+        action === "Retry"
+          ? { retryAvailable: true }
+          : { remedy: { kind: "repair", guestSetupFailed: false } },
+      );
+      const { auth, deleted } = installRealAccountVerification(() =>
+        Promise.resolve({ kind: "network-error" }),
+      );
+      const foreign = installForeignSendTenure();
+      onTestFinished(foreign.restore);
+      mount();
+      const button = await screen.findByRole("button", {
+        name: action,
+        exact: true,
+      });
+      const inspected = Promise.withResolvers<LockManagerSnapshot>();
+      const inspectedAt = foreign.query.mock.calls.length;
+      foreign.query.mockReturnValueOnce(inspected.promise);
+      fireEvent.click(button);
+      expect(foreign.query).toHaveBeenCalledTimes(inspectedAt + 1);
+
+      const deletion = Promise.withResolvers<void>();
+      deleted.mockReturnValueOnce(deletion.promise);
+      const signOut = auth.signOut();
+      try {
+        expect(auth.getSandboxReadEra()).toBeNull();
+        expect(useAuthStore.getState().profile?.userId).toBe("user-1");
+        await act(async () => {
+          inspected.resolve(foreign.snapshot());
+          await inspected.promise;
+        });
+        expect(
+          usePendingSandboxSendStore.getState().sends[SEND_ID].retryRequest,
+        ).toBeUndefined();
+        expect(mocks.repairFinishers).toHaveLength(0);
+        expect(createChatCalls()).toEqual([]);
+      } finally {
+        await act(async () => {
+          deletion.reject(new Error("credentials locked"));
+          await signOut;
+        });
+      }
+    },
+  );
+
+  it("invalidates an already-mounted foreign Retry after failed clear and same-client reacquisition", async () => {
+    await seedClaim("chat", "uncertain", SANDBOX_ID, TEAM_SANDBOX_SCOPE);
+    answerSandboxRows([teamRow("awake")], FRESH);
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    const restoreOwner = installImmediateExclusiveLocks();
+    const owner = mount();
+    await screen.findByTestId("pending-sandbox-dispatch-retry");
+    const recordKey = recordMapStorageKey(
+      persistKey(STORE_KEYS.pendingSandboxSend),
+      SEND_ID,
+    );
+    const prior = localStorage.getItem(recordKey);
+    expect(prior).toContain('"retryAvailable":true');
+    const originalWrite = localStorage.setItem.bind(localStorage);
+    const write = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementation((key, value) => {
+        if (key === recordKey && !value.includes('"dispatchView"'))
+          throw new Error("cannot clear the publication");
+        originalWrite(key, value);
+      });
+    try {
+      owner.unmount();
+      await settleAsyncWork();
+      expect(localStorage.getItem(recordKey)).toBe(prior);
+    } finally {
+      write.mockRestore();
+      restoreOwner();
+    }
+    await reloadPendingSandboxStores();
+    const foreign = installForeignSendTenure();
+    onTestFinished(foreign.restore);
+    mount();
+    const retry = await screen.findByTestId("pending-sandbox-dispatch-retry");
+    const old = retryInvocation(SEND_ID);
+    await act(async () => {
+      foreign.reacquire();
+      fireEvent.click(retry);
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(screen.queryByTestId("pending-sandbox-dispatch-retry")).toBeNull();
+    expect(
+      screen.getByTestId("pending-sandbox-dispatch").textContent,
+    ).toContain("Waiting for the sandbox");
+    expect(localStorage.getItem(recordKey)).toBe(prior);
+    await expect(
+      usePendingSandboxSendStore.getState().requestDispatchRetry(SEND_ID, old),
+    ).resolves.toBeNull();
+    expect(
+      usePendingSandboxSendStore.getState().sends[SEND_ID].retryRequest,
+    ).toBeUndefined();
+  });
 
   /** The queued window records the Retry; nothing else happens here. */
   async function requestClaimedRetryFromNonOwner(): Promise<string> {
@@ -8083,7 +8306,7 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
   }
 
   it.each(KINDS)(
-    "hands a %s claim's recorded Retry to the owner after a reload: it acknowledges the request and repeats the exact saved input once",
+    "requires a fresh Retry for a %s claim when a new owner takes over its publication",
     async (kind) => {
       const input = await seedClaim(
         kind,
@@ -8109,9 +8332,16 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
         ).toBe(requestId);
         mount();
 
+        const retry = await screen.findByTestId(
+          "pending-sandbox-dispatch-retry",
+        );
+        expect(createChatCalls()).toEqual([]);
+        expect(handled).not.toContain(requestId);
+        fireEvent.click(retry);
         await waitForCreateChats(1);
         expect(createChatCalls()[0]?.input).toEqual(input);
-        expect(handled).toContain(requestId);
+        expect(handled).not.toContain(requestId);
+        expect(handled.some((id) => id !== undefined)).toBe(true);
         expect(mocks.wake).not.toHaveBeenCalled();
       } finally {
         unsubscribe();
@@ -8160,7 +8390,7 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
       expect(
         await usePendingSandboxSendStore
           .getState()
-          .requestDispatchRetry(SEND_ID),
+          .requestDispatchRetry(SEND_ID, retryInvocation(SEND_ID)),
       ).toBeNull();
       expect(
         usePendingSandboxSendStore.getState().sends[SEND_ID]?.retryRequest,
@@ -8170,7 +8400,7 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
       expect(
         await usePendingSandboxSendStore
           .getState()
-          .requestDispatchRetry("missing"),
+          .requestDispatchRetry("missing", retryInvocation("missing")),
       ).toBeNull();
       // A settled record is no claim to replay.
       usePendingSandboxSendStore.setState((state) => ({
@@ -8191,7 +8421,7 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
       expect(
         await usePendingSandboxSendStore
           .getState()
-          .requestDispatchRetry(SEND_ID),
+          .requestDispatchRetry(SEND_ID, retryInvocation(SEND_ID)),
       ).toBeNull();
     },
   );

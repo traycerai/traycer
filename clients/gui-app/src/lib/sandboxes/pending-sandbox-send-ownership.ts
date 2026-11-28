@@ -4,13 +4,13 @@ import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-s
 
 export interface PendingSendOwnerStamp {
   readonly episode: string;
-  readonly clientId: string | null;
 }
 
 interface SendOwnership {
   readonly ready: Promise<boolean>;
   readonly release: () => void;
-  stamp: PendingSendOwnerStamp;
+  readonly stamp: PendingSendOwnerStamp;
+  readonly onRelease: Set<() => void>;
   granted: boolean;
   exclusive: boolean;
   mounted: number;
@@ -23,16 +23,8 @@ function sendLockName(id: string): string {
   return `traycer:pending-sandbox-send:${id}`;
 }
 
-async function heldSendLockClientId(id: string): Promise<string | null> {
-  try {
-    const snapshot = await navigator.locks.query();
-    return (
-      snapshot.held?.find((lock) => lock.name === sendLockName(id))?.clientId ??
-      null
-    );
-  } catch {
-    return null;
-  }
+function sendTenureLockName(id: string, stamp: PendingSendOwnerStamp): string {
+  return `${sendLockName(id)}:tenure:${stamp.episode}`;
 }
 
 export function pendingSandboxSendOwnerStamp(
@@ -48,10 +40,47 @@ export async function pendingSandboxSendOwnerIsCurrent(
 ): Promise<boolean> {
   const owner = pendingSandboxSendOwnerStamp(id);
   if (owner !== null) return owner.episode === stamp.episode;
-  return (
-    stamp.clientId !== null &&
-    (await heldSendLockClientId(id)) === stamp.clientId
-  );
+  try {
+    const { held } = await navigator.locks.query();
+    const primary = held?.find((lock) => lock.name === sendLockName(id));
+    const tenure = held?.find(
+      (lock) => lock.name === sendTenureLockName(id, stamp),
+    );
+    return (
+      primary?.clientId !== undefined &&
+      tenure?.clientId === primary.clientId &&
+      tenure.mode === "exclusive"
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** A shared waiter runs as soon as the specific owner's exclusive witness releases. */
+export function watchPendingSandboxSendTenure(
+  id: string,
+  stamp: PendingSendOwnerStamp,
+  onLost: () => void,
+): () => void {
+  const owner = ownerships.get(id);
+  if (owner?.granted === true && owner.stamp.episode === stamp.episode) {
+    owner.onRelease.add(onLost);
+    return () => {
+      owner.onRelease.delete(onLost);
+    };
+  }
+  const abort = new AbortController();
+  const navigatorWithLocks: { readonly locks?: LockManager } = navigator;
+  void navigatorWithLocks.locks
+    ?.request(
+      sendTenureLockName(id, stamp),
+      { mode: "shared", signal: abort.signal },
+      onLost,
+    )
+    .catch(() => {
+      if (!abort.signal.aborted) onLost();
+    });
+  return () => abort.abort();
 }
 
 /** An originating window may cancel before its task has been confirmed. */
@@ -85,7 +114,8 @@ export function reservePendingSandboxSendOwnership(id: string): SendOwnership {
   let unsubscribe = (): void => undefined;
   const ownership: SendOwnership = {
     ready,
-    stamp: { episode: uuidv4(), clientId: null },
+    stamp: { episode: uuidv4() },
+    onRelease: new Set(),
     granted: false,
     exclusive: false,
     mounted: 0,
@@ -93,6 +123,8 @@ export function reservePendingSandboxSendOwnership(id: string): SendOwnership {
       if (ownerships.get(id) !== ownership) return;
       ownerships.delete(id);
       unsubscribe();
+      for (const onLost of ownership.onRelease) onLost();
+      ownership.onRelease.clear();
       if (ownership.granted)
         usePendingSandboxSendStore
           .getState()
@@ -126,14 +158,19 @@ export function reservePendingSandboxSendOwnership(id: string): SendOwnership {
         useStagedSandboxStore.persist.rehydrate(),
         usePendingSandboxSendStore.persist.rehydrate(),
       ]);
-      ownership.stamp = {
-        ...ownership.stamp,
-        clientId: await heldSendLockClientId(id),
-      };
       if (abort.signal.aborted) return;
-      ownership.exclusive = true;
-      grant(true);
-      await held;
+      await locks
+        .request(
+          sendTenureLockName(id, ownership.stamp),
+          { signal: abort.signal },
+          async () => {
+            if (abort.signal.aborted) return;
+            ownership.exclusive = true;
+            grant(true);
+            await held;
+          },
+        )
+        .catch(() => grant(false));
     })
     .catch(() => {
       // An unavailable lock service uses the same idempotent identities as a

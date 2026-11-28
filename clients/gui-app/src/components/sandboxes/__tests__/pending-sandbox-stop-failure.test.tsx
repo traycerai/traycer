@@ -182,7 +182,7 @@ function installExclusiveSendLock(): () => void {
         _name: string,
         _options: LockOptions,
         callback: () => Promise<void>,
-      ) => callback(),
+      ) => Promise.resolve(callback()),
     },
   });
   return () => {

@@ -18,6 +18,7 @@ export interface PendingStageRetryRequest {
 
 export interface PendingDispatchRetryRequest {
   readonly id: string;
+  readonly publicationId?: string;
   readonly userId: string | null;
   readonly chatId: string;
   readonly hostId: string;
@@ -128,9 +129,44 @@ function dispatchRetryFor(
   );
 }
 
+function dispatchPublicationMatches(
+  send: Record<string, unknown>,
+  publicationId: string,
+): boolean {
+  const view = send.dispatchView;
+  return (
+    record(view) &&
+    view.retryAvailable === true &&
+    record(view.stamp) &&
+    view.stamp.publicationId === publicationId
+  );
+}
+
+export function pendingDispatchRetryInMailbox(
+  id: string,
+  request: PendingDispatchRetryRequest,
+): boolean {
+  const name = persistKey(STORE_KEYS.pendingSandboxSend);
+  try {
+    const value: unknown = parse(
+      localStorage.getItem(
+        recordMapStorageKey(name, `${RETRY_REGISTER_PREFIX}${id}`),
+      ),
+    );
+    return (
+      record(value) &&
+      value.id === request.id &&
+      value.publicationId === request.publicationId
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** No writer of a Retry request can replace an immutable claim or resurrect a receipt. */
 export function requestPendingDispatchRetry(input: {
   readonly id: string;
+  readonly publicationId: string;
   readonly userId: string | null;
   readonly chatId: string;
   readonly hostId: string;
@@ -141,14 +177,20 @@ export function requestPendingDispatchRetry(input: {
   const key = recordMapStorageKey(name, `${RETRY_REGISTER_PREFIX}${input.id}`);
   try {
     const before: unknown = parse(localStorage.getItem(recordKey));
-    if (!record(before) || !dispatchRetryFor(before, request)) return null;
+    if (
+      !record(before) ||
+      !dispatchRetryFor(before, request) ||
+      !dispatchPublicationMatches(before, input.publicationId)
+    )
+      return null;
     localStorage.setItem(key, JSON.stringify(request));
     const saved: unknown = parse(localStorage.getItem(key));
     const after: unknown = parse(localStorage.getItem(recordKey));
     return record(saved) &&
       saved.id === request.id &&
       record(after) &&
-      dispatchRetryFor(after, request)
+      dispatchRetryFor(after, request) &&
+      dispatchPublicationMatches(after, input.publicationId)
       ? request.id
       : null;
   } catch {

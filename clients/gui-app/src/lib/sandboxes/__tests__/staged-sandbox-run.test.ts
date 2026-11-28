@@ -483,16 +483,26 @@ describe("runStagedSandbox on a created sandbox the list has not shown yet", () 
       await exactStarted.promise;
       const list = Promise.withResolvers<SandboxListFetchResult>();
       vi.spyOn(auth, "listSandboxes").mockReturnValueOnce(list.promise);
-      const reading = deps.queryClient.fetchQuery(
-        sandboxListQueryOptions(auth, "user-1", true),
-      );
+      const listOptions = sandboxListQueryOptions(auth, "user-1", true);
+      const reading = deps.queryClient.fetchQuery(listOptions);
+      const shared = deps.queryClient
+        .getQueryCache()
+        .find({ queryKey: listOptions.queryKey, exact: true });
+      if (shared === undefined)
+        throw new Error("The shared list did not start");
+      const pendingList = shared.promise;
+      const fallbackAwaitingList = Promise.withResolvers<void>();
+      vi.spyOn(shared, "promise", "get").mockImplementation(() => {
+        fallbackAwaitingList.resolve();
+        return pendingList;
+      });
       const held = {
         ...refusal(404, SANDBOX_REFUSAL_CODE_NOT_FOUND),
         holdsTeam: true,
       } as const;
       if (first === "exact") {
         exact.resolve(held);
-        await exact.promise;
+        await fallbackAwaitingList.promise;
       } else {
         list.resolve(awake);
         await reading;

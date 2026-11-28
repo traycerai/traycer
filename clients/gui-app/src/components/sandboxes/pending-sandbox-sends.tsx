@@ -153,7 +153,7 @@ import {
   recordSandboxStateSend,
   recordStoppedSandboxSend,
 } from "@/stores/sandboxes/stopped-sandbox-send-receipt-store";
-import { startSandboxWake } from "@/lib/sandboxes/sandbox-wake";
+import { startClaimedSandboxWake } from "@/lib/sandboxes/sandbox-wake";
 import type { StageConfiguration } from "@/lib/sandboxes/sandbox-stage-model";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import {
@@ -221,6 +221,7 @@ import {
   ownsPendingSandboxSend,
   pendingSandboxSendOwnerIsCurrent,
   pendingSandboxSendOwnerStamp,
+  watchPendingSandboxSendTenure,
 } from "@/lib/sandboxes/pending-sandbox-send-ownership";
 import {
   settleVerdict,
@@ -257,7 +258,8 @@ import {
   type PendingSandboxSendRequest,
   pendingSandboxSendFacts,
   pendingSandboxDispatchCurrent,
-  pendingSandboxDispatchViewCurrent,
+  pendingSandboxDispatchRetryCurrent,
+  withCurrentPendingDispatchPublication,
   pendingSandboxSendObservationBoundary,
 } from "@/stores/sandboxes/pending-sandbox-send-store";
 
@@ -2374,18 +2376,6 @@ function projectClaimedSandboxRow(
   };
 }
 
-function pendingClaimObservationEvent(
-  send: PendingSandboxSend,
-  observation: PendingSendEvent,
-  retryAvailable: boolean,
-): PendingSendEvent {
-  return retryAvailable &&
-    send.retryRequest !== undefined &&
-    send.retryRequest.id !== send.retryHandledId
-    ? "consume-retry"
-    : observation;
-}
-
 function usePendingDispatchLifecycle(
   send: PendingSandboxSend,
   dispatch: PendingSandboxSendDispatch,
@@ -2512,18 +2502,20 @@ function usePendingDispatchLifecycle(
   }, [polling, refetch]);
   useEffect(() => {
     if (!owned || !isDecisionCurrent()) return;
-    const decision = usePendingSandboxSendStore
-      .getState()
-      .dispatchEvent(
-        send.id,
-        pendingClaimObservationEvent(send, event, retryAvailable),
-        {
-          ...environment,
-          retryAction: "send-again",
-          retryObservation: event,
-          wakeInFlight: wakeRequested.current,
-        },
-      );
+    const store = usePendingSandboxSendStore.getState();
+    const retry =
+      retryAvailable &&
+      pendingSandboxDispatchRetryCurrent(store.sends[send.id], era);
+    const decision = store.dispatchEvent(
+      send.id,
+      retry ? "consume-retry" : event,
+      {
+        ...environment,
+        retryAction: "send-again",
+        retryObservation: event,
+        wakeInFlight: wakeRequested.current,
+      },
+    );
     if (decision === null) return;
     if (decision.effects.includes("rehydrate"))
       void usePendingSandboxSendStore.persist.rehydrate();
@@ -2546,18 +2538,28 @@ function usePendingDispatchLifecycle(
     const wakeBoundary = usePendingSandboxSendStore
       .getState()
       .holdObservation(send.id, decision);
-    if (wakeBoundary === null || !canContinue()) return;
+    if (era === null || wakeBoundary === null || !canContinue()) return;
+    const owner = pendingSandboxSendOwnerStamp(send.id);
+    if (owner === null) return;
     wakeRequested.current = true;
-    const finishWake = beginWake(wakeBoundary);
-    void startSandboxWake(
-      queryClient,
-      binding,
-      dispatch.input.hostId,
-      "send",
-    ).then((outcome) => finishWake(outcome?.kind === "awake"));
+    let finishWake: ((awake: boolean) => void) | null = null;
+    void startClaimedSandboxWake(queryClient, binding, dispatch.input.hostId, {
+      era,
+      onStart: (order) => {
+        if (!canContinue() || pendingSandboxSendOwnerStamp(send.id) !== owner)
+          return false;
+        finishWake = beginWake(wakeBoundary, order);
+        return true;
+      },
+    }).then((outcome) => {
+      if (pendingSandboxSendOwnerStamp(send.id) !== owner) return;
+      if (finishWake === null) wakeRequested.current = false;
+      else finishWake(outcome?.kind === "awake");
+    });
   }, [
     retryAvailable,
     binding,
+    era,
     canContinue,
     beginWake,
     isDecisionCurrent,
@@ -2916,11 +2918,17 @@ function useCurrentClaimPublication(
   useEffect(() => {
     if (id === undefined || stamp === undefined || era === null) return;
     let cancelled = false;
+    let released = false;
+    const stop = watchPendingSandboxSendTenure(id, stamp.owner, () => {
+      released = true;
+      if (!cancelled) setVerified(undefined);
+    });
     void pendingSandboxSendOwnerIsCurrent(id, stamp.owner).then((current) => {
-      if (!cancelled) setVerified(current ? stamp : undefined);
+      if (!cancelled && !released) setVerified(current ? stamp : undefined);
     });
     return () => {
       cancelled = true;
+      stop();
     };
   }, [era, id, stamp]);
   if (id === undefined || stamp === undefined || era === null) return false;
@@ -2932,7 +2940,6 @@ function useCurrentClaimPublication(
 
 function PendingDispatchItem(props: {
   readonly id: string;
-  readonly userId: string | null;
   readonly dispatch: PendingSandboxSendDispatch;
 }): ReactNode {
   const send = usePendingSandboxSendStore(
@@ -2950,7 +2957,6 @@ function PendingDispatchItem(props: {
   return (
     <PendingDispatchPresentation
       send={send}
-      userId={props.userId}
       sandboxId={props.dispatch.delivery.sandboxId}
       hostId={props.dispatch.input.hostId}
       view={view}
@@ -2960,12 +2966,13 @@ function PendingDispatchItem(props: {
 
 function PendingDispatchPresentation(props: {
   readonly send: PendingSandboxSend;
-  readonly userId: string | null;
   readonly sandboxId: string;
   readonly hostId: string;
   readonly view: PendingDispatchView;
 }): ReactNode {
   const { send, view } = props;
+  const auth = useHostBinding()?.auth ?? null;
+  const invocation = { view, readEra: () => auth?.getSandboxReadEra() ?? null };
   const { line, setup, text, settingsDetail, remedyText } = view.presentation;
   let remedy: ReactNode =
     remedyText === null ? null : <span>{remedyText}</span>;
@@ -2976,11 +2983,8 @@ function PendingDispatchPresentation(props: {
         hostId={props.hostId}
         remedy={view.remedy}
         label={remedyText}
-        authorize={async () =>
-          view.stamp !== undefined &&
-          (await pendingSandboxSendOwnerIsCurrent(send.id, view.stamp.owner)) &&
-          (useAuthStore.getState().profile?.userId ?? null) === props.userId &&
-          pendingSandboxDispatchViewCurrent(send.id, view)
+        authorize={(perform) =>
+          withCurrentPendingDispatchPublication(send.id, invocation, perform)
         }
       />
     );
@@ -3021,7 +3025,7 @@ function PendingDispatchPresentation(props: {
             onClick={() => {
               void usePendingSandboxSendStore
                 .getState()
-                .requestDispatchRetry(send.id);
+                .requestDispatchRetry(send.id, invocation);
             }}
           >
             Retry
@@ -3168,7 +3172,7 @@ function PublishedDispatchRemedy(props: {
   readonly hostId: string;
   readonly remedy: NonNullable<PendingDispatchView["remedy"]>;
   readonly label: string | null;
-  readonly authorize: () => Promise<boolean>;
+  readonly authorize: (perform: () => void) => Promise<void | null>;
 }): ReactNode {
   const openLink = useOpenLink();
   const { remedy } = props;
@@ -3186,8 +3190,7 @@ function PublishedDispatchRemedy(props: {
       variant="link"
       size="inline-xs"
       onClick={() => {
-        void props.authorize().then((current) => {
-          if (!current) return;
+        void props.authorize(() => {
           if (remedy.kind === "billing")
             void openLink(remedy.href, "account", null);
           else openSandboxDetails(props.id);
@@ -3310,13 +3313,7 @@ function PendingSendItem(props: {
   const dispatch = send.dispatch ?? null;
   if (dispatch === null)
     return <PendingStagedSendItem send={send} tabId={props.tabId} />;
-  return (
-    <PendingDispatchItem
-      id={send.id}
-      userId={send.userId}
-      dispatch={dispatch}
-    />
-  );
+  return <PendingDispatchItem id={send.id} dispatch={dispatch} />;
 }
 
 function PendingMessageReturnItem(props: {
