@@ -92,7 +92,8 @@ export interface HostEnvironmentBindings {
   /**
    * Asks the failed hosts again: the status of a host whose status failed
    * (its binding follows from the answer), the binding of one whose binding
-   * failed. A person's Retry: each failed host's remote session redials
+   * failed. A person's Retry: the computer each failed read went to (the
+   * host for its status, the pool for a binding the pool serves) redials
    * first, since a failed read can be a failed dial. A no-op when none failed.
    */
   readonly retryFailed: () => void;
@@ -207,6 +208,9 @@ export function useHostEnvironmentBindings(
       const byHostId = new Map<string, EnvironmentHostBinding>();
       const ownSettingsHostIds: string[] = [];
       const failedHostIds: string[] = [];
+      // The computer each failed read went to, which its Retry asks again: a
+      // binding read served by the pool went to the pool, not the subject.
+      const redialHostIds = new Set<string>();
       const failedRetries: Array<() => Promise<unknown>> = [];
       // Positional, and safe by construction: `useQueries` returns results in
       // the order the queries were given, so index `n` is `hostIdList[n]`.
@@ -220,6 +224,7 @@ export function useHostEnvironmentBindings(
           // Not yet known: neither a binding nor a failure.
         } else if (status === "failed") {
           failedHostIds.push(hostId);
+          redialHostIds.add(hostId);
           failedRetries.push(() => refetchStatus(hostId));
         } else if (result.data !== undefined) {
           byHostId.set(hostId, result.data);
@@ -227,6 +232,7 @@ export function useHostEnvironmentBindings(
           // The status that let the binding be asked is re-read FIRST, so a
           // binding cannot answer for a host the fresh status names Local.
           failedHostIds.push(hostId);
+          redialHostIds.add(fromPool ? POOL_HOST_ID : hostId);
           failedRetries.push(() =>
             refetchStatus(hostId).then(() => result.refetch()),
           );
@@ -237,12 +243,12 @@ export function useHostEnvironmentBindings(
         ownSettingsHostIds,
         failedHostIds,
         retryFailed: () => {
-          for (const hostId of failedHostIds) redialHostForRetry(hostId);
+          for (const hostId of redialHostIds) redialHostForRetry(hostId);
           for (const retry of failedRetries) void retry();
         },
       };
     },
-    [hostIdList, refetchStatus, statusAnswers],
+    [fromPool, hostIdList, refetchStatus, statusAnswers],
   );
   return useQueries({
     queries: hostIdList.map((hostId, index) =>

@@ -6,6 +6,7 @@ import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { isMobileApp } from "@/lib/mobile-app";
 import { startVisibleInterval } from "@/lib/dom/visible-interval";
 import { redialRemoteSessionsFor } from "@traycer-clients/shared/host-transport/remote/active-remote-sessions";
+import { forgetKeptRefusalFor } from "@/lib/host/host-messenger";
 
 /**
  * The SESSION plane of host connectivity: whether this device's own live
@@ -422,12 +423,14 @@ export function useHostSessionWake(): () => void {
 }
 
 /**
- * A person's Retry on one computer, named by id: each remote session to it
- * that is not ready redials now instead of waiting out its backoff rung. A
- * ready session and a local host are left alone (`redialRemoteSessionsFor`).
- * Call it beside the refetch, only where the failure can be a failure to reach
- * the computer.
+ * A person's Retry on one computer, named by id: the press makes an attempt.
+ * The runtime messenger drops the final refusal it keeps for that computer
+ * (`forgetKeptRefusalFor`), and each remote session to it that is waiting out
+ * a backoff rung dials now (`redialRemoteSessionsFor`). A session in any other
+ * state, and a local host, are left alone. Call it immediately before the
+ * Retry's own action.
  */
 export function redialHostForRetry(hostId: string): void {
+  forgetKeptRefusalFor(hostId);
   redialRemoteSessionsFor(hostId, SESSION_WAKE_REASON);
 }

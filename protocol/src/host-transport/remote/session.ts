@@ -284,6 +284,13 @@ function qosForStreamMethod(method: string): QosClassValue {
 type ConnectionLossProvenance = "host-transport-plane" | "not-host-evidence";
 
 /**
+ * What armed a backoff wait: the loss of a connection the host's door had
+ * admitted, or a dial that failed (a fresh attach, a grant, a claim dial). Only
+ * the first may be pulled forward from inside the session.
+ */
+type WaitArmedBy = "admitted-loss" | "failed-dial";
+
+/**
  * Whether a host-sent session FATAL is evidence about the HOST's transport
  * plane, or about the credential plane standing between us and it.
  *
@@ -786,6 +793,14 @@ export interface IRemoteSession<
    */
   forceReconnect(reason: string): void;
   /**
+   * Brings an armed backoff wait to now, and does nothing else: a session that
+   * is ready, dialling, handshaking, holding a detached leg, resuming, parked
+   * before admission or closed has no armed wait and is left exactly as it
+   * is. Nothing is closed or probed, and the dial runs on the timer, never
+   * inside the caller. A person's Retry on one computer.
+   */
+  redialIfWaiting(reason: string): void;
+  /**
    * Subscribes to the session's terminal close - a caller `close()` (on the
    * shared session, once every consumer released) or a terminal session
    * fatal. Fires once, synchronously, after the session state is fully torn
@@ -997,6 +1012,8 @@ interface ActiveConnection {
    * spoken, so `host_attached` alone is not the host being back.
    */
   hostAttached: boolean;
+  /** The host acked this connection's `open`: its door admitted it. */
+  admitted: boolean;
   /**
    * The send ring and received count, running from this connection's first
    * transport frame because `open` goes out before the ack that decides
@@ -1378,8 +1395,6 @@ export class RemoteSession<
    * arrive during it.
    */
   private backoffCollapsed = false;
-  /** The connect generation whose `open` the host last acked: the attempt its door admitted. */
-  private admittedGeneration: number | null = null;
   /**
    * Whether the pending `backoffTimer` was armed by the loss of an admitted
    * connection: the one wait a parked read's retryable rejection may still
@@ -1802,9 +1817,11 @@ export class RemoteSession<
         // outside the session (online, resume, a Retry, an endpoint change)
         // shortens it. Aborts and terminal closures are not
         // `RetryableTransportError`.
+        // A cancelled read wakes nothing, even when the loss settled it first.
         if (
           cause instanceof RetryableTransportError &&
-          this.backoffFollowsAdmittedLoss
+          this.backoffFollowsAdmittedLoss &&
+          (abortSignal === null || !abortSignal.aborted)
         ) {
           this.wake("pre-send-failure", null);
         }
@@ -2460,6 +2477,11 @@ export class RemoteSession<
     this.pendingForceGeneration = this.connectGeneration;
   }
 
+  /** See {@link IRemoteSession.redialIfWaiting}. */
+  redialIfWaiting(reason: string): void {
+    this.pullRedialToNow(reason);
+  }
+
   /** See {@link IRemoteSession.onClosed}. */
   onClosed(listener: () => void): () => void {
     if (this.phase === "closed") {
@@ -2763,6 +2785,7 @@ export class RemoteSession<
     const retryInMs = this.scheduleReconnectForFailedGeneration(
       generation,
       "backoff",
+      "failed-dial",
     );
     this.dialFailures.recordFailure({
       cause: `could not mint an attach grant: ${provision.detail}`,
@@ -3008,6 +3031,7 @@ export class RemoteSession<
       bodyCompressionSupported: false,
       tunnelStreamsSupported: false,
       hostAttached: true,
+      admitted: false,
       ledger: new ResumeLedger((report) => this.logResumeGap(report)),
       resumeNegotiated: false,
       relayClaim: null,
@@ -3873,7 +3897,7 @@ export class RemoteSession<
   private completeOpen(generation: number, connection: ActiveConnection): void {
     this.clearPhaseTimer();
     this.phase = "ready";
-    this.admittedGeneration = generation;
+    connection.admitted = true;
     this.reattachMarks.openAckAt = Date.now();
     this.releaseDoorAdmission();
     this.doorAdmission = this.options.auth.door?.admitted() ?? null;
@@ -5378,9 +5402,16 @@ export class RemoteSession<
       return;
     }
     const lostAttempt = `${this.dialAttemptId(generation)}-lost`;
+    // Read before the drop clears it. A claim dial rides the admitted
+    // connection's record, so `relinking` is what tells its failure apart.
+    const lost = this.connection;
+    const armedBy: WaitArmedBy =
+      lost !== null && lost.admitted && !lost.relinking
+        ? "admitted-loss"
+        : "failed-dial";
     this.dropConnection(cause, retryCause, false);
     this.syncReadinessLatch();
-    this.redialAfterLoss(generation, lostAttempt, cause, provenance);
+    this.redialAfterLoss(generation, lostAttempt, cause, provenance, armedBy);
   }
 
   /** Arms the next dial and says what the loss meant for the host. */
@@ -5389,10 +5420,12 @@ export class RemoteSession<
     lostAttempt: string,
     cause: string,
     provenance: ConnectionLossProvenance,
+    armedBy: WaitArmedBy,
   ): void {
     const retryInMs = this.scheduleReconnectForFailedGeneration(
       generation,
       "backoff",
+      armedBy,
     );
     this.dialFailures.recordFailure({ cause, context: "", retryInMs });
     // THE host-plane funnel: every relay-socket close, Noise/handshake
@@ -5510,6 +5543,7 @@ export class RemoteSession<
       `${this.dialAttemptId(generation)}-lost`,
       cause,
       provenance,
+      "admitted-loss",
     );
   }
 
@@ -5576,6 +5610,7 @@ export class RemoteSession<
       `${this.dialAttemptId(generation)}-lost`,
       cause,
       provenance,
+      "failed-dial",
     );
   }
 
@@ -5914,6 +5949,7 @@ export class RemoteSession<
       const retryInMs = this.scheduleReconnectForFailedGeneration(
         generation,
         "backoff",
+        "failed-dial",
       );
       this.dialFailures.recordFailure({
         cause:
@@ -5969,6 +6005,7 @@ export class RemoteSession<
     const retryInMs = this.scheduleReconnectForFailedGeneration(
       generation,
       redial,
+      "failed-dial",
     );
     this.dialFailures.recordFailure({
       cause:
@@ -6490,9 +6527,10 @@ export class RemoteSession<
   private scheduleReconnectForFailedGeneration(
     generation: number,
     redial: "backoff" | "recovery",
+    armedBy: WaitArmedBy,
   ): number {
     const retryInMs = this.scheduleReconnect();
-    this.backoffFollowsAdmittedLoss = this.admittedGeneration === generation;
+    this.backoffFollowsAdmittedLoss = armedBy === "admitted-loss";
     this.consumePendingForce(generation);
     const immediate = this.immediateRedial;
     if (immediate !== null && immediate.generation === generation) {
@@ -6606,6 +6644,7 @@ export class RemoteSession<
     const retryInMs = this.scheduleReconnectForFailedGeneration(
       generation,
       "backoff",
+      "failed-dial",
     );
     this.dialFailures.recordFailure({
       cause: `the connect path threw before dialing: ${

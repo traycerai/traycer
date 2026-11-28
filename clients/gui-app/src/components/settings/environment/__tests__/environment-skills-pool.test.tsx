@@ -11,7 +11,10 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import { settleProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
-import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostRpcError,
+  RetryableTransportError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type { EnvironmentSkillV11 } from "@traycer/protocol/host/environment/configuration-contracts";
@@ -54,6 +57,16 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
   useHostCredentialRefusal: () => null,
 }));
+const redialRemoteSessionsFor = vi.hoisted(() => vi.fn());
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/active-remote-sessions",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@traycer-clients/shared/host-transport/remote/active-remote-sessions")
+    >()),
+    redialRemoteSessionsFor,
+  }),
+);
 
 // The tier plan is frozen per process from the build; this file's build has a pool.
 beforeAll(() => {
@@ -64,6 +77,7 @@ afterEach(() => {
   cleanup();
   resetTeamPageHarness();
   resetNegotiatedManifests();
+  redialRemoteSessionsFor.mockReset();
 });
 
 const LIST = { major: 1, minor: 0 };
@@ -238,5 +252,34 @@ describe("The Skills page on a build with a server pool and no host running the 
     await waitFor(() => {
       expect(screen.getByText("review")).toBeTruthy();
     });
+  });
+
+  it("redials the pool when the skills list never reached the computer", async () => {
+    negotiateMethodsOn(POOL_HOST_ID, {
+      "environment.configuration.skills.list": LIST_V11,
+    });
+    const harness = mountTeamPageOnPoolBuild(
+      poolSource("editor"),
+      handlersWithNoHost(() => {
+        throw new RetryableTransportError({
+          replaySafetyFromKey: false,
+          code: "RPC_ERROR",
+          message: "The relay did not answer.",
+          requestId: "req-skills",
+          method: "environment.configuration.skills.list",
+          fatalDetails: null,
+        });
+      }),
+    );
+    render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+    expect(
+      await screen.findByText("Couldn't read Acme's skills."),
+    ).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(redialRemoteSessionsFor.mock.calls).toEqual([
+      [POOL_HOST_ID, "user-retry"],
+    ]);
   });
 });

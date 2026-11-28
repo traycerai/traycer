@@ -237,6 +237,7 @@ function controllableSession(): ControllableSession {
     notifyCloudVerdictChanged: vi.fn(),
     wake: vi.fn(),
     forceReconnect: vi.fn(),
+    redialIfWaiting: vi.fn(),
     onClosed: (listener) => {
       // Production refuses new listeners once closed and hands back a noop
       // unsubscribe; a fake that kept accepting them could mint a

@@ -346,12 +346,33 @@ export function buildRuntimeHostMessenger<
   params: BuildRuntimeHostMessengerParams<Registry>,
 ): RuntimeHostMessengerBinding<Registry> {
   const messenger = new RuntimeHostMessenger(params);
+  liveRuntimeMessengers.add(messenger);
   return {
     messenger,
     reset: () => messenger.reset(),
-    dispose: () => messenger.dispose(),
+    dispose: () => {
+      liveRuntimeMessengers.delete(messenger);
+      messenger.dispose();
+    },
     hostListChanged: () => messenger.hostListChanged(),
   };
+}
+
+/** Every runtime messenger not yet disposed, for {@link forgetKeptRefusalFor}. */
+const liveRuntimeMessengers = new Set<{
+  forgetTerminalVerdict(hostId: string): void;
+}>();
+
+/**
+ * A person's Retry on one computer: each runtime messenger drops the final
+ * refusal it keeps for that computer, so the retried request reaches the wire
+ * instead of being answered from the kept verdict. A request refused again is
+ * kept again, so each press buys one attempt.
+ */
+export function forgetKeptRefusalFor(hostId: string): void {
+  for (const messenger of liveRuntimeMessengers) {
+    messenger.forgetTerminalVerdict(hostId);
+  }
 }
 
 /**
@@ -624,6 +645,11 @@ class RuntimeHostMessenger<
     this.detachOrphanAvailability();
     this.teardownRemoteTransport();
     this.localMessenger?.releaseIdleLocalSessions();
+  }
+
+  /** See {@link forgetKeptRefusalFor}. */
+  forgetTerminalVerdict(hostId: string): void {
+    this.terminalVerdictByHost.delete(hostId);
   }
 
   reset(): void {

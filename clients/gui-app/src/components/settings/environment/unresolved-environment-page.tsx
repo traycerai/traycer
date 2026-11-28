@@ -16,6 +16,8 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { queryKeys } from "@/lib/query-keys";
+import { isHostTransportFailure } from "@/lib/host-error-toast";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
 
 /** No configuration is known yet: never mount a configuration's editors. */
 export function UnresolvedEnvironmentPage(): ReactNode {
@@ -42,6 +44,9 @@ export function UnresolvedEnvironmentPage(): ReactNode {
   const failure = useSyncExternalStore(subscribe, readFailure);
   const retry = (): void => {
     if (hostId === null) return;
+    if (failure !== null && isHostTransportFailure(failure)) {
+      redialHostForRetry(hostId);
+    }
     void queryClient.invalidateQueries({
       queryKey: queryKeys.hostMethod<HostRpcRegistry, "environment.status">(
         hostId,

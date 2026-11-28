@@ -299,6 +299,7 @@ function fakeRemoteSession(
         : Promise.reject(sendError);
     }) as FakeRemoteSession["sendUnary"],
     forceReconnect: vi.fn(),
+    redialIfWaiting: vi.fn(),
     subscribe: vi.fn(() => {
       throw new Error("not exercised by this test");
     }),

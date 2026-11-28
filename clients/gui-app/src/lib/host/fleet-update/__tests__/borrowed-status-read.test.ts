@@ -202,6 +202,7 @@ function readySession(): FakeSession {
       return Promise.resolve(status(null));
     }) as FakeSession["sendUnary"],
     forceReconnect: vi.fn(),
+    redialIfWaiting: vi.fn(),
     subscribe: vi.fn(() => {
       throw new Error("not exercised by this test");
     }),

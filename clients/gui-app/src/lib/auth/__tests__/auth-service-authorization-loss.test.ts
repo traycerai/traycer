@@ -333,6 +333,7 @@ function fakeSession(): FakeSession {
       throw new Error("not exercised by these tests");
     }),
     forceReconnect: vi.fn(),
+    redialIfWaiting: vi.fn(),
     subscribe: vi.fn(() => {
       throw new Error("not exercised by these tests");
     }),

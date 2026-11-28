@@ -105,6 +105,7 @@ function readyRemoteSession(): FakeRemoteSession {
       ),
     ),
     forceReconnect: vi.fn(),
+    redialIfWaiting: vi.fn(),
     subscribe: vi.fn(() => {
       throw new Error("refresh must not open a stream subscription");
     }),

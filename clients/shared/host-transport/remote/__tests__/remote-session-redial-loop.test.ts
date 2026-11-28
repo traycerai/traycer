@@ -25,7 +25,66 @@ import {
   type RemoteSessionIdentity,
 } from "../active-remote-sessions";
 import { RemoteSession } from "../remote-session";
+import { RetryableTransportError } from "@traycer/protocol/host-transport/remote/rpc-types";
 import { emptyStreamRegistry, FakeRelayHost } from "./fake-relay-host";
+
+const realSetImmediate = globalThis.setImmediate;
+let webCryptoInFlight = 0;
+
+function countWebCrypto(): void {
+  const subtle = globalThis.crypto.subtle;
+  const decrypt = subtle.decrypt.bind(subtle);
+  const digest = subtle.digest.bind(subtle);
+  const encrypt = subtle.encrypt.bind(subtle);
+  const importKey = subtle.importKey.bind(subtle);
+  const sign = subtle.sign.bind(subtle);
+  const count = <T>(operation: Promise<T>): Promise<T> => {
+    webCryptoInFlight += 1;
+    return operation.finally(() => {
+      webCryptoInFlight -= 1;
+    });
+  };
+  vi.spyOn(subtle, "decrypt").mockImplementation((...args) =>
+    count(decrypt(...args)),
+  );
+  vi.spyOn(subtle, "digest").mockImplementation((...args) =>
+    count(digest(...args)),
+  );
+  vi.spyOn(subtle, "encrypt").mockImplementation((...args) =>
+    count(encrypt(...args)),
+  );
+  vi.spyOn(subtle, "importKey").mockImplementation((...args) =>
+    count(importKey(...args)),
+  );
+  vi.spyOn(subtle, "sign").mockImplementation((...args) =>
+    count(sign(...args)),
+  );
+}
+
+async function settleNoise(): Promise<void> {
+  let quietTurns = 0;
+  while (quietTurns < 2) {
+    await new Promise<void>((resolve) => realSetImmediate(resolve));
+    quietTurns = webCryptoInFlight === 0 ? quietTurns + 1 : 0;
+  }
+}
+
+async function stepNoise(ms: number): Promise<void> {
+  await settleNoise();
+  await vi.advanceTimersByTimeAsync(ms);
+  await settleNoise();
+}
+
+async function advanceNoiseUntil(
+  condition: () => boolean,
+  maxMs: number,
+): Promise<void> {
+  for (let elapsed = 0; elapsed < maxMs; elapsed += 25) {
+    if (condition()) return;
+    await stepNoise(25);
+  }
+  if (!condition()) throw new Error("condition was not reached in fake time");
+}
 const WORKTREE_GET_BINDING_CONTRACT = defineRpcContract({
   method: "worktree.getBinding",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -226,11 +285,7 @@ type DoorSession = {
   readonly openedAt: number[];
 };
 
-/**
- * Real time, because the handshake that reaches the door runs on real crypto.
- * The draw is pinned at its ceiling, so the waits are exact: 1 s, 2 s, 4 s, and
- * a wake's redial 1 s. `openedAt` stamps each open the door decides.
- */
+/** `openedAt` stamps each open the door decides, under a test-controlled clock. */
 function sessionBehindDoor(args: {
   readonly decide: (openIndex: number) => FatalErrorDetails | null;
   readonly streamRegistry: VersionedStreamRpcRegistry;
@@ -284,9 +339,10 @@ function gapsOf(dialAt: readonly number[]): number[] {
   return dialAt.slice(1).map((at, index) => at - dialAt[index]);
 }
 
-afterEach(() => {
-  vi.restoreAllMocks();
+afterEach(async () => {
   vi.useRealTimers();
+  await settleNoise();
+  vi.restoreAllMocks();
 });
 
 describe("a remote session that keeps failing to be admitted while a read waits", () => {
@@ -301,7 +357,29 @@ describe("a remote session that keeps failing to be admitted while a read waits"
     expect(gapsOf(dialAt).at(3) ?? 0).toBeGreaterThanOrEqual(4_000);
   });
 
+  it("keeps the read retryable and reaches ready after the door switches to success", async () => {
+    countWebCrypto();
+    vi.useFakeTimers();
+    const { session, dialAt, openedAt } = sessionBehindDoor({
+      decide: (openIndex) => (openIndex === 0 ? OWNERSHIP_NOT_READ : null),
+      streamRegistry: emptyStreamRegistry,
+    });
+    const read = readBinding(session, null);
+    try {
+      session.start();
+      await advanceNoiseUntil(() => openedAt.length === 1, 5_000);
+      expect(await read).toBeInstanceOf(RetryableTransportError);
+      await advanceNoiseUntil(() => session.isReady(), 5_000);
+      expect(openedAt).toHaveLength(2);
+      expect(dialAt).toHaveLength(2);
+    } finally {
+      session.close();
+    }
+  });
+
   it("climbs the backoff when the door answers every attach with a retryable not_admitted", async () => {
+    countWebCrypto();
+    vi.useFakeTimers();
     const { relay, session, dialAt, openedAt } = sessionBehindDoor({
       decide: () => OWNERSHIP_NOT_READ,
       streamRegistry: emptyStreamRegistry,
@@ -309,19 +387,15 @@ describe("a remote session that keeps failing to be admitted while a read waits"
     session.start();
     const reader = keepReading(session);
     try {
-      await vi.waitFor(() => expect(dialAt).toHaveLength(4), {
-        timeout: 15_000,
-        interval: 20,
-      });
+      await advanceNoiseUntil(() => dialAt.length === 4, 15_000);
       // Each earlier dial reached the door and was refused there.
       expect(relay.openBearers.length).toBeGreaterThanOrEqual(3);
-      // Timed from the third refusal, so no handshake is inside the wait: the
-      // 4 s rung, where a redial pulled forward waits 1 s.
+      // Timed from the third refusal, so no handshake is inside the wait.
       expect(dialAt[3] - openedAt[2]).toBeGreaterThanOrEqual(3_500);
     } finally {
       await reader.stop();
     }
-  }, 25_000);
+  });
 
   it("still brings the next dial forward when news from outside the session arrives", async () => {
     let wokenAt: number | null = null;
@@ -345,41 +419,77 @@ describe("a remote session that keeps failing to be admitted while a read waits"
 
 describe("a read released by the loss of an admitted connection", () => {
   it("brings the next dial forward", async () => {
+    countWebCrypto();
+    vi.useFakeTimers();
     const { session, stream, dialAt, openedAt } = admittedThenLost();
     session.start();
     const reader = keepReading(session);
     try {
-      await vi.waitFor(() => expect(dialAt).toHaveLength(4), {
-        timeout: 15_000,
-        interval: 20,
-      });
+      await advanceNoiseUntil(() => dialAt.length === 4, 15_000);
       // The loss armed the 4 s rung; the read it released pulled it to 1 s.
       expect(dialAt[3] - openedAt[2]).toBeLessThan(2_500);
     } finally {
       stream.close();
       await reader.stop();
     }
-  }, 25_000);
+  });
 
-  it("does not, when the read was aborted instead", async () => {
+  it("does not pull the wait forward when the read is already aborted", async () => {
+    countWebCrypto();
+    vi.useFakeTimers();
     const { session, stream, dialAt, openedAt } = admittedThenLost();
     session.start();
     try {
-      await vi.waitFor(() => expect(openedAt).toHaveLength(3), {
-        timeout: 15_000,
-        interval: 20,
-      });
+      await advanceNoiseUntil(() => openedAt.length === 3, 15_000);
       // The admitted connection is lost on its own open; a read then parks on
       // the wait that loss armed and is abandoned.
       const controller = new AbortController();
       const read = readBinding(session, controller.signal);
       controller.abort();
       expect(await read).toBeInstanceOf(HostRequestAbortedError);
-      await vi.waitFor(() => expect(dialAt).toHaveLength(4), {
-        timeout: 15_000,
-        interval: 20,
-      });
+      await advanceNoiseUntil(() => dialAt.length === 4, 15_000);
       expect(dialAt[3] - openedAt[2]).toBeGreaterThanOrEqual(3_500);
+    } finally {
+      stream.close();
+      session.close();
+    }
+  });
+
+  it("does not pull the wait forward when an admitted-open loss wins before queued abort", async () => {
+    countWebCrypto();
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const door = sessionBehindDoor({
+      decide: (openIndex) => (openIndex < 2 ? OWNERSHIP_NOT_READ : null),
+      streamRegistry: probeStreamRegistry,
+    });
+    door.relay.stallOpenIndex = 2;
+    let failed = false;
+    const stream = door.session.subscribeWithParamsProvider(
+      "probe.subscribe",
+      () => {
+        if (!failed && door.openedAt.length === 3) {
+          failed = true;
+          queueMicrotask(() => controller.abort());
+          throw new Error("the stream's params cannot be read");
+        }
+        return {};
+      },
+    );
+    const { session, dialAt, openedAt } = door;
+    session.start();
+    try {
+      await advanceNoiseUntil(() => door.relay.openBearers.length >= 3, 10_000);
+      const read = readBinding(session, controller.signal);
+      await settleNoise();
+      await door.relay.releaseStalledOpens();
+      await advanceNoiseUntil(() => openedAt.length === 3, 10_000);
+
+      expect(await read).toBeInstanceOf(RetryableTransportError);
+      await advanceNoiseUntil(() => dialAt.length === 4, 10_000);
+      expect((dialAt[3] ?? 0) - (openedAt[2] ?? 0)).toBeGreaterThanOrEqual(
+        3_500,
+      );
     } finally {
       stream.close();
       session.close();
@@ -435,12 +545,14 @@ describe("a person's Retry on one remote computer", () => {
     other.start();
     let pressedAt: number | null = null;
     let otherDialsAtPress = 0;
+    let selectedDialAtPress = 0;
     for (let step = 0; step < 80; step += 1) {
       await vi.advanceTimersByTimeAsync(250);
       // Four failed dials: the next rung is 8 s.
       if (pressedAt === null && shownAt.length === 4) {
         pressedAt = Date.now();
         otherDialsAtPress = otherAt.length;
+        selectedDialAtPress = shownAt.length;
         redialRemoteSessionsFor("host-shown", "user-retry");
       }
       if (pressedAt !== null && shownAt.length === 5) break;
@@ -450,17 +562,15 @@ describe("a person's Retry on one remote computer", () => {
       (shownAt.at(4) ?? Number.POSITIVE_INFINITY) - (pressedAt ?? 0),
     ).toBeLessThan(250);
     // The other computer keeps its own rung.
-    expect(
-      otherAt.filter(
-        (at) => at > (pressedAt ?? 0) && at < (pressedAt ?? 0) + 250,
-      ),
-    ).toEqual([]);
-    expect(otherAt.length).toBeLessThanOrEqual(otherDialsAtPress + 1);
+    expect(otherAt.slice(otherDialsAtPress)).toEqual([]);
+    expect(shownAt.slice(selectedDialAtPress)).toHaveLength(1);
     shown.close();
     other.close();
   });
 
   it("dials nothing for a computer whose session is ready", async () => {
+    countWebCrypto();
+    vi.useFakeTimers();
     vi.spyOn(Math, "random").mockReturnValue(1);
     const relay = new FakeRelayHost();
     const dialAt: number[] = [];
@@ -471,17 +581,14 @@ describe("a person's Retry on one remote computer", () => {
     );
     view.start();
     try {
-      await vi.waitFor(() => expect(view.isReady()).toBe(true), {
-        timeout: 10_000,
-        interval: 20,
-      });
+      await advanceNoiseUntil(() => view.isReady(), 10_000);
       redialRemoteSessionsFor("host-ready", "user-retry");
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await stepNoise(30_000);
       expect(view.isReady()).toBe(true);
       expect(dialAt).toHaveLength(1);
       expect(relay.openBearers).toHaveLength(1);
     } finally {
       view.close();
     }
-  }, 20_000);
+  });
 });

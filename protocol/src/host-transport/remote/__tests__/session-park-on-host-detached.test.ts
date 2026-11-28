@@ -456,6 +456,46 @@ describe("RemoteSession parks on host_detached before the ready boundary", () =>
     }
   });
 
+  it("does not advance an in-flight open handshake when Retry is requested", async () => {
+    const relay = new FakeRelay();
+    relay.hostless = false;
+    relay.answerHandshake = true;
+    const spies = buildEvidence();
+    const grants = okGrantProvider();
+    const session = buildSession(relay, spies.evidence, grants);
+    try {
+      session.start();
+      await vi.waitFor(() => {
+        expect(relay.sockets[0]?.binarySends).toHaveLength(2);
+      });
+
+      const socket = relay.sockets[0];
+      expect(relay.sockets).toHaveLength(1);
+      expect(socket?.binarySends).toHaveLength(2);
+      expect(socket?.closeCalls).toBe(0);
+      expect(grants).toHaveBeenCalledTimes(1);
+
+      session.redialIfWaiting("user-retry");
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(relay.sockets).toHaveLength(1);
+      expect(socket?.closeCalls).toBe(0);
+      expect(session.isClosed()).toBe(false);
+      expect(session.isReady()).toBe(false);
+      expect(grants).toHaveBeenCalledTimes(1);
+      expect(spies.reportDialRefusal).not.toHaveBeenCalled();
+
+      // Once this attempt fails, only a recorded force (not a retry of a
+      // wait that did not yet exist) could bring the next dial forward.
+      await vi.advanceTimersByTimeAsync(SESSION_OPEN_ACK_TIMEOUT_MS + 100);
+      expect(socket?.closeCalls).toBe(1);
+      expect(relay.sockets).toHaveLength(1);
+      expect(grants).toHaveBeenCalledTimes(1);
+    } finally {
+      session.close();
+    }
+  });
+
   it("arms nothing when the authority closes the session from inside the refusal report", async () => {
     // `reportDialRefusal` hands control to the selection authority
     // synchronously, and a verdict that retires this host can close this very
@@ -632,6 +672,12 @@ describe("RemoteSession parks on host_detached before the ready boundary", () =>
     try {
       await startParked(relay, session);
       expect(refusalNumbers(spies, 1)).toEqual([1]);
+
+      const parkedSocket = relay.sockets[0];
+      session.redialIfWaiting("user-retry");
+      expect(parkedSocket?.closeCalls).toBe(0);
+      expect(refusalNumbers(spies, 1)).toEqual([1]);
+      expectStillOneParkedSocket(relay, spies);
 
       const outcome = trackOutcome(hostStatusCall(session));
       await vi.advanceTimersByTimeAsync(0);

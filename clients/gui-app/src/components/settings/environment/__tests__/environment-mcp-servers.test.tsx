@@ -9,6 +9,8 @@ import {
 import userEvent from "@testing-library/user-event";
 import { toast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { RetryableTransportError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type { EnvironmentMcpServerDeclaration } from "@traycer/protocol/host/environment/configuration-contracts";
@@ -34,6 +36,7 @@ import {
   reachableHost,
   teamEnvironments,
 } from "./mcp-skills-test-support";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { authnMcpServer } from "./team-environment-cloud-handlers";
 import {
   configurationItem,
@@ -74,6 +77,16 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn(), info: vi.fn(), message: vi.fn() },
 }));
+const redialRemoteSessionsFor = vi.hoisted(() => vi.fn());
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/active-remote-sessions",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@traycer-clients/shared/host-transport/remote/active-remote-sessions")
+    >()),
+    redialRemoteSessionsFor,
+  }),
+);
 
 vi.mock(
   "@/components/settings/host-scope/use-host-scope",
@@ -90,6 +103,8 @@ afterEach(() => {
   cleanup();
   resetTeamPageHarness();
   resetNegotiatedManifests();
+  redialRemoteSessionsFor.mockReset();
+  useSelectionAuthorityStore.setState({ effectiveHostId: null });
 });
 
 /** The MCP-capable providers of the viewing host, in rail order. */
@@ -1397,6 +1412,51 @@ describe("The MCP servers page", () => {
           name: "github search",
         }),
       ).toBeTruthy();
+    });
+
+    it("redials the computer the tools read went to when that read never reached it", async () => {
+      negotiateMethods(ALL_METHODS);
+      const base = handlers({
+        servers: () => [claudeOnly()],
+        hostServers: [hostMcpServer("github", ["search"])],
+      });
+      const providersList = base["providers.list"];
+      if (providersList === undefined)
+        throw new Error("The harness serves providers.list.");
+      const harness = mountTeamPage(poolSource("editor"), {
+        ...base,
+        "providers.list": (request) => {
+          if (request.native !== null) {
+            return Promise.reject(
+              new RetryableTransportError({
+                replaySafetyFromKey: false,
+                code: "RPC_ERROR",
+                message: "The relay did not answer.",
+                requestId: "req-tools",
+                method: "providers.list",
+                fatalDetails: null,
+              }),
+            );
+          }
+          return providersList(request);
+        },
+      });
+      useSelectionAuthorityStore.setState({
+        effectiveHostId: mockLocalHostEntry.hostId,
+      });
+      render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
+
+      await screen.findByText("github");
+      await openServerCard("github");
+      expect((await screen.findByRole("status")).textContent).toBe(
+        "Couldn't read Claude Code's tools for this server.Retry",
+      );
+
+      await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+      expect(redialRemoteSessionsFor.mock.calls).toEqual([
+        [mockLocalHostEntry.hostId, "user-retry"],
+      ]);
     });
 
     it("says the provider has not listed the server's tools yet when the read answers without it", async () => {

@@ -23,7 +23,12 @@ import {
   type EnvironmentMcpServer,
   type McpServerSave,
 } from "@/hooks/environment/team/use-mcp-servers";
-import { toastFromHostError } from "@/lib/host-error-toast";
+import {
+  isHostTransportFailure,
+  toastFromHostError,
+} from "@/lib/host-error-toast";
+import { redialHostForRetry } from "@/lib/host/session-connectivity";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { cn } from "@/lib/utils";
 import {
   providerDisplayName,
@@ -398,6 +403,7 @@ export function McpServerTools(props: {
   const source = useConfigurationSource();
   const { putItem } = useConfigurationMcpServerMutations();
   const item = props.server.item;
+  const hostId = useAddressableHostId();
   const list = useProvidersMcpList({
     providerId: props.providerId,
     scope: "global",
@@ -420,7 +426,7 @@ export function McpServerTools(props: {
       {list.isError && !list.isFetching ? (
         <TeamReadFailed
           message={`Couldn't read ${label}'s tools for this server.`}
-          onRetry={() => void list.refetch()}
+          onRetry={() => retryToolRead(list, hostId)}
         />
       ) : null}
       {list.data !== undefined && reported === undefined ? (
@@ -478,6 +484,22 @@ export function McpServerTools(props: {
 }
 
 type ToolListQuery = UseQueryResult<McpListData, HostRpcError>;
+
+/**
+ * A person's Retry of a tools read. When the read never reached the computer
+ * it went to, that computer's session redials first; a read the computer
+ * answered is only asked again.
+ */
+function retryToolRead(list: ToolListQuery, hostId: string | null): void {
+  if (
+    hostId !== null &&
+    list.error !== null &&
+    isHostTransportFailure(list.error)
+  ) {
+    redialHostForRetry(hostId);
+  }
+  void list.refetch();
+}
 
 /** Each provider retains its own cached read and discovery polling. */
 function McpToolReads(props: {
@@ -851,11 +873,12 @@ function ToolReadNotice(props: {
   readonly list: ToolListQuery;
 }): ReactNode {
   const label = providerDisplayName(props.providerId);
+  const hostId = useAddressableHostId();
   if (props.list.isError && !props.list.isFetching)
     return (
       <TeamReadFailed
         message={`Couldn't read ${label}'s tools for this server.`}
-        onRetry={() => void props.list.refetch()}
+        onRetry={() => retryToolRead(props.list, hostId)}
       />
     );
   if (
