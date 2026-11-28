@@ -22,7 +22,7 @@ import type { UncheckedVersionedStreamRpcRegistry } from "@traycer/protocol/fram
  * other framework modules at runtime.
  */
 
-export const SURFACE_FORMAT_VERSION = 2;
+export const SURFACE_FORMAT_VERSION = 3;
 
 /** Version key inside a surface: `"<major>.<minor>"`. */
 export function surfaceVersionKey(major: number, minor: number): string {
@@ -37,6 +37,8 @@ export type SurfaceVersion = {
 export type SurfaceMajorLine = {
   readonly latestMinor: number;
   readonly installedMinors: readonly number[];
+  /** Unary minors whose contract declares this exact method and version. */
+  readonly nativeMinors?: readonly number[];
   /** Majors reachable via a unary `downgradePathsFromLatest` bridge. */
   readonly downgradeTargets: readonly number[];
 };
@@ -233,6 +235,7 @@ function buildMethodSurface(
           Record<number, { readonly contract: object }>
         >;
         readonly downgradeTargets: readonly number[];
+        readonly nativeMinors?: readonly number[];
       }
     >
   >,
@@ -250,6 +253,9 @@ function buildMethodSurface(
       latestMinor: line.latestMinor,
       installedMinors,
       downgradeTargets: line.downgradeTargets,
+      ...(line.nativeMinors === undefined
+        ? {}
+        : { nativeMinors: line.nativeMinors }),
     };
     for (const minor of installedMinors) {
       schemas[surfaceVersionKey(major, minor)] = schemaSlots(
@@ -331,6 +337,7 @@ export function buildProtocolSurface(args: {
         latestMinor: number;
         versions: Record<number, { contract: object }>;
         downgradeTargets: readonly number[];
+        nativeMinors: readonly number[];
       }
     > = {};
     for (const major of numberKeys(methodRegistry)) {
@@ -339,6 +346,14 @@ export function buildProtocolSurface(args: {
         latestMinor: line.latestMinor,
         versions: line.versions,
         downgradeTargets: numberKeys(line.downgradePathsFromLatest),
+        nativeMinors: numberKeys(line.versions).filter((minor) => {
+          const { contract } = line.versions[minor];
+          return (
+            contract.method === method &&
+            contract.schemaVersion.major === major &&
+            contract.schemaVersion.minor === minor
+          );
+        }),
       };
     }
     const surface = buildMethodSurface(majors, (contract) => {

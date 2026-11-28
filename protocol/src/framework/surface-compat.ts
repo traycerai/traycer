@@ -71,6 +71,7 @@ const surfaceVersionSchema = z.object({
 const surfaceMajorLineSchema = z.object({
   latestMinor: z.number().int(),
   installedMinors: z.array(z.number().int()),
+  nativeMinors: z.array(z.number().int()).optional(),
   downgradeTargets: z.array(z.number().int()),
 });
 
@@ -230,6 +231,31 @@ function canBridgeUnaryFromSurface(
     return line.installedMinors.includes(theirVersion.minor);
   }
   return line.downgradeTargets.includes(theirVersion.major);
+}
+
+/** Both peers can speak the released contract directly on its own major. */
+function sharesNativeOptionalUnaryVersion(
+  newer: SurfaceOptionalMethod,
+  older: SurfaceOptionalMethod,
+): boolean {
+  const { major, minor } = older.canonical;
+  const line = newer.majors[String(major)];
+  const version = surfaceVersionKey(major, minor);
+  const newerSchema = newer.schemas[version];
+  const olderSchema = older.schemas[version];
+  return (
+    newer.canonical.major > major &&
+    line?.nativeMinors?.includes(minor) === true &&
+    line.installedMinors.includes(minor) &&
+    newerSchema?.request !== undefined &&
+    newerSchema.response !== undefined &&
+    olderSchema?.request !== undefined &&
+    olderSchema.response !== undefined &&
+    !isUnavailableSentinel(newerSchema.request) &&
+    !isUnavailableSentinel(newerSchema.response) &&
+    !isUnavailableSentinel(olderSchema.request) &&
+    !isUnavailableSentinel(olderSchema.response)
+  );
 }
 
 /** The highest major both dumped surfaces still install a line for. */
@@ -1196,7 +1222,8 @@ function checkOptionalUnary(
     const mineCanonical = mineMethod.canonical;
     const theirsCanonical = theirsMethod.canonical;
     if (
-      !canBridgeUnaryFromSurface(mineMethod, mineCanonical, theirsCanonical)
+      !canBridgeUnaryFromSurface(mineMethod, mineCanonical, theirsCanonical) &&
+      !sharesNativeOptionalUnaryVersion(mineMethod, theirsMethod)
     ) {
       pushFinding({
         family: "unary",
@@ -1209,7 +1236,12 @@ function checkOptionalUnary(
       });
     }
     if (
-      !canBridgeUnaryFromSurface(theirsMethod, theirsCanonical, mineCanonical)
+      !canBridgeUnaryFromSurface(
+        theirsMethod,
+        theirsCanonical,
+        mineCanonical,
+      ) &&
+      !sharesNativeOptionalUnaryVersion(theirsMethod, mineMethod)
     ) {
       pushFinding({
         family: "unary",

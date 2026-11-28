@@ -1343,13 +1343,68 @@ describe("method-level exceptions for an optional major a released peer cannot r
     path: null,
     reason: "admission refuses the released generation before any method runs",
   };
+  const current = surfaceOfUnaryWithFloor(withMajorTwo, ["host.echo"]);
+  const older = surfaceOfUnaryWithFloor(released, ["host.echo"]);
+  const optional = current.optionalUnary["host.optional"];
+  const withoutNativeLane = {
+    ...current,
+    formatVersion: 2,
+    optionalUnary: {
+      "host.optional": {
+        ...optional,
+        majors: {
+          ...optional.majors,
+          1: { latestMinor: 0, installedMinors: [0], downgradeTargets: [] },
+        },
+      },
+    },
+  };
   const verdict = (exceptions: readonly CompatException[]) =>
     checkSurfaceCompatibility({
-      mine: surfaceOfUnaryWithFloor(withMajorTwo, ["host.echo"]),
-      theirs: surfaceOfUnaryWithFloor(released, ["host.echo"]),
+      mine: withoutNativeLane,
+      theirs: older,
       theirsLabel: "released",
       exceptions,
     });
+
+  it("accepts an exact native lane with no modern downgrade", () => {
+    const result = checkSurfaceCompatibility({
+      mine: protocolSurfaceSchema.parse(current),
+      theirs: older,
+      theirsLabel: "released",
+      exceptions: [],
+    });
+    expect(current.formatVersion).toBe(3);
+    expect(optional.majors["1"].nativeMinors).toEqual([0]);
+    expect(optional.majors["2"].downgradeTargets).toEqual([]);
+    expect(result.blocking).toEqual([]);
+  });
+
+  it("requires the exact released minor and still compares its wire shape", () => {
+    const compare = (schemas: typeof optional.schemas) =>
+      checkSurfaceCompatibility({
+        mine: {
+          ...current,
+          optionalUnary: { "host.optional": { ...optional, schemas } },
+        },
+        theirs: older,
+        theirsLabel: "released",
+        exceptions: [],
+      }).blocking;
+    expect(compare({ "2.0": optional.schemas["2.0"] })).toHaveLength(1);
+    expect(
+      compare({
+        ...optional.schemas,
+        "1.0": { ...optional.schemas["1.0"], response: { type: "string" } },
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        method: "host.optional",
+        version: "1.0",
+        payload: "response",
+      }),
+    ]);
+  });
 
   it("reports the unbridgeable major as breaking with no path", () => {
     const blocking = verdict([]).blocking;
