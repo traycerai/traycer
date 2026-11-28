@@ -113,7 +113,7 @@ interface RecordedCall {
 }
 
 function taskXml(userId: string): string {
-  return `<Task><Principals><Principal id="Author"><UserId>${userId}</UserId></Principal></Principals><Settings><Enabled>true</Enabled></Settings><Actions Context="Author"><Exec><Command>x</Command></Exec></Actions></Task>`;
+  return `<Task><Principals><Principal id="Author"><UserId>${userId}</UserId><LogonType>InteractiveToken</LogonType></Principal></Principals><Settings><Enabled>true</Enabled></Settings><Actions Context="Author"><Exec><Command>C:\\traycer.exe</Command><Arguments>host start</Arguments></Exec></Actions></Task>`;
 }
 
 let registered: ScheduledTaskXmlQuery = { kind: "absent" };

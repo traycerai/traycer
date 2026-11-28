@@ -34,7 +34,8 @@ const harness = vi.hoisted(() => ({
     >(),
 }));
 
-vi.mock("@/providers/use-runner-host", () => ({
+vi.mock("@/providers/use-runner-host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/providers/use-runner-host")>()),
   useRunnerHost: () => ({
     selectionAuthority: {
       activate: () => Promise.resolve({ ok: true as const }),

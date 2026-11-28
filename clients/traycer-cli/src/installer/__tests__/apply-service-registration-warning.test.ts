@@ -504,9 +504,9 @@ describe("31b: host apply over the real Windows controller, a disable injected m
   function callerTaskXml(enabled: boolean): string {
     return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-  <Principals><Principal id="Author"><UserId>${CALLER_SID}</UserId></Principal></Principals>
+  <Principals><Principal id="Author"><UserId>${CALLER_SID}</UserId><LogonType>InteractiveToken</LogonType></Principal></Principals>
   <Settings><Enabled>${enabled ? "true" : "false"}</Enabled></Settings>
-  <Actions Context="Author"><Exec><Command>C:\\traycer.exe</Command></Exec></Actions>
+  <Actions Context="Author"><Exec><Command>C:\\traycer.exe</Command><Arguments>host start</Arguments></Exec></Actions>
 </Task>`;
   }
 
