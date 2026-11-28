@@ -612,6 +612,7 @@ describe("TerminalSessionRegistry", () => {
       "closed",
       {
         kind: "fatalError",
+        signInVerdict: null,
         details: {
           code: "TERMINAL_NOT_FOUND",
           reason: "TERMINAL_NOT_FOUND: gone",
@@ -644,6 +645,7 @@ describe("TerminalSessionRegistry", () => {
       "closed",
       {
         kind: "fatalError",
+        signInVerdict: null,
         details: {
           code: "TERMINAL_NOT_FOUND",
           reason: "TERMINAL_NOT_FOUND: gone",

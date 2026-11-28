@@ -8,6 +8,7 @@ import { SidebarProvider } from "@/components/ui/sidebar";
 import * as Y from "yjs";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import { createAppQueryClient } from "@/lib/query-client";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import {
   EpicSessionContext,
   EpicSessionHostClientContext,
@@ -297,13 +298,22 @@ function cloudSummary(spec: CloudSpec): CloudChatSummary {
 function listedCloudChats(): { readonly chats: CloudChatSummary[] } {
   return { chats: cloudChats.map(cloudSummary) };
 }
+function isCloudList(query: {
+  readonly queryKey: readonly unknown[];
+}): boolean {
+  return hostQueryKeys.matchesMethodOnAnyHost(
+    query.queryKey,
+    "epic.listCloudChats",
+  );
+}
+
 /**
  * Makes `specs` the task's cloud chats and has the list fetch them again; the
  * rows follow once the answer lands.
  */
 function seedCloudChats(specs: readonly CloudSpec[]): void {
   cloudChats = specs;
-  void queryClient.invalidateQueries();
+  void queryClient.invalidateQueries({ predicate: isCloudList });
 }
 /**
  * Makes `specs` the task's cloud chats in the list's cached answer at once,
@@ -315,7 +325,12 @@ function replaceCloudChats(specs: readonly CloudSpec[]): number {
   const written = queryClient.getQueryCache().findAll({
     predicate: (query) => {
       const data: unknown = query.state.data;
-      return typeof data === "object" && data !== null && "chats" in data;
+      return (
+        isCloudList(query) &&
+        typeof data === "object" &&
+        data !== null &&
+        "chats" in data
+      );
     },
   });
   for (const query of written) {
@@ -438,10 +453,10 @@ export function Fixture(): ReactNode {
     probe.ready = true;
   }, []);
   return (
-    <div className="flex h-[480px] bg-canvas text-canvas-foreground">
+    <div className="flex h-[480px] max-h-dvh w-full bg-canvas text-canvas-foreground">
       <div
         data-fixture-panel
-        className="flex h-full w-72 shrink-0 flex-col border-r border-border bg-background"
+        className="flex h-full w-full max-w-72 flex-col border-r border-border bg-background"
       >
         <ChatTreePanelBody
           epicId={EPIC_ID}

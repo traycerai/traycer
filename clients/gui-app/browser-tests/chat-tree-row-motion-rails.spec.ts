@@ -12,7 +12,7 @@ import {
   expectRailSolid,
   expectRailSteps,
   expectSlides,
-  halfFadedFrame,
+  lastDrawnFrame,
   openTree,
   pageErrors,
   railPlaces,
@@ -103,7 +103,7 @@ test.describe("virtual chat tree: the indent rail of an open group", () => {
     );
     // After the fade, with the sibling that slides into the slot.
     expect(stepFrame, "the rail's end waits for the fade").toBeGreaterThan(
-      halfFadedFrame(recording, "b2"),
+      lastDrawnFrame(recording, "b2"),
     );
     expectSlides(recording, "b3", -ROW_PITCH);
     for (const id of ["a", OWNER, "b1"]) expectHeld(recording, id);

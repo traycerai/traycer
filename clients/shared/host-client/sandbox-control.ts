@@ -7,6 +7,7 @@ import {
   sandboxAutomationResponseSchema,
   sandboxCatalogueSchema,
   sandboxCreateAcceptedSchema,
+  sandboxCostSchema,
   sandboxLifecycleVerbResponseSchema,
   sandboxListResponseSchema,
   sandboxRefusalBodySchema,
@@ -16,6 +17,7 @@ import {
   type SandboxCatalogue,
   type SandboxCatalogueReadinessRequest,
   type SandboxCreditSource,
+  type SandboxCost,
   type SandboxCreateAccepted,
   type SandboxCreateRequest,
   type SandboxLifecycleVerb,
@@ -47,7 +49,7 @@ import { composeRequestAbort, untilAborted } from "../auth/request-abort";
  */
 
 /** Per-request budget of the reads. */
-const SANDBOX_CONTROL_FETCH_TIMEOUT_MS = 10_000;
+export const SANDBOX_CONTROL_FETCH_TIMEOUT_MS = 10_000;
 
 /**
  * A create waits for the provider's capacity, its boot and the boot-token
@@ -119,8 +121,17 @@ export type TraycerModelsFetchResult =
     }
   | SandboxControlFailure;
 
+export type SandboxCostsFailure = SandboxControlFailure & {
+  /** Earliest time another list request for this account may reach the network. */
+  readonly retryAtMs?: number;
+};
+
 export type SandboxCostsFetchResult =
   | { readonly kind: "ok"; readonly costs: UserSandboxCost }
+  | SandboxCostsFailure;
+
+export type SandboxCostFetchResult =
+  | { readonly kind: "ok"; readonly cost: SandboxCost }
   | SandboxControlFailure;
 
 export type SandboxCreateFetchResult =
@@ -516,10 +527,7 @@ export async function fetchTraycerModelsViaHttp(
   return { kind: "ok", models };
 }
 
-/**
- * `GET /api/sandboxes/cost`: every listed sandbox's cost from the control
- * plane's ledger, and the user's awake burn.
- */
+/** `GET /api/sandboxes/cost`: the listed rows and the user's awake burn. */
 export async function fetchSandboxCostsViaHttp(
   serverBaseUrl: string,
   bearerToken: string,
@@ -541,6 +549,32 @@ export async function fetchSandboxCostsViaHttp(
     };
   }
   return { kind: "ok", costs: parsed.data };
+}
+
+/** The ledger timeline and History for the one sandbox whose Details is open. */
+export async function fetchSandboxCostViaHttp(
+  serverBaseUrl: string,
+  bearerToken: string,
+  proxyToken: string | null,
+  sandboxId: string,
+): Promise<SandboxCostFetchResult> {
+  if (!SANDBOX_ID_PATTERN.test(sandboxId)) return INVALID_SANDBOX_ID;
+  const raw = await call(
+    sandboxesUrl(serverBaseUrl, `/${sandboxId}/cost`),
+    { method: "GET", body: null, timeoutMs: SANDBOX_CONTROL_FETCH_TIMEOUT_MS },
+    bearerToken,
+    proxyToken,
+  );
+  if (raw.kind === "network-error") return raw;
+  if (!isSuccess(raw.status)) return failureOf(raw.status, raw.body);
+  const parsed = sandboxCostSchema.safeParse(raw.body);
+  if (!parsed.success) {
+    return {
+      kind: "network-error",
+      detail: "the sandbox cost did not match the contract",
+    };
+  }
+  return { kind: "ok", cost: parsed.data };
 }
 
 /** An Automations read from a server that serves no Automations route. */

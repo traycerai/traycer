@@ -1,6 +1,6 @@
 /**
- * The bot boxes' drafts while the images they name are still being read
- * (Tracy Bots T186), through the REAL drafts store and storage over
+ * The bot boxes' drafts while the images they name are still being read,
+ * through the REAL drafts store and storage over
  * `localStorage`: the account's stored text is read at once, so the tab opens,
  * and only a box whose stored draft names images still being read waits, by its
  * stored text, until its own images settle or the person discards it. Every

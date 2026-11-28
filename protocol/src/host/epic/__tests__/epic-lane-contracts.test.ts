@@ -148,9 +148,9 @@ describe("registry shape: the epic lane surface installs at the versions the spl
     }
   });
 
-  it("installs epic.listChatRecords with @1.0-@1.5 minors, latestMinor 5", () => {
+  it("installs epic.listChatRecords with @1.0-@1.6 minors, latestMinor 6", () => {
     const majorLine = hostRpcRegistry["epic.listChatRecords"][1];
-    expect(majorLine.latestMinor).toBe(5);
+    expect(majorLine.latestMinor).toBe(6);
     expect(majorLine.versions[0].contract.schemaVersion).toEqual({
       major: 1,
       minor: 0,
@@ -183,6 +183,11 @@ describe("registry shape: the epic lane surface installs at the versions the spl
     expect(majorLine.versions[5].contract.schemaVersion).toEqual({
       major: 1,
       minor: 5,
+    });
+    // @1.6 carries the publication redirect revision on either answer arm.
+    expect(majorLine.versions[6].contract.schemaVersion).toEqual({
+      major: 1,
+      minor: 6,
     });
   });
 });

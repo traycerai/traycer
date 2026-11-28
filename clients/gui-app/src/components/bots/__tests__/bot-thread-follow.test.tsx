@@ -78,9 +78,6 @@ describe("<BotThreadFollowControl />", () => {
 
     await screen.findByRole("button", { name: "Thread actions" });
     expect(screen.getAllByRole("button")).toHaveLength(1);
-    expect(screen.queryByRole("button", { name: "Follow" })).toBeNull();
-    expect(screen.queryByRole("button", { name: /Following/ })).toBeNull();
-    expect(screen.queryByText(/Following/)).toBeNull();
     expect(document.body.textContent).not.toContain("Following");
   });
 
@@ -92,7 +89,6 @@ describe("<BotThreadFollowControl />", () => {
 
     const item = await screen.findByRole("menuitem", { name: "Follow" });
     expect(screen.getAllByRole("menuitem")).toHaveLength(1);
-    expect(screen.queryByText(/Following/)).toBeNull();
     await user.click(item);
     await waitFor(() =>
       expect(fixture.writes).toEqual([
@@ -146,7 +142,6 @@ describe("<BotThreadFollowControl />", () => {
     expect(
       await screen.findByRole("menuitem", { name: "Follow" }),
     ).toBeTruthy();
-    expect(screen.queryByText(/Following/)).toBeNull();
   });
 
   it("draws nothing on a host without the methods", () => {

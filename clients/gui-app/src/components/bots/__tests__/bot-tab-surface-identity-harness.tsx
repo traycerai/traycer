@@ -1,5 +1,5 @@
 /**
- * The Tracy surface and the signed-in account (T186): the REAL `BotTabSurface`
+ * The Tracy surface and the signed-in account: the REAL `BotTabSurface`
  * with its REAL channel view, box, question cards and send mutation, under
  * `BotDraftsPersistLifecycleBridge`, over a host client that records and
  * answers `bot.conversation.send`. An account switch goes through the auth

@@ -256,7 +256,7 @@ function BotTabSurfaceBody(props: {
           edit, a send that failed, quotes waiting for their box, a card's
           answer - is the signed-in account's. At a change of account the
           tree goes while the drafts store still holds the outgoing one's,
-          and the next account's starts once the store is its own (T186). */}
+          and the next account's starts once the store is its own. */}
       {admitted ? (
         <TracySurfaceShell botId={botId} hostId={hostId} />
       ) : (

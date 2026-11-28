@@ -62,10 +62,6 @@ async function runAll(steps: readonly (() => unknown)[]): Promise<void> {
   if (errors.length > 0) throw new AggregateError(errors, "cleanup failed");
 }
 
-function removeTree(path: string): void {
-  rmSync(path, { recursive: true, force: true });
-}
-
 describe("credentials test run root", () => {
   it("is kept while a recorded process runs and removed once it has exited", async () => {
     const root = createRunRoot();
@@ -85,7 +81,10 @@ describe("credentials test run root", () => {
       expect(removeRunRootOnceWorkersGone(root)).toEqual({ removed: true });
       expect(existsSync(root)).toBe(false);
     } finally {
-      await runAll([() => child?.stop(), () => removeTree(root)]);
+      await runAll([
+        () => child?.stop(),
+        () => rmSync(root, { recursive: true, force: true }),
+      ]);
     }
   });
 
@@ -100,7 +99,7 @@ describe("credentials test run root", () => {
         reason: "unrecognised worker record not-a-pid",
       });
     } finally {
-      removeTree(root);
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
@@ -155,7 +154,7 @@ describe("credentials test run root", () => {
         // the one above settles the same close.
         () => vitest?.close(),
         () => {
-          if (root !== null) removeTree(root);
+          if (root !== null) rmSync(root, { recursive: true, force: true });
         },
       ]);
     }

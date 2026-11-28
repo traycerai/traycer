@@ -1,13 +1,20 @@
 import { useCallback, useSyncExternalStore, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { HostScopeGate } from "@/components/settings/host-scope/host-scope-gate";
+import {
+  HostReadFailure,
+  HostScopeGate,
+} from "@/components/settings/host-scope/host-scope-gate";
 import {
   useHostScopeFor,
   WINDOW_HOST_SELECTION,
 } from "@/components/settings/host-scope/use-host-scope";
-import { TeamReadFailed } from "@/components/settings/environment/team-read-failed";
+import {
+  TeamReadFailed,
+  TeamReadRetry,
+} from "@/components/settings/environment/team-read-failed";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import type { HostRpcRegistry } from "@/lib/host";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { queryKeys } from "@/lib/query-keys";
 
 /** No configuration is known yet: never mount a configuration's editors. */
@@ -19,18 +26,20 @@ export function UnresolvedEnvironmentPage(): ReactNode {
     (onChange: () => void) => queryClient.getQueryCache().subscribe(onChange),
     [queryClient],
   );
-  const readFailed = useCallback((): boolean => {
-    if (hostId === null) return false;
-    const state = queryClient.getQueryState(
+  const readFailure = useCallback((): HostRpcError | null => {
+    if (hostId === null) return null;
+    const state = queryClient.getQueryState<unknown, HostRpcError>(
       queryKeys.hostMethod<HostRpcRegistry, "environment.status">(
         hostId,
         "environment.status",
         {},
       ),
     );
-    return state?.status === "error" && state.fetchStatus === "idle";
+    return state?.status === "error" && state.fetchStatus === "idle"
+      ? state.error
+      : null;
   }, [queryClient, hostId]);
-  const failed = useSyncExternalStore(subscribe, readFailed);
+  const failure = useSyncExternalStore(subscribe, readFailure);
   const retry = (): void => {
     if (hostId === null) return;
     void queryClient.invalidateQueries({
@@ -48,9 +57,19 @@ export function UnresolvedEnvironmentPage(): ReactNode {
       </HostScopeGate>
     );
   }
-  if (failed) {
+  if (failure !== null) {
     return (
-      <TeamReadFailed message="Couldn't read these settings." onRetry={retry} />
+      <HostReadFailure
+        scope={scope}
+        error={failure}
+        form="notice"
+        retry={<TeamReadRetry onRetry={retry} />}
+      >
+        <TeamReadFailed
+          message="Couldn't read these settings."
+          onRetry={retry}
+        />
+      </HostReadFailure>
     );
   }
   return (

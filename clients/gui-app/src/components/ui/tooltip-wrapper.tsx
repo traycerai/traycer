@@ -82,31 +82,11 @@ export function TooltipWrapper(props: TooltipWrapperProps) {
     ...rest
   } = props;
   const suppressed = use(TooltipsSuppressedContext);
-  // Radix keeps an uncontrolled tooltip's state to itself; it is mirrored
-  // here only to hold the trigger's row while the label shows.
-  const [shown, setShown] = useState(false);
-  useOverlayAnchorHold(open ?? shown);
-  // `undefined` degrades exactly like `null`. It used to fall through and
-  // render an empty tooltip box, which is never what a caller means - and the
-  // shape that produces it (`someReason ?? undefined`, left over from the
-  // native `title` attribute this component replaces) is the single most
-  // common way to call it.
-  if (
-    suppressed ||
-    label === null ||
-    label === undefined ||
-    (typeof label === "string" && label.length === 0)
-  ) {
+  if (suppressed || label === null || label === undefined || label === "") {
     return <Slot.Root {...rest}>{children}</Slot.Root>;
   }
   return (
-    <Tooltip
-      open={open}
-      onOpenChange={(next) => {
-        setShown(next);
-        onOpenChange?.(next);
-      }}
-    >
+    <TooltipWithAnchorHold open={open} onOpenChange={onOpenChange}>
       <TooltipTrigger asChild {...rest}>
         {children}
       </TooltipTrigger>
@@ -119,6 +99,27 @@ export function TooltipWrapper(props: TooltipWrapperProps) {
       >
         {label}
       </TooltipContent>
+    </TooltipWithAnchorHold>
+  );
+}
+
+function TooltipWithAnchorHold(props: {
+  readonly children: ReactNode;
+  readonly open: boolean | undefined;
+  readonly onOpenChange: ((open: boolean) => void) | undefined;
+}) {
+  const { children, open, onOpenChange } = props;
+  const [shown, setShown] = useState(false);
+  useOverlayAnchorHold(open ?? shown);
+  return (
+    <Tooltip
+      open={open}
+      onOpenChange={(next) => {
+        setShown(next);
+        onOpenChange?.(next);
+      }}
+    >
+      {children}
     </Tooltip>
   );
 }

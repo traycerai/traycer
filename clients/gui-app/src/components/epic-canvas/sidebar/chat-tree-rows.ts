@@ -377,6 +377,23 @@ export function sameRowKeySequence(
   return true;
 }
 
+/** The inclusive end of each row's subtree in a preorder list. */
+export function subtreeEnds(rows: readonly ChatTreeRow[]): readonly number[] {
+  const ends: number[] = [];
+  const open: number[] = [];
+  for (const [index, row] of rows.entries()) {
+    let ancestor = open.at(-1);
+    while (ancestor !== undefined && rows[ancestor].depth >= row.depth) {
+      ends[ancestor] = index - 1;
+      open.pop();
+      ancestor = open.at(-1);
+    }
+    open.push(index);
+  }
+  for (const ancestor of open) ends[ancestor] = rows.length - 1;
+  return ends;
+}
+
 export function indexRowsByKey(
   rows: readonly ChatTreeRow[],
 ): ReadonlyMap<string, number> {

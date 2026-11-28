@@ -60,7 +60,11 @@ export function revealSidebarNode(
 ): boolean {
   const row = Array.from(
     region.querySelectorAll<HTMLElement>("[data-sidebar-node-id]"),
-  ).find((element) => element.dataset.sidebarNodeId === nodeId);
+  ).find(
+    (element) =>
+      element.dataset.sidebarNodeId === nodeId &&
+      element.closest("[inert], [data-departing]") === null,
+  );
   if (row === undefined) return false;
   row.scrollIntoView({ block: "nearest", inline: "nearest" });
   flashSidebarElement(row, nonce);

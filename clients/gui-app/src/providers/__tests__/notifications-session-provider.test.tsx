@@ -793,6 +793,7 @@ function cloudRow(
 function fatalClose(code: string): StreamCloseReason {
   return {
     kind: "fatalError",
+    signInVerdict: null,
     details: {
       code,
       reason: `test close: ${code}`,
@@ -808,6 +809,7 @@ function fatalCloseWithDoorReason(
 ): StreamCloseReason {
   return {
     kind: "fatalError",
+    signInVerdict: null,
     details: {
       code,
       reason: `test close: ${code}`,

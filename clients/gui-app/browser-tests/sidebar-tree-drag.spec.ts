@@ -1,5 +1,9 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
+import type {
+  DragStep,
+  DragStepResult,
+} from "./support/chat-tree-drag-globals.d.ts";
 import { fixture, type Point } from "./support/fixtures.ts";
 
 // The virtualised sidebar chat tree under the real `RootDndProvider`
@@ -53,6 +57,12 @@ function dropWrapper(page: Page, id: string): Locator {
     .filter({ has: row(page, id) });
 }
 
+async function isVirtualTree(page: Page): Promise<boolean> {
+  return (
+    (await scroller(page).locator("ul[data-chat-tree-row-count]").count()) === 1
+  );
+}
+
 async function mountedIds(page: Page): Promise<string[]> {
   return page.evaluate(
     (prefix) =>
@@ -68,74 +78,28 @@ async function scrollTop(page: Page): Promise<number> {
   return scroller(page).evaluate((node) => node.scrollTop);
 }
 
-/**
- * dnd-kit's auto-scroller ticks every 5ms, so a scroll that has not moved the
- * list for 250ms (fifty ticks) is not in progress.
- */
-const NO_SCROLL_SPAN_MS = 250;
-
-/**
- * Runs `action` and resolves once the list has finished any scrolling it
- * caused: the scroller's `scrollend`, armed before the action so it cannot be
- * missed, or no `scroll` event for `NO_SCROLL_SPAN_MS`. The second covers an
- * action that scrolls nothing and a scroll the list writes straight to
- * `scrollTop` after a `scrollend` (its own anchor correction), which ends
- * without another `scrollend`. For a scroll already running, or one the action
- * starts synchronously: a scroll that starts after React work can begin after
- * the quiet span has already passed.
- */
-async function afterScrollEnds(
+async function scrollStep(
   page: Page,
+  input: { readonly kind: DragStep; readonly y: number | null },
   action: () => Promise<void>,
-): Promise<void> {
-  await page.evaluate((selector) => {
-    const scroller = [...document.querySelectorAll(selector)]
-      .filter((node) => node.querySelector("ul[role=tree]") !== null)
-      .at(-1);
-    if (scroller === undefined) throw new Error("no sidebar scroller");
-    const watch = {
-      ended: false,
-      lastScrollAt: performance.now(),
-      stop: (): void => {},
-    };
-    const onScroll = (): void => {
-      watch.ended = false;
-      watch.lastScrollAt = performance.now();
-    };
-    const onScrollEnd = (): void => {
-      watch.ended = true;
-    };
-    watch.stop = (): void => {
-      scroller.removeEventListener("scroll", onScroll);
-      scroller.removeEventListener("scrollend", onScrollEnd);
-    };
-    scroller.addEventListener("scroll", onScroll);
-    scroller.addEventListener("scrollend", onScrollEnd);
-    Reflect.set(window, "__scrollWatch", watch);
-  }, SCROLLER);
-  await action();
+  timeout: number,
+): Promise<DragStepResult> {
   await page.evaluate(
-    (span) =>
-      new Promise<void>((resolve) => {
-        const watch: unknown = Reflect.get(window, "__scrollWatch");
-        if (typeof watch !== "object" || watch === null) {
-          throw new Error("no scroll watch");
-        }
-        const tick = (): void => {
-          const ended = Reflect.get(watch, "ended") === true;
-          const lastScrollAt = Number(Reflect.get(watch, "lastScrollAt"));
-          if (ended || performance.now() - lastScrollAt >= span) {
-            const stop: unknown = Reflect.get(watch, "stop");
-            if (typeof stop === "function") Reflect.apply(stop, watch, []);
-            resolve();
-          } else {
-            requestAnimationFrame(tick);
-          }
-        };
-        requestAnimationFrame(tick);
-      }),
-    NO_SCROLL_SPAN_MS,
+    ({ step, pointerY }) => window.__chatTreeDragProbe.armStep(step, pointerY),
+    { step: input.kind, pointerY: input.y },
   );
+  try {
+    await action();
+    await page.evaluate(() => window.__chatTreeDragProbe.finishInput());
+    const result = await page.waitForFunction(
+      () => window.__chatTreeDragProbe.stepResult(),
+      undefined,
+      { timeout },
+    );
+    return await result.jsonValue();
+  } finally {
+    await page.evaluate(() => window.__chatTreeDragProbe.stopStep());
+  }
 }
 
 async function scrollerBox(page: Page) {
@@ -165,65 +129,6 @@ function overlay(page: Page): Locator {
 }
 
 /**
- * A stalled auto-scroll also needs this many rendered frames with the list
- * still: dnd-kit arms its 5 ms interval only once the pointer move it reacts
- * to has rendered, so one long render can use up the real-time span before
- * the scroller had a chance to move. Time alone reads a slow render as a
- * stall; frames alone read a fast display as one.
- */
-const STALL_FRAMES = 15;
-
-interface ScrollWindow {
-  readonly scrollTop: number;
-  readonly startedAt: number;
-  readonly endedAt: number;
-  readonly ticks: number;
-  readonly frames: ReadonlyArray<Record<string, unknown>>;
-}
-
-/**
- * Captures the DnD frames if the list remains still through both thresholds.
- */
-async function observeAutoScroll(page: Page): Promise<ScrollWindow | null> {
-  return scroller(page).evaluate(
-    (list, { span, minFrames }) =>
-      new Promise<ScrollWindow | null>((resolve) => {
-        const from = list.scrollTop;
-        const startedAt = performance.now();
-        let ticks = 0;
-        const tick = (): void => {
-          ticks += 1;
-          if (list.scrollTop !== from) {
-            resolve(null);
-            return;
-          }
-          const endedAt = performance.now();
-          if (endedAt - startedAt < span || ticks < minFrames) {
-            requestAnimationFrame(tick);
-            return;
-          }
-          resolve({
-            scrollTop: from,
-            startedAt,
-            endedAt,
-            ticks,
-            frames: window.__chatTreeDragProbe
-              .frames(600)
-              .filter(
-                ({ t }) =>
-                  typeof t === "number" &&
-                  t >= Math.round(startedAt) &&
-                  t <= Math.round(endedAt),
-              ),
-          });
-        };
-        requestAnimationFrame(tick);
-      }),
-    { span: NO_SCROLL_SPAN_MS, minFrames: STALL_FRAMES },
-  );
-}
-
-/**
  * dnd-kit scrolls a list while the pointer is inside the strip along its edge
  * this share of the list's height deep (its default threshold).
  */
@@ -241,6 +146,7 @@ interface StripGeometry {
   readonly x: number;
   readonly heldY: number | null;
   readonly scrollTop: number;
+  readonly scrollGeneration: number;
   readonly clientHeight: number;
   readonly stripTop: number;
   readonly stripBottom: number;
@@ -259,18 +165,20 @@ type StripRead =
     };
 
 /**
- * Picks a point inside the bottom strip that hits a non-dragged row. After a
- * stall, checks whether the held point still hits such a row. Collects the
- * mounted geometry in the same read when either check fails the test.
+ * Picks a point inside the bottom strip that hits a non-dragged row. When
+ * checking a held point, captures the hit and the scroller generation together.
  */
 async function readStrip(
   page: Page,
   x: number,
-  held: number | null,
-  dragged: string,
+  input: {
+    readonly held: number | null;
+    readonly dragged: string;
+    readonly previousAim: number | null;
+  },
 ): Promise<StripRead> {
   return scroller(page).evaluate(
-    (list, { prefix, share, at, heldY, skip }): StripRead => {
+    (list, { prefix, share, at, heldY, skip, priorAim }): StripRead => {
       const box = list.getBoundingClientRect();
       const { clientHeight, scrollTop } = list;
       const stripTop = box.bottom - share * clientHeight;
@@ -322,6 +230,7 @@ async function readStrip(
           x: at,
           heldY,
           scrollTop,
+          scrollGeneration: window.__chatTreeDragProbe.scrollGeneration(),
           clientHeight,
           stripTop,
           stripBottom,
@@ -332,7 +241,9 @@ async function readStrip(
 
       if (heldY === null) {
         for (let y = Math.floor(stripBottom); y >= stripTop; y -= 1) {
-          if (hitRow(y) !== null) return { kind: "aim", y };
+          // A fresh coordinate produces a new sensor action even when the
+          // deepest hit is the point that was already held.
+          if (y !== priorAim && hitRow(y) !== null) return { kind: "aim", y };
         }
         return { kind: "no-hit", geometry: geometry() };
       }
@@ -345,49 +256,10 @@ async function readStrip(
       prefix: ROW_PREFIX,
       share: AUTO_SCROLL_STRIP,
       at: x,
-      heldY: held,
-      skip: dragged,
+      heldY: input.held,
+      skip: input.dragged,
+      priorAim: input.previousAim,
     },
-  );
-}
-
-function confirmsScrollTarget(
-  quiet: ScrollWindow,
-  rowId: string,
-  y: number,
-): boolean {
-  // A fresh DOM hit can differ from dnd-kit's cached collision target.
-  const overPrefix = `sidebar-reparent-row:${rowId}:pane:`;
-  return (
-    quiet.frames.length >= quiet.ticks &&
-    quiet.frames.every(
-      (frame) =>
-        typeof frame.overId === "string" &&
-        frame.overId.startsWith(overPrefix) &&
-        frame.overConnected === true &&
-        frame.pointerY === y &&
-        frame.scrollTop === quiet.scrollTop &&
-        typeof frame.scrollerBottom === "number" &&
-        typeof frame.clientHeight === "number" &&
-        y >= frame.scrollerBottom - AUTO_SCROLL_STRIP * frame.clientHeight &&
-        y <= frame.scrollerBottom - 1 &&
-        frame.treeScrollerInDndAncestors === true,
-    )
-  );
-}
-
-function witnessedPanelGap(quiet: ScrollWindow, y: number): boolean {
-  return (
-    quiet.frames.length >= quiet.ticks &&
-    quiet.frames.every(
-      (frame) =>
-        frame.pointerY === y &&
-        frame.scrollTop === quiet.scrollTop &&
-        frame.treeScrollerInDndAncestors === false &&
-        (frame.overId === null ||
-          (typeof frame.overId === "string" &&
-            frame.overId.startsWith("sidebar-reparent-panel:"))),
-    )
   );
 }
 
@@ -404,8 +276,8 @@ async function attachJson(name: string, value: unknown): Promise<void> {
  * that lies on a mounted row other than `dragged`, re-aiming after every move
  * of the list, until the list has scrolled `px`. A point between rows is over
  * the panel's un-nest zone, whose ancestors do not include the scroller, and a
- * point above the strip asks for no scroll. A stall failure includes the
- * strip geometry and dnd-kit's recorded target and scroll ancestors.
+ * point above the strip asks for no scroll. A wait only succeeds on a
+ * scroll offset change or a committed loss of the scroll ancestor.
  */
 async function autoScrollBy(
   page: Page,
@@ -422,36 +294,62 @@ async function autoScrollBy(
         `auto-scroll never passed ${String(px)}px (${String(reaims)} re-aims)`,
       );
     }
-    const read = await readStrip(page, x, null, dragged);
+    const read = await readStrip(page, x, {
+      held: null,
+      dragged,
+      previousAim: y,
+    });
     if (read.kind === "no-hit") {
       await attachJson("strip", read.geometry);
       throw new Error(
-        `no row hit at this x in the activation strip\n${JSON.stringify(read.geometry)}`,
+        `no fresh mounted-row aim at this x in the activation strip\n${JSON.stringify(read.geometry)}`,
       );
     }
     if (read.kind !== "aim") throw new Error("no auto-scroll aim");
     y = read.y;
-    await page.mouse.move(x, y, { steps: 2 });
-    const quiet = await observeAutoScroll(page);
-    if (quiet === null) continue;
-    const held = await readStrip(page, x, y, dragged);
+    let outcome: DragStepResult;
+    try {
+      outcome = await scrollStep(
+        page,
+        { kind: "edge", y: y },
+        () => page.mouse.move(x, y, { steps: 2 }),
+        Math.max(1, Math.min(5_000, deadline - Date.now())),
+      );
+    } catch (error) {
+      const frames = await page.evaluate(() =>
+        window.__chatTreeDragProbe.frames(60),
+      );
+      await attachJson("stall-frames", frames);
+      const held = await readStrip(page, x, {
+        held: y,
+        dragged,
+        previousAim: null,
+      });
+      await attachJson("strip", held);
+      throw error;
+    }
+    if (outcome.outcome === "advanced") continue;
+    const held = await readStrip(page, x, {
+      held: y,
+      dragged,
+      previousAim: null,
+    });
     if (held.kind !== "held-point") throw new Error("no held-point geometry");
-    const { rowId, geometry } = held;
-    if (rowId === null && witnessedPanelGap(quiet, y)) {
+    // The viewport may have moved between the committed target observation
+    // and this hit test. Diagnose only observations of the same offset.
+    if (
+      held.geometry.scrollTop !== outcome.scrollTop ||
+      held.geometry.scrollGeneration !== outcome.scrollGeneration
+    ) {
+      continue;
+    }
+    if (outcome.outcome === "panel-gap" && held.rowId === null) {
       reaims += 1;
       continue;
     }
-    let reason = "no row hit at the held point, DnD target unconfirmed";
-    if (rowId !== null) {
-      reason = confirmsScrollTarget(quiet, rowId, y)
-        ? `auto-scroll stalled with a connected DnD target on ${rowId} in the activation strip`
-        : `pointer currently intersects ${rowId} in the activation strip, DnD target unconfirmed`;
-    }
-    await attachJson("strip", geometry);
-    await attachJson("stall-frames", quiet);
-    throw new Error(
-      `${reason}\n${JSON.stringify(geometry)}\n${JSON.stringify(quiet)}`,
-    );
+    await attachJson("strip", held.geometry);
+    await attachJson("dnd-target", outcome);
+    throw new Error("the committed drop target and the current hit disagree");
   }
   return { reaims, y };
 }
@@ -547,7 +445,6 @@ async function dragToOffscreenRow(
   condition: { readonly reducedMotion: boolean; readonly blurSource: boolean },
 ): Promise<{
   readonly target: string;
-  readonly initial: readonly string[];
 }> {
   if (condition.reducedMotion)
     await page.emulateMedia({ reducedMotion: "reduce" });
@@ -564,13 +461,16 @@ async function dragToOffscreenRow(
     .info()
     .annotations.push({ type: "reaims", description: String(scrolled.reaims) });
   const box = await scrollerBox(page);
-  const middle = box.y + box.height / 2;
-  await afterScrollEnds(page, () =>
-    page.mouse.move(start.x, middle, { steps: 4 }),
+  const middle = Math.round(box.y + box.height / 2);
+  await scrollStep(
+    page,
+    { kind: "middle", y: middle },
+    () => page.mouse.move(start.x, middle, { steps: 4 }),
+    5_000,
   );
   const target = await rowNearest(page, middle, [SOURCE]);
-  // On a tree that mounts every row there is nothing off-screen to prove.
-  if (initial.length < CHAT_COUNT) {
+  // Only the windowed tree can demonstrate new mounting on the same input.
+  if (await isVirtualTree(page)) {
     expect(
       initial,
       "the target must not have been mounted at drag start",
@@ -578,7 +478,7 @@ async function dragToOffscreenRow(
   }
   const at = await centreOf(row(page, target));
   await page.mouse.move(start.x, at.y, { steps: 3 });
-  return { target, initial };
+  return { target };
 }
 
 const AS_IS = { reducedMotion: false, blurSource: false };
@@ -799,8 +699,12 @@ test("H: a row slide after auto-scroll does not stale the targets: the drop land
   const start = await startDrag(page, SOURCE);
   await autoScrollBy(page, start.x, FAR_SCROLL_PX, SOURCE);
   const box = await scrollerBox(page);
-  await afterScrollEnds(page, () =>
-    page.mouse.move(start.x, box.y + box.height / 2, { steps: 4 }),
+  const middle = Math.round(box.y + box.height / 2);
+  await scrollStep(
+    page,
+    { kind: "middle", y: middle },
+    () => page.mouse.move(start.x, middle, { steps: 4 }),
+    5_000,
   );
   // A collapsed folder in the upper part of the window, whose opening slides
   // the rows below it by its three children. The band starts below dnd-kit's
@@ -853,6 +757,24 @@ test("H: a row slide after auto-scroll does not stale the targets: the drop land
     .toEqual([{ chatId: SOURCE, newParentId: target }]);
 });
 
+function idsInViewport(page: Page): Promise<string[]> {
+  return scroller(page).evaluate((list, prefix) => {
+    const viewport = list.getBoundingClientRect();
+    const visible: string[] = [];
+    for (const row of list.querySelectorAll(
+      '[data-testid^="' + prefix + '"]',
+    )) {
+      const { top, bottom } = row.getBoundingClientRect();
+      if (top < viewport.bottom && bottom > viewport.top) {
+        visible.push(
+          (row.getAttribute("data-testid") ?? "").slice(prefix.length),
+        );
+      }
+    }
+    return visible;
+  }, ROW_PREFIX);
+}
+
 async function highlighted(page: Page): Promise<string | null> {
   return page.evaluate((prefix) => {
     for (const wrapper of document.querySelectorAll(
@@ -866,18 +788,58 @@ async function highlighted(page: Page): Promise<string | null> {
   }, ROW_PREFIX);
 }
 
+test("G: a keyboard move between visible rows commits without scrolling", async ({
+  page,
+}) => {
+  await openTree(page, 2);
+  const source = "chat-000";
+  const target = "chat-001";
+  await expect(row(page, target)).toBeVisible();
+  expect(
+    await scroller(page).evaluate(
+      (list) => list.scrollHeight - list.clientHeight,
+    ),
+    "the stationary fixture must fit without scrolling",
+  ).toBe(0);
+  const offset = await scrollTop(page);
+  await row(page, source).focus();
+  await page.keyboard.press("Space");
+  await expect(overlay(page)).toHaveCount(1);
+  const move = await scrollStep(
+    page,
+    { kind: "keyboard", y: null },
+    () => page.keyboard.press("ArrowDown"),
+    5_000,
+  );
+  expect(move.keyboardScroll).toBe("stationary");
+  expect(move.scrollTop).toBe(offset);
+  await expect(dropWrapper(page, target)).toHaveClass(RING);
+  await page.keyboard.press("Space");
+  await expect(overlay(page)).toHaveCount(0);
+  await expect
+    .poll(() => reparentRequests(page))
+    .toEqual([{ chatId: source, newParentId: target }]);
+});
+
 test("G: a keyboard drag carried past the window mounts rows that were not there, highlights one, and drops on it", async ({
   page,
 }) => {
   await openTree(page, CHAT_COUNT);
-  const initial = await mountedIds(page);
+  const virtual = await isVirtualTree(page);
+  const initial = virtual ? await mountedIds(page) : await idsInViewport(page);
   await row(page, SOURCE).focus();
   await page.keyboard.press("Space");
   await expect(overlay(page)).toHaveCount(1);
   let target: string | null = null;
+  let sawOffset = false;
   for (let press = 0; press < 150 && target === null; press += 1) {
-    // The sensor may scroll the list under the overlay: read once it has ended.
-    await afterScrollEnds(page, () => page.keyboard.press("ArrowDown"));
+    const { keyboardScroll } = await scrollStep(
+      page,
+      { kind: "keyboard", y: null },
+      () => page.keyboard.press("ArrowDown"),
+      5_000,
+    );
+    if (keyboardScroll === "offset") sawOffset = true;
     const lit = await highlighted(page);
     if (lit !== null && !initial.includes(lit)) target = lit;
   }
@@ -885,6 +847,7 @@ test("G: a keyboard drag carried past the window mounts rows that were not there
     throw new Error(
       "the keyboard drag never reached a row that was not mounted at its start",
     );
+  expect(sawOffset, "the keyboard drag must scroll the window").toBe(true);
   await page.keyboard.press("Space");
   await expect(overlay(page)).toHaveCount(0);
   await expect

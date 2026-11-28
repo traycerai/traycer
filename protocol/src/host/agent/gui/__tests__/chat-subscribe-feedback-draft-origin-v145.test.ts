@@ -26,7 +26,7 @@ import {
 import { CHANNEL_ORIGIN, PROJECTION, STAMP } from "./feedback-draft-fixtures";
 
 /**
- * T356. A bot's feedback draft rides two optional leaves that land together on
+ * A bot's feedback draft rides two optional leaves that land together on
  * `chat.subscribe@1.45` and `chat-sync@1.15`: the host-owned
  * `tool_call.feedbackDraftOrigin` (where the draft was asked for) and the
  * channel row's `assistant.feedbackDraft` projection (the card). A peer below

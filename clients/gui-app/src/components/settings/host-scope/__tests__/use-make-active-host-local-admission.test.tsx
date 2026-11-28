@@ -8,8 +8,10 @@ import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol"
 import {
   hostTokenBearerFor,
   type HostTokenAccess,
+  trackHostTokenMints,
 } from "@traycer-clients/shared/auth/host-token-lease";
 import type { HostTokenMintOutcome } from "@traycer-clients/shared/auth/host-token-source";
+import { createReleasedHostMemory } from "@traycer-clients/shared/host-transport/released-sign-on";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
   HostRpcError,
@@ -212,18 +214,29 @@ async function rejectAfterLocalHostTokenMint(
 ): Promise<never> {
   const tokens: HostTokenAccess = {
     current: () => null,
+    loaded: () => true,
+    whenLoaded: () => Promise.resolve(),
     obtain: (_userId, _hostId, _fresh, _signal) => {
       mocks.state.hostTokenMintCalls += 1;
       return Promise.resolve(outcome);
     },
+    lastFailureOf: () => (outcome.kind === "ok" ? null : outcome.kind),
   };
   const hostBearerFor = hostTokenBearerFor(
-    localDoorHostTokens(tokens),
+    trackHostTokenMints(
+      localDoorHostTokens(tokens),
+      createReleasedHostMemory(),
+    ),
     noteHostTokenRefusal,
   );
   const context = mocks.state.activeContext;
   if (context === null) throw new Error("expected the active request context");
-  const bearer = await hostBearerFor(LOCAL_HOST_ID, context.credentials);
+  const bearer = await hostBearerFor(
+    LOCAL_HOST_ID,
+    context.credentials,
+    true,
+    new AbortController().signal,
+  );
   if (bearer !== null) throw new Error("expected the local mint to refuse");
 
   // WsRpcClient.withHostBearer's rejection when it cannot supply a token.

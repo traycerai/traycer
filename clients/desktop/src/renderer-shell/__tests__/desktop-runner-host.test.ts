@@ -24,6 +24,9 @@ import {
   type DesktopPreloadBridge,
 } from "../desktop-runner-host";
 
+/** A sign-in key as main reports it: the lowercase hex SHA-256 of a sign-in. */
+const FIXED_SIGN_IN_KEY = "a".repeat(64);
+
 /**
  * `DesktopRunnerHost.hostLifecycle.quit` is `IHostQuitDecisionHost | null`
  * per the shared contract, but desktop always wires it - the throw here pins
@@ -152,6 +155,7 @@ function buildFakeBridge(
     saveAutoPolicy: () => Promise.resolve({ kind: "unauthorized" as const }),
     attachTaskEnvironment: () =>
       Promise.resolve({ kind: "unauthorized" as const }),
+    getSandboxCost: () => Promise.resolve({ kind: "unauthorized" as const }),
     getSandboxCosts: async () => ({
       kind: "network-error" as const,
       detail: "test",
@@ -287,10 +291,18 @@ function buildFakeBridge(
     })(),
     hostTokens: {
       era: (_userId: string) => 0,
-      obtain: async () => ({ outcome: { kind: "no-sign-in" }, era: 0 }),
+      signIn: (_userId: string) => FIXED_SIGN_IN_KEY,
+      obtain: async () => ({
+        outcome: { kind: "no-sign-in" },
+        era: 0,
+        held: false,
+        recorded: false,
+        signIn: FIXED_SIGN_IN_KEY,
+      }),
       renew: async () => ({ renewal: { kind: "already-current" }, era: 0 }),
-      adopt: async () => ({ era: 0 }),
+      adopt: async () => ({ era: 0, kept: false }),
       forgetUser: async () => ({ era: 0 }),
+      snapshot: async () => ({ userId: null, era: 0, tokens: [] }),
       subscribe: () => ({ dispose: () => undefined }),
     },
     listUserSessions: async () => ({ kind: "network-error" as const }),
@@ -668,7 +680,7 @@ function buildFakeBridge(
         setBackgroundMaterial: async () => undefined,
         setVisibleOnAllWorkspaces: async () => undefined,
       },
-      app: { setBadge: async () => undefined },
+      app: { setAppBadgeCount: async () => undefined },
       diagnostics: {
         getMetrics: async () => ({
           main: { residentSet: 0, private: 0, shared: 0 },
@@ -2048,5 +2060,27 @@ describe("DesktopRunnerHost.localHostCapability", () => {
     expect(restartHostServiceIfHostIdle).toHaveBeenCalledWith(input);
     expect(restartHostIfIdle).not.toHaveBeenCalled();
     expect(result).toEqual({ kind: "host-busy" });
+  });
+});
+
+describe("DesktopRunnerHost.appIconBadge", () => {
+  it("reads the header bell and forwards its count to the shell", async () => {
+    const setAppBadgeCount = vi.fn(async () => undefined);
+    const fake = buildFakeBridge(null);
+    const host = new DesktopRunnerHost({
+      bridge: {
+        ...fake.bridge,
+        platform: {
+          ...fake.bridge.platform,
+          app: { setAppBadgeCount },
+        },
+      },
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+
+    expect(host.appIconBadge.countSource).toBe("bell");
+    await host.appIconBadge.setCount(6);
+    expect(setAppBadgeCount).toHaveBeenCalledTimes(1);
+    expect(setAppBadgeCount).toHaveBeenCalledWith(6);
   });
 });

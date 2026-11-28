@@ -45,6 +45,7 @@ const BASE_TREE = [
   "protocol/src/index.ts",
   "protocol/README.md",
   "scripts/test-worker-environment.ts",
+  "scripts/test-poll-lasts-its-test.ts",
   "clients/shared/src/index.ts",
   "clients/traycer-cli/src/index.ts",
   "clients/gui-app/src/main.tsx",
@@ -106,6 +107,11 @@ beforeAll(() => {
   repo = join(sandbox, "repo");
   mkdirSync(repo, { recursive: true });
   git("init", "-q", "-b", "main");
+  // A commit starts git's automatic maintenance detached, and it can still
+  // write in the repository while `afterAll` removes it. This repository
+  // never needs maintenance.
+  git("config", "maintenance.auto", "false");
+  git("config", "gc.auto", "0");
   for (const path of BASE_TREE) write(path, "base\n");
   git("add", "-A");
   git("commit", "-q", "-m", "base");
@@ -180,6 +186,14 @@ describe("protocol-compat.yml reaches the protocol surface and the client transp
     ).toBe("true");
   });
 
+  it("runs on the poll setup file", () => {
+    expect(
+      pushTouching("protocol-compat.yml", [
+        "scripts/test-poll-lasts-its-test.ts",
+      ]),
+    ).toBe("true");
+  });
+
   it("runs on a protocol change", () => {
     expect(pushTouching("protocol-compat.yml", ["protocol/src/index.ts"])).toBe(
       "true",
@@ -213,6 +227,14 @@ describe("real-supervisor.yml reaches the CLI's launchd rows", () => {
     expect(
       pushTouching("real-supervisor.yml", [
         "scripts/test-worker-environment.ts",
+      ]),
+    ).toBe("true");
+  });
+
+  it("runs on the poll setup file", () => {
+    expect(
+      pushTouching("real-supervisor.yml", [
+        "scripts/test-poll-lasts-its-test.ts",
       ]),
     ).toBe("true");
   });

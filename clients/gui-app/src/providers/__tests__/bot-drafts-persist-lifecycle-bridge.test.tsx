@@ -1,5 +1,5 @@
 /**
- * The bot boxes' drafts and the signed-in account (T186): the REAL
+ * The bot boxes' drafts and the signed-in account: the REAL
  * `BotDraftsPersistLifecycleBridge` over the real drafts store, its writer,
  * `localStorage` and the image store's roots. Each case starts the app afresh
  * (modules of its own over the same storage, as a restart leaves it), so the

@@ -18,7 +18,7 @@ export interface ChatTreeVirtualApi {
   readonly scrollElement: () => HTMLDivElement | null;
   /** The tree region (type-to-filter, reveal lookups). */
   readonly regionElement: () => HTMLDivElement | null;
-  /** The first row drawing `nodeId`, or -1. */
+  /** The first live row drawing `nodeId`, or -1. */
   readonly indexOfNodeId: (nodeId: string) => number;
   readonly scrollToIndex: (index: number, align: ChatTreeScrollAlign) => void;
   /** Changes exactly when the set of rendered rows changes. */

@@ -16,8 +16,8 @@ import {
  * flash. A row not in the rows yet (its ancestors still opening, its projection
  * on its way) leaves the request for a later run.
  *
- * A hidden tab has no layout to scroll, so a row it has not rendered waits for
- * the tab to show.
+ * A hidden tab has no layout to scroll. Even a pinned row waits for the tab
+ * to show.
  */
 export function useChatTreeReveal(
   api: ChatTreeVirtualApi,
@@ -32,21 +32,27 @@ export function useChatTreeReveal(
     scrollToIndex,
     rangeVersion,
   } = api;
+  const hasLayout = (virtualizer.scrollRect?.height ?? 0) > 0;
   useLayoutEffect(() => {
     if (request === null) return;
     const region = regionElement();
-    if (region === null) return;
+    if (region === null || !hasLayout) return;
+    if (
+      typeof region.checkVisibility === "function" &&
+      !region.checkVisibility()
+    ) {
+      return;
+    }
     if (revealSidebarNode(region, request.nodeId, request.nonce)) {
       clearSidebarNodeRevealRequest(tabId, request.nonce);
       return;
     }
-    if ((virtualizer.scrollRect?.height ?? 0) <= 0) return;
     const index = indexOfNodeId(request.nodeId);
     if (index >= 0) scrollToIndex(index, "auto");
   }, [
     request,
     tabId,
-    virtualizer,
+    hasLayout,
     model,
     regionElement,
     indexOfNodeId,

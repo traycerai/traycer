@@ -308,6 +308,12 @@ describe("runner Sentry capture", () => {
       expected: "E_HOST_UPDATE_CONCURRENT_LEGACY_UPDATER",
       message: "host update: a legacy updater is holding the update marker",
     },
+    {
+      key: "HOST_UPDATE_RESTART_REQUIRED" as const,
+      expected: "E_HOST_UPDATE_RESTART_REQUIRED",
+      message:
+        "host update: 1.5.4 is installed, but the running host was not restarted because no Traycer host service is registered.",
+    },
   ])(
     "does not capture the user-controlled refusal $expected",
     async ({ key, expected, message }) => {

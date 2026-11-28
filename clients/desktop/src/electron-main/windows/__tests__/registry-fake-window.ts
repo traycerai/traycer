@@ -1,9 +1,67 @@
 import { vi, type Mock } from "vitest";
 import type { CloseToTrayManagedWindow } from "../close-to-tray";
+import type { DidFailLoadListener } from "../voice-live-windows";
 import { WindowRegistry } from "../window-registry";
 
+/**
+ * `did-fail-load` is the only document event whose listener takes the frame
+ * flag. The others take none, which is how the fake tells them apart.
+ */
+function isDidFailLoadListener(
+  listener: (() => void) | DidFailLoadListener,
+): listener is DidFailLoadListener {
+  return listener.length >= 5;
+}
+
+class DocumentWebContents {
+  readonly id: number;
+  private readonly navigated = new Set<() => void>();
+  private readonly failed = new Set<DidFailLoadListener>();
+  private readonly gone = new Set<() => void>();
+
+  constructor(id: number) {
+    this.id = id;
+  }
+
+  on(event: "did-navigate", listener: () => void): void;
+  on(event: "did-fail-load", listener: DidFailLoadListener): void;
+  on(event: "render-process-gone", listener: () => void): void;
+  on(
+    event: "did-navigate" | "did-fail-load" | "render-process-gone",
+    listener: (() => void) | DidFailLoadListener,
+  ): void {
+    if (event === "did-fail-load") {
+      if (isDidFailLoadListener(listener)) this.failed.add(listener);
+      return;
+    }
+    if (isDidFailLoadListener(listener)) return;
+    if (event === "did-navigate") this.navigated.add(listener);
+    else this.gone.add(listener);
+  }
+
+  commitNavigation(): void {
+    for (const listener of this.navigated) listener();
+  }
+
+  failLoad(isMainFrame: boolean): void {
+    for (const listener of this.failed) {
+      listener(
+        undefined,
+        -105,
+        "ERR_NAME_NOT_RESOLVED",
+        "app://traycer",
+        isMainFrame,
+      );
+    }
+  }
+
+  rendererGone(): void {
+    for (const listener of this.gone) listener();
+  }
+}
+
 export class RegistryFakeWindow implements CloseToTrayManagedWindow {
-  readonly webContents: { readonly id: number };
+  readonly webContents: DocumentWebContents;
   private readonly listeners = new Map<string, Set<() => void>>();
   private readonly closeListeners = new Set<
     (event: { preventDefault(): void }) => void
@@ -23,8 +81,20 @@ export class RegistryFakeWindow implements CloseToTrayManagedWindow {
    * means.
    */
   constructor(webContentsId: number, shown: boolean) {
-    this.webContents = { id: webContentsId };
+    this.webContents = new DocumentWebContents(webContentsId);
     this.visible = shown;
+  }
+
+  commitNavigation(): void {
+    this.webContents.commitNavigation();
+  }
+
+  failLoad(isMainFrame: boolean): void {
+    this.webContents.failLoad(isMainFrame);
+  }
+
+  rendererGone(): void {
+    this.webContents.rendererGone();
   }
   onClose(listener: (event: { preventDefault(): void }) => void): void {
     this.closeListeners.add(listener);

@@ -1,5 +1,13 @@
 import { useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
-import { useDndContext } from "@dnd-kit/core";
+import {
+  useDndContext,
+  useDndMonitor,
+  type DragMoveEvent,
+} from "@dnd-kit/core";
+import type {
+  DragStep,
+  DragStepResult,
+} from "../../../browser-tests/support/chat-tree-drag-globals";
 import { QueryClient } from "@tanstack/react-query";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { recordNegotiatedHostMethods } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
@@ -298,6 +306,29 @@ const FRAME_RING = 600;
 const dragFrames: DragFrame[] = [];
 let pointerY: number | null = null;
 let scrollEvents = 0;
+interface ScrollerGeometry {
+  readonly scrollTop: number;
+  readonly generation: number;
+}
+
+const geometryByScroller = new WeakMap<HTMLElement, ScrollerGeometry>();
+
+function scrollerGeometry(scroller: HTMLElement): ScrollerGeometry {
+  const previous = geometryByScroller.get(scroller);
+  const scrollTop = scroller.scrollTop;
+  if (previous?.scrollTop === scrollTop) return previous;
+  const geometry = { scrollTop, generation: (previous?.generation ?? 0) + 1 };
+  geometryByScroller.set(scroller, geometry);
+  return geometry;
+}
+
+function sameScrollerGeometry(
+  a: ScrollerGeometry,
+  b: ScrollerGeometry,
+): boolean {
+  return a.generation === b.generation && a.scrollTop === b.scrollTop;
+}
+
 document.addEventListener(
   "scroll",
   (event) => {
@@ -307,6 +338,7 @@ document.addEventListener(
       target.getAttribute("data-sidebar") === "content"
     ) {
       scrollEvents += 1;
+      scrollerGeometry(target);
     }
   },
   true,
@@ -315,8 +347,307 @@ window.addEventListener("pointermove", (event) => {
   pointerY = event.clientY;
 });
 
+interface StepWatch {
+  readonly result: Promise<DragStepResult>;
+  readonly finishInput: () => void;
+  readonly didCommit: () => void;
+  readonly stop: () => void;
+}
+let stepWatch: StepWatch | null = null;
+interface CommittedDrag {
+  readonly active: DragMoveEvent["active"] | null;
+  readonly collisions: DragMoveEvent["collisions"];
+  readonly over: DragMoveEvent["over"];
+  readonly scrollableAncestors: readonly Element[];
+  readonly hasOverlayRect: boolean;
+}
+let committedDrag: CommittedDrag | null = null;
+interface ProcessedStep {
+  readonly serial: number;
+  readonly active: string | number;
+  readonly pointerY: number | null;
+  readonly scrollTop: number;
+  readonly collisionTop: number;
+  readonly over: string | number | null;
+}
+
+let processedStep: ProcessedStep | null = null;
+let moveSerial = 0;
+let dragStartOffset = 0;
+
+function matchesProcessedInput(
+  step: ProcessedStep,
+  input: {
+    readonly kind: DragStep;
+    readonly expectedY: number | null;
+    readonly afterSerial: number;
+    readonly scrollTop: number;
+    readonly scrollRequested: boolean;
+    readonly scrollEnded: boolean;
+  },
+): boolean {
+  const {
+    kind,
+    expectedY,
+    afterSerial,
+    scrollTop,
+    scrollRequested,
+    scrollEnded,
+  } = input;
+  if (kind === "keyboard") {
+    // The scroll-only sensor path may emit its move before scrollend, but it
+    // must already encode the offset that native scrolling settled at.
+    return (
+      step.pointerY === null &&
+      step.serial > afterSerial &&
+      Math.abs(step.scrollTop - scrollTop) < 0.01 &&
+      (!scrollRequested || scrollEnded)
+    );
+  }
+  return (
+    step.pointerY !== null &&
+    expectedY !== null &&
+    Math.abs(step.pointerY - expectedY) < 0.01 &&
+    step.serial > afterSerial
+  );
+}
+
+function matchesCommittedCollision(
+  dnd: CommittedDrag,
+  event: DragMoveEvent,
+): boolean {
+  return (
+    dnd.active?.id === event.active.id &&
+    dnd.hasOverlayRect &&
+    event.collisions === dnd.collisions
+  );
+}
+
+function matchesCommittedStep(
+  dnd: CommittedDrag,
+  move: ProcessedStep,
+): boolean {
+  return (
+    dnd.active?.id === move.active &&
+    dnd.active.rect.current.translated?.top === move.collisionTop &&
+    (dnd.over?.id ?? null) === move.over &&
+    (dnd.collisions?.[0]?.id ?? null) === move.over
+  );
+}
+
+function observeProcessedMove(event: DragMoveEvent): void {
+  const dnd = committedDrag;
+  const { initial, translated } = event.active.rect.current;
+  if (
+    dnd === null ||
+    !matchesCommittedCollision(dnd, event) ||
+    initial === null ||
+    translated === null
+  ) {
+    return;
+  }
+  const over = event.over?.id ?? null;
+  if ((event.collisions?.[0]?.id ?? null) !== over) return;
+  // The real root has no DndContext modifiers, and dnd-kit uses zero node
+  // correction once the overlay is measured. Its translated rect encodes
+  // the unsummed movement; event.delta is that movement plus scroll.
+  const moveY = translated.top - initial.top;
+  const activation = event.activatorEvent;
+  if (
+    !(activation instanceof KeyboardEvent) &&
+    !(activation instanceof MouseEvent)
+  )
+    return;
+  processedStep = {
+    serial: ++moveSerial,
+    active: event.active.id,
+    pointerY:
+      activation instanceof MouseEvent ? activation.clientY + moveY : null,
+    scrollTop: dragStartOffset + event.delta.y - moveY,
+    collisionTop: translated.top,
+    over,
+  };
+  queueMicrotask(() => stepWatch?.didCommit());
+}
+
+function treeScroller(): HTMLElement | undefined {
+  return [...document.querySelectorAll<HTMLElement>('[data-sidebar="content"]')]
+    .filter((node) => node.querySelector("ul[role=tree]") !== null)
+    .at(-1);
+}
+
+function armStep(kind: DragStep, expectedY: number | null): void {
+  if (stepWatch !== null) throw new Error("drag step is already armed");
+  const selectedScroller = treeScroller();
+  if (selectedScroller === undefined) throw new Error("no sidebar scroller");
+  const scroller = selectedScroller;
+  const before = scrollerGeometry(scroller);
+  let pointerInput: ScrollerGeometry | null = null;
+  const { promise, resolve } = Promise.withResolvers<DragStepResult>();
+  let inputDone = false;
+  let afterSerial = moveSerial;
+  let keyboardInputSeen = kind !== "keyboard";
+  let scrollRequested = false;
+  let scrollEnded = false;
+
+  function resolveEdge(
+    dnd: CommittedDrag,
+    move: ProcessedStep,
+    geometry: ScrollerGeometry,
+  ): void {
+    const position = {
+      scrollTop: geometry.scrollTop,
+      scrollGeneration: geometry.generation,
+    };
+    if (geometry.scrollTop !== before.scrollTop) {
+      resolve({ outcome: "advanced", ...position, keyboardScroll: null });
+    } else if (
+      pointerInput !== null &&
+      sameScrollerGeometry(pointerInput, geometry) &&
+      !dnd.scrollableAncestors.includes(scroller) &&
+      (move.over === null ||
+        String(move.over).startsWith("sidebar-reparent-panel:"))
+    ) {
+      resolve({ outcome: "panel-gap", ...position, keyboardScroll: null });
+    }
+  }
+
+  function check(): void {
+    const dnd = committedDrag;
+    const move = processedStep;
+    if (
+      !inputDone ||
+      !keyboardInputSeen ||
+      (kind !== "keyboard" && pointerInput === null) ||
+      dnd === null ||
+      move === null ||
+      !matchesCommittedStep(dnd, move)
+    ) {
+      return;
+    }
+    const geometry = scrollerGeometry(scroller);
+    if (
+      !matchesProcessedInput(move, {
+        kind,
+        expectedY,
+        afterSerial,
+        scrollTop: geometry.scrollTop,
+        scrollRequested,
+        scrollEnded,
+      })
+    ) {
+      return;
+    }
+    if (kind === "edge") {
+      resolveEdge(dnd, move, geometry);
+      return;
+    }
+    let keyboardScroll: DragStepResult["keyboardScroll"] = null;
+    if (kind === "keyboard") {
+      keyboardScroll = scrollRequested ? "offset" : "stationary";
+    }
+    resolve({
+      outcome: "committed",
+      scrollTop: geometry.scrollTop,
+      scrollGeneration: geometry.generation,
+      keyboardScroll,
+    });
+  }
+  const keyDown = (event: KeyboardEvent): void => {
+    if (event.isTrusted && event.code === "ArrowDown") {
+      afterSerial = moveSerial;
+      keyboardInputSeen = true;
+    }
+  };
+  // The panel's committed ancestor list omits the scroller. Capture the
+  // geometry before the sensor handles the trusted point, then require it
+  // to survive through the matching commit before reporting a panel gap.
+  const pointerMove = (event: PointerEvent): void => {
+    if (event.isTrusted && event.clientY === expectedY) {
+      afterSerial = moveSerial;
+      pointerInput = scrollerGeometry(scroller);
+    }
+  };
+  const scrollEnd = (): void => {
+    scrollEnded = true;
+    check();
+  };
+  scroller.addEventListener("scroll", check);
+  scroller.addEventListener("scrollend", scrollEnd);
+  if (kind === "keyboard") window.addEventListener("keydown", keyDown, true);
+  else window.addEventListener("pointermove", pointerMove, true);
+
+  // The stock keyboard sensor can use native scrolling without a position
+  // action. Observe its intent synchronously, then wait for native scrollend
+  // only when it actually requested a different offset.
+  const restore: (() => void)[] = [];
+  if (kind === "keyboard") {
+    for (const method of ["scrollTo", "scrollBy"] as const) {
+      const native = scroller[method];
+      const own = Object.getOwnPropertyDescriptor(scroller, method);
+      Object.defineProperty(scroller, method, {
+        configurable: true,
+        value: (
+          options: ScrollToOptions | number | undefined,
+          second: number | undefined,
+        ): void => {
+          const current = scroller.scrollTop;
+          const top = typeof options === "number" ? second : options?.top;
+          if (top !== undefined) {
+            const wanted = method === "scrollBy" ? current + top : top;
+            const limit = scroller.scrollHeight - scroller.clientHeight;
+            if (Math.max(0, Math.min(limit, wanted)) !== current) {
+              scrollRequested = true;
+              scrollEnded = false;
+            }
+          }
+          Reflect.apply(
+            native,
+            scroller,
+            second === undefined ? [options] : [options, second],
+          );
+        },
+      });
+      restore.push(() => {
+        if (own === undefined) Reflect.deleteProperty(scroller, method);
+        else Object.defineProperty(scroller, method, own);
+      });
+    }
+  }
+  stepWatch = {
+    result: promise,
+    finishInput: () => {
+      inputDone = true;
+      check();
+    },
+    didCommit: check,
+    stop: () => {
+      scroller.removeEventListener("scroll", check);
+      scroller.removeEventListener("scrollend", scrollEnd);
+      window.removeEventListener("keydown", keyDown, true);
+      window.removeEventListener("pointermove", pointerMove, true);
+      for (const undo of restore) undo();
+    },
+  };
+}
+
 Reflect.set(window, "__chatTreeDragProbe", {
   ready: false,
+  armStep,
+  scrollGeneration: () => {
+    const scroller = treeScroller();
+    if (scroller === undefined) throw new Error("no sidebar scroller");
+    return scrollerGeometry(scroller).generation;
+  },
+  finishInput: () => stepWatch?.finishInput(),
+  stepResult: () => {
+    if (stepWatch === null) throw new Error("no armed drag step");
+    return stepWatch.result;
+  },
+  stopStep: () => {
+    stepWatch?.stop();
+    stepWatch = null;
+  },
   frames: (last: number): DragFrame[] => dragFrames.slice(-last),
   parentOf: (id: string): string | null | undefined =>
     SESSION.store.getState().tree.nodeById[id]?.parentId,
@@ -354,11 +685,7 @@ function treeScrollerFrame(
   | "scrollerBottom"
   | "treeScrollerInDndAncestors"
 > {
-  const scroller = [
-    ...document.querySelectorAll<HTMLElement>('[data-sidebar="content"]'),
-  ]
-    .filter((node) => node.querySelector("ul[role=tree]") !== null)
-    .at(-1);
+  const scroller = treeScroller();
   if (scroller === undefined) {
     return {
       scrollTop: null,
@@ -400,6 +727,22 @@ function FrameProbe(): null {
   const latest = useRef(dnd);
   useLayoutEffect(() => {
     latest.current = dnd;
+    committedDrag = {
+      active: dnd.active,
+      collisions: dnd.collisions,
+      over: dnd.over,
+      scrollableAncestors: dnd.scrollableAncestors,
+      hasOverlayRect: dnd.dragOverlay.rect !== null,
+    };
+    queueMicrotask(() => stepWatch?.didCommit());
+  });
+  useDndMonitor({
+    onDragStart: () => {
+      processedStep = null;
+      dragStartOffset = treeScroller()?.scrollTop ?? 0;
+    },
+    onDragMove: observeProcessedMove,
+    onDragOver: observeProcessedMove,
   });
   const dragging = dnd.active !== null;
   useEffect(() => {
@@ -438,11 +781,11 @@ export function Fixture(): ReactNode {
     Reflect.set(Reflect.get(window, "__chatTreeDragProbe"), "ready", true);
   }, []);
   return (
-    <div className="flex h-dvh bg-canvas text-canvas-foreground">
+    <div className="flex h-safe-dvh bg-canvas text-canvas-foreground">
       <FrameProbe />
       <div
         data-fixture-panel
-        className="flex h-full w-80 shrink-0 flex-col border-r border-border bg-background"
+        className="flex h-full w-full max-w-80 flex-col border-r border-border bg-background"
       >
         <SidebarProvider className="min-h-0 flex-1">
           <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />

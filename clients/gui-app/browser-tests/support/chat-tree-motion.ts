@@ -468,7 +468,10 @@ export function lastDrawnFrame(recording: Recording, id: string): number {
 export function expectHeld(recording: Recording, id: string): void {
   const start = startTop(recording, id);
   const rows = drawn(recording, id);
-  expect(rows.length, `${id} is drawn`).toBeGreaterThan(0);
+  expect(
+    rows.map((row) => row.frame),
+    "one held row per frame",
+  ).toEqual(recording.map((_, index) => index));
   for (const row of rows) {
     expect(row.top, `${id} frame ${String(row.frame)}`).toBeCloseTo(start, 0);
     expect(row.opacity, `${id} frame ${String(row.frame)}`).toBeGreaterThan(
@@ -484,7 +487,8 @@ function sampledAt(recording: Recording, frame: number): number {
 }
 function isBetween(top: number, start: number, end: number): boolean {
   return (
-    Math.abs(top - start) > SUBPIXEL_PX && Math.abs(top - end) > SUBPIXEL_PX
+    top > Math.min(start, end) + SUBPIXEL_PX &&
+    top < Math.max(start, end) - SUBPIXEL_PX
   );
 }
 /**
@@ -510,6 +514,15 @@ function expectGlide(
   const rows = drawn(recording, id);
   expect(rows.length, `${id} is drawn`).toBeGreaterThan(0);
   expect(rows[rows.length - 1].top, `${id} ends`).toBeCloseTo(end, 0);
+  for (const row of rows) {
+    expect(
+      row.top,
+      "the glide stays within its endpoints",
+    ).toBeGreaterThanOrEqual(Math.min(start, end) - SUBPIXEL_PX);
+    expect(row.top, "the glide stays within its endpoints").toBeLessThanOrEqual(
+      Math.max(start, end) + SUBPIXEL_PX,
+    );
+  }
   const direction = Math.sign(delta);
   for (let i = 1; i < rows.length; i += 1) {
     expect(
@@ -569,8 +582,42 @@ export function expectClosesGap(
 ): void {
   const last = drawn(recording, ghost).at(-1);
   if (last === undefined) throw new Error(`row ${ghost} is never drawn`);
+  const start = startTop(recording, id);
+  for (const row of drawn(recording, id)) {
+    if (row.frame > last.frame) break;
+    expect(
+      Math.abs(row.top - start),
+      "the gap stays open while the old row is drawn",
+    ).toBeLessThanOrEqual(SUBPIXEL_PX);
+  }
   expectGlide(recording, id, delta, last.at);
 }
+function expectSingleStep(
+  rows: readonly Drawn[],
+  position: (row: Drawn) => number,
+  destination: number,
+): number {
+  const start = position(rows[0]);
+  const stepped = rows.findIndex(
+    (row) => Math.abs(position(row) - start) > SUBPIXEL_PX,
+  );
+  expect(stepped, "the row steps from its starting position").toBeGreaterThan(
+    0,
+  );
+  const arrived = position(rows[stepped]);
+  expect(arrived, "the step reaches its destination").toBeCloseTo(
+    destination,
+    0,
+  );
+  for (const row of rows.slice(stepped + 1)) {
+    expect(
+      Math.abs(position(row) - arrived),
+      "the row stays at its destination after its step",
+    ).toBeLessThanOrEqual(SUBPIXEL_PX);
+  }
+  return rows[stepped].frame;
+}
+
 /** The row goes from where it began to `delta` px away in one step. */
 export function expectSnaps(
   recording: Recording,
@@ -580,14 +627,16 @@ export function expectSnaps(
   const start = startTop(recording, id);
   const rows = drawn(recording, id);
   expect(rows.length, `${id} is drawn`).toBeGreaterThan(0);
-  expect(rows[rows.length - 1].top, `${id} ends`).toBeCloseTo(start + delta, 0);
-  expect(placesOf(recording, id), `${id}'s places`).toBe(2);
+  expectSingleStep(rows, (row) => row.top, start + delta);
 }
 /** The row is drawn from the first frame after the change and never moves. */
 export function expectAppearsAtOnce(recording: Recording, id: string): void {
   const rows = drawn(recording, id);
   expect(rows.length, `${id} is drawn`).toBeGreaterThan(0);
-  expect(rows[0].frame, `${id}'s first frame`).toBe(1);
+  expect(
+    rows.map((row) => row.frame),
+    "one inserted row per post-change frame",
+  ).toEqual(recording.slice(1).map((_, index) => index + 1));
   expect(placesOf(recording, id), `${id}'s places`).toBe(1);
   for (const row of rows) {
     expect(row.opacity, `${id} frame ${String(row.frame)}`).toBeGreaterThan(
@@ -750,9 +799,12 @@ export function expectRailFollowsOwner(
 ): void {
   const rail = railOf(recording, ownerId);
   const owner = drawn(recording, ownerId);
-  for (const row of rail) {
-    const at = owner.find((o) => o.frame === row.frame);
-    if (at === undefined) continue;
+  expect(
+    rail.map((row) => row.frame),
+    "rail frames during the slide",
+  ).toEqual(owner.map((row) => row.frame));
+  for (const [index, row] of rail.entries()) {
+    const at = owner[index];
     expect(
       Math.abs(row.top - at.bottom),
       `rail of ${ownerId} frame ${String(row.frame)}: top ${String(row.top)}, owner's bottom ${String(at.bottom)}`,
@@ -771,14 +823,17 @@ export function expectRailFadesWithOwner(
 ): void {
   const rail = railOf(recording, ownerId);
   const owner = drawn(recording, ownerId);
+  expect(
+    rail.map((row) => row.frame),
+    "rail frames during the fade",
+  ).toEqual(owner.map((row) => row.frame));
   const start = rail[0].top;
-  for (const row of rail) {
+  for (const [index, row] of rail.entries()) {
     expect(
       row.top,
       `rail frame ${String(row.frame)} stays in place`,
     ).toBeCloseTo(start, 0);
-    const at = owner.find((o) => o.frame === row.frame);
-    if (at === undefined) continue;
+    const at = owner[index];
     expect(
       Math.abs(row.opacity - at.opacity),
       `rail frame ${String(row.frame)}: ${String(row.opacity)} against its owner's ${String(at.opacity)}`,
@@ -797,9 +852,10 @@ export function expectRailFadesWithOwner(
 /** The rail is fully opaque on every frame it is drawn, and drawn on every frame. */
 export function expectRailSolid(recording: Recording, ownerId: string): void {
   const rail = railOf(recording, ownerId);
-  expect(rail.length, "the rail is drawn on every frame").toBe(
-    recording.length,
-  );
+  expect(
+    rail.map((row) => row.frame),
+    "one solid rail per frame",
+  ).toEqual(recording.map((_, index) => index));
   for (const row of rail) {
     expect(row.opacity, `rail frame ${String(row.frame)}`).toBeGreaterThan(
       0.99,
@@ -815,18 +871,9 @@ export function expectRailSteps(
   delta: number,
 ): { readonly stepFrame: number } {
   const rail = railOf(recording, ownerId);
-  const start = rail[0][key];
-  expect(rail[rail.length - 1][key], `rail ${key} ends`).toBeCloseTo(
-    start + delta,
-    0,
-  );
-  expect(
-    railPlaces(recording, ownerId, key),
-    `rail ${key} takes two values: it does not glide`,
-  ).toBe(2);
-  const stepped = rail.find((row) => Math.abs(row[key] - start) > SUBPIXEL_PX);
-  if (stepped === undefined) throw new Error(`rail ${key} never moves`);
-  return { stepFrame: stepped.frame };
+  return {
+    stepFrame: expectSingleStep(rail, (row) => row[key], rail[0][key] + delta),
+  };
 }
 
 /** The rail's `key` never changes. */

@@ -51,7 +51,10 @@ import type {
   DoctorRepairIntent,
 } from "@traycer-clients/shared/platform/runner-host";
 import { use, type ReactNode } from "react";
-import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
+import type {
+  HostScope,
+  SettingsHostScope,
+} from "@/components/settings/host-scope/use-host-scope";
 
 /**
  * The one Overview page. No second surface, and so no decision about which to
@@ -284,7 +287,7 @@ function useOverviewCapabilityProbe(scope: HostScope): void {
  * reachable, the account registry when it is not, and it says which.
  */
 function renderOverviewBody(input: {
-  readonly scope: HostScope;
+  readonly scope: SettingsHostScope;
   readonly unresolved: boolean;
   readonly compact: boolean;
   readonly hasLocalBridge: boolean;
@@ -321,6 +324,7 @@ function renderOverviewBody(input: {
     // the host they belonged to, one boundary up.
     <HostOverviewPanel
       scope={scope}
+      shownFromRow={scope.shownFromRow}
       hasLocalBridge={input.hasLocalBridge}
       onLocalDoctorFix={input.onLocalDoctorFix}
       localDoctorFixPendingCode={input.localDoctorFixPendingCode}

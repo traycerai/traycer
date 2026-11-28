@@ -228,11 +228,12 @@ export function inertHostTokenSource(): HostTokenSource {
   });
 }
 
-export async function heldHostTokenSource(
+/** Stores a fresh token for the pair, which `tokens` announces as a change. */
+export async function adoptHostToken(
+  tokens: HostTokenSource,
   userId: string,
   hostId: string,
-): Promise<HostTokenSource> {
-  const tokens = inertHostTokenSource();
+): Promise<void> {
   await tokens.adopt(
     userId,
     hostId,
@@ -241,7 +242,16 @@ export async function heldHostTokenSource(
       expiresAtMs: Date.now() + 3_600_000,
     },
     tokens.era(userId),
+    () => true,
   );
+}
+
+export async function heldHostTokenSource(
+  userId: string,
+  hostId: string,
+): Promise<HostTokenSource> {
+  const tokens = inertHostTokenSource();
+  await adoptHostToken(tokens, userId, hostId);
   return tokens;
 }
 
@@ -315,6 +325,7 @@ export function createFakeRunnerHost(
     saveAutoPolicy: () => Promise.resolve({ kind: "unauthorized" as const }),
     attachTaskEnvironment: () =>
       Promise.resolve({ kind: "unauthorized" as const }),
+    getSandboxCost: () => Promise.resolve({ kind: "unauthorized" as const }),
     getSandboxCosts: () =>
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
     getSandboxCatalogue: () =>
@@ -460,7 +471,10 @@ export function createFakeRunnerHost(
     zoom: null,
     // Desktop-shaped by default; a phone-shaped test passes its own
     // `pushPermission` double through `overrides`.
+    deliveredNotifications: null,
     pushPermission: null,
+    // A test of the app icon badge passes its own double through `overrides`.
+    appIconBadge: null,
     // A test of on-device dictation passes its own double through
     // `overrides`.
     deviceDictation: null,

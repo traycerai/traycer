@@ -16,6 +16,7 @@ import {
   measureElement as measureRenderedElement,
   useVirtualizer,
   type Range,
+  type VirtualItem,
 } from "@tanstack/react-virtual";
 import { AnimatePresence, LayoutGroupContext, m } from "motion/react";
 import { OverlayAnchorHoldContext } from "@/components/ui/overlay-anchor-hold";
@@ -28,11 +29,12 @@ import {
   treeGuideLeft,
   useTreeRowMotion,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
-import type {
-  ChatTreeCloudRow,
-  ChatTreeLocalRow,
-  ChatTreeRow,
-  ChatTreeRowModel,
+import {
+  subtreeEnds,
+  type ChatTreeCloudRow,
+  type ChatTreeLocalRow,
+  type ChatTreeRow,
+  type ChatTreeRowModel,
 } from "@/components/epic-canvas/sidebar/chat-tree-rows";
 import {
   createVirtualRowPinStore,
@@ -81,6 +83,27 @@ function measureRow(
     instance.indexFromElement(element),
   );
   return kept === undefined ? size : kept.size;
+}
+
+function visibleNeighborIndex(
+  items: readonly VirtualItem[],
+  departing: ReadonlyMap<string, unknown>,
+  index: number,
+  viewport: { readonly top: number; readonly bottom: number },
+): number | undefined {
+  let before: number | undefined;
+  for (const item of items) {
+    if (
+      item.end <= viewport.top ||
+      item.start >= viewport.bottom ||
+      departing.has(String(item.key))
+    ) {
+      continue;
+    }
+    if (item.index >= index) return item.index;
+    before = item.index;
+  }
+  return before;
 }
 
 /** The distance from the scroller's content top to the list's top. */
@@ -181,6 +204,36 @@ export function ChatTreeVirtualList(props: ChatTreeVirtualListProps) {
       scrollMargin,
     },
   );
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (list === null || departing.size === 0) return;
+    const activeRow = list.ownerDocument.activeElement?.closest<HTMLElement>(
+      "li[data-row-key][data-departing]",
+    );
+    if (activeRow?.parentElement === list) {
+      const key = activeRow.dataset.rowKey;
+      const index = key === undefined ? undefined : indexByKey.get(key);
+      if (index !== undefined) {
+        const top = virtualizer.scrollOffset ?? 0;
+        const closest = visibleNeighborIndex(items, departing, index, {
+          top,
+          bottom: top + (virtualizer.scrollRect?.height ?? 0),
+        });
+        const target =
+          closest === undefined
+            ? null
+            : list.querySelector<HTMLElement>(
+                'li[data-index="' + String(closest) + '"]',
+              );
+        (target ?? list).focus({ preventScroll: true });
+      }
+    }
+    // Move any focus first, so the browser does not drop it to the body.
+    for (const shell of list.querySelectorAll(":scope > li[data-departing]")) {
+      shell.setAttribute("inert", "");
+      shell.setAttribute("aria-hidden", "true");
+    }
+  }, [departing, indexByKey, items, virtualizer]);
   // A fading row the window does not draw has no fade to finish.
   useLayoutEffect(() => {
     if (departing.size === 0) return;
@@ -191,11 +244,12 @@ export function ChatTreeVirtualList(props: ChatTreeVirtualListProps) {
   });
   const rangeVersion = items.map((item) => item.key).join("\n");
   const measureVersion = items
-    .map((item) => `${item.start}:${item.size}`)
+    .map((item) => JSON.stringify([item.key, item.start, item.size]))
     .join(",");
   const indexOfNodeId = useCallback(
-    (nodeId: string) => rows.findIndex((row) => row.nodeId === nodeId),
-    [rows],
+    (nodeId: string) =>
+      rows.findIndex((row) => row.nodeId === nodeId && !departing.has(row.key)),
+    [departing, rows],
   );
   const api = useMemo<ChatTreeVirtualApi>(
     () => ({
@@ -228,6 +282,7 @@ export function ChatTreeVirtualList(props: ChatTreeVirtualListProps) {
         <ul
           ref={listRef}
           role="tree"
+          tabIndex={-1}
           aria-label="Epic agents tree"
           // The number of rows the tree draws - every row a branch shows,
           // none a collapsed branch hides - whether or not the window has
@@ -306,22 +361,6 @@ interface GroupRail {
   readonly owner: ChatTreeRow;
   readonly top: number;
   readonly height: number;
-}
-
-/** For each row, the index of the last row drawn inside its subtree. */
-function subtreeEnds(rows: readonly ChatTreeRow[]): readonly number[] {
-  const ends = rows.map((_row, index) => index);
-  const open: number[] = [];
-  for (const [index, row] of rows.entries()) {
-    let last = open.at(-1);
-    while (last !== undefined && rows[last].depth >= row.depth) {
-      open.pop();
-      last = open.at(-1);
-    }
-    for (const owner of open) ends[owner] = index;
-    open.push(index);
-  }
-  return ends;
 }
 
 /**
@@ -459,12 +498,27 @@ function ChatTreeItemShell(
     [parentLayoutGroup, motionStamp],
   );
   const holdRow = useCallback(() => pinStore.pin(row.key), [pinStore, row.key]);
+  const shellRef = useRef<HTMLLIElement>(null);
+  const bindShell = useCallback(
+    (shell: HTMLLIElement | null) => {
+      shellRef.current = shell;
+      measure(shell);
+    },
+    [measure],
+  );
+  useLayoutEffect(() => {
+    if (departing) return;
+    shellRef.current?.removeAttribute("inert");
+    shellRef.current?.removeAttribute("aria-hidden");
+  }, [departing]);
   return (
     <li
-      ref={measure}
+      ref={bindShell}
       data-index={index}
       data-row-key={row.key}
-      role="treeitem"
+      data-departing={departing ? "" : undefined}
+      role={departing ? undefined : "treeitem"}
+      tabIndex={-1}
       aria-level={row.depth + 1}
       aria-posinset={row.posInSet}
       aria-setsize={row.setSize}

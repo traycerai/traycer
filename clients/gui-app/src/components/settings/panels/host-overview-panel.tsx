@@ -1,3 +1,4 @@
+import { useHostStatusReading } from "@/components/settings/host-scope/use-host-read-refusal";
 import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
 import { HostRestartSessions } from "@/components/host/host-restart-sessions";
 import {
@@ -223,6 +224,11 @@ const LOCAL_RECORD_TICK_MS = 1_000;
 // eslint-disable-next-line complexity
 export function HostOverviewPanel(props: {
   readonly scope: HostScope;
+  /**
+   * Settings shows the host from its account row while it still places it
+   * (`SettingsHostScope.shownFromRow`).
+   */
+  readonly shownFromRow: boolean;
   /** True when this shell has a CLI bridge for the local-only doctor repairs. */
   readonly hasLocalBridge: boolean;
   readonly onLocalDoctorFix: (
@@ -294,12 +300,23 @@ export function HostOverviewPanel(props: {
   // forgot to start my host". It gets the bridge doctor, and — in the one
   // state the automation deliberately leaves alone, the user having removed
   // Traycer from this computer — the consent-reversing Reinstall.
+  // A computer shown from its account row is refused or too old, not down:
+  // it gets no bridge doctor and no Reinstall.
   const localDown =
     scope.status === "unreachable" &&
     (host?.isLocalMachine ?? false) &&
-    props.hasLocalBridge;
+    props.hasLocalBridge &&
+    !props.shownFromRow;
 
   const [doctorOpen, setDoctorOpen] = useState(false);
+  // A sheet opened before the page turned into a computer's account-row view
+  // closes, with any repair it had open: its logs and fixes reach the host.
+  // Adjust-during-render, like the restart confirm's closes below.
+  if (doctorOpen && props.shownFromRow) {
+    setDoctorOpen(false);
+  }
+  // The status read the offline notice's "Try again" started, still in flight.
+  const offlineRetryPending = useHostStatusReading(scope.hostId);
   // Which dispatch leg the open restart confirm is armed for - captured at
   // OPEN, never re-derived at confirm. The cooperative `host.restart` needs
   // the scope's client and is withdrawn with it (the `!usable` rule below);
@@ -340,11 +357,15 @@ export function HostOverviewPanel(props: {
   // One value rather than a boolean gate beside an id, because the two must
   // never disagree - the id IS the reason the route exists, and reading them
   // apart is how an offer ends up pinned to a host the gate already refused.
+  // None for a computer shown from its account row: the page can turn into
+  // that view without remounting, and the null id closes a confirm or offer
+  // armed before it did.
   const forceRestartLocalHostId =
     host !== null &&
     host.isLocalMachine &&
     props.hasLocalBridge &&
-    management !== null
+    management !== null &&
+    !props.shownFromRow
       ? host.hostId
       : null;
 
@@ -1742,6 +1763,10 @@ export function HostOverviewPanel(props: {
             })
           : null
       }
+      // Also while a restart hides the offline line: it may be the only way
+      // back for a host Settings shows from its account row.
+      offlineRetry={usable ? null : scope.retryEntryStatus}
+      offlineRetryPending={offlineRetryPending}
       // The ATTEMPT, when this peer speaks it. Supersedes the coarse notice
       // rather than sitting beside it — two update lines describing one
       // operation in different vocabularies is the drift the shared
@@ -2067,7 +2092,11 @@ export function HostOverviewPanel(props: {
             teamName={hostOptionTeamOwner(host)?.teamName ?? null}
           />
         )}
-        <HostEnvironmentSection scope={scope} hostName={displayName} />
+        <HostEnvironmentSection
+          scope={scope}
+          hostName={displayName}
+          shownFromRow={props.shownFromRow}
+        />
         {/* The tab bar and the one body showing, pinned under the header.
             The Ports count and the Installation dot hang on `badges`. */}
         <HostOverviewTabs

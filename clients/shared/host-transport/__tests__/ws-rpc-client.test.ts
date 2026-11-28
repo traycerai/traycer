@@ -68,6 +68,23 @@ import type {
   HostOpenAckFrame,
 } from "@traycer/protocol/framework/ws-protocol";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
+import { NO_HOST_TOKEN_PROBE } from "@traycer/protocol/framework/door-reason";
+import type { HostToken } from "@traycer-clients/shared/auth/host-token-store";
+import type {
+  HostTokenMintFailure,
+  HostTokenMintOutcome,
+} from "@traycer-clients/shared/auth/host-token-source";
+import {
+  hostTokenBearerFor,
+  trackHostTokenMints,
+} from "@traycer-clients/shared/auth/host-token-lease";
+import {
+  createReleasedHostMemory,
+  heldTokenRefused,
+  signInForLocalRow,
+  type ReleasedSignOnRow,
+} from "../released-sign-on";
+import type { HostTokenAccess } from "@traycer-clients/shared/auth/host-token-lease";
 
 const echoV10 = defineRpcContract({
   method: "host.echo",
@@ -291,6 +308,190 @@ function makeClient(options: {
     evidence: NO_TRANSPORT_EVIDENCE,
   });
   return new BoundWsRpcClient(inner, authorityForToken(options.authToken));
+}
+
+const RELEASED_TEST_USER = "released-test-user";
+const RELEASED_TEST_HOST = mockLocalHostEntry.hostId;
+const RELEASED_TEST_SIGN_IN = "released-test-sign-in";
+const RELEASED_WAIT = { interval: 10 };
+
+function mutableTokenAccess(
+  initial: HostToken | null,
+  outcomes: HostTokenMintOutcome[],
+): {
+  readonly access: HostTokenAccess;
+  readonly setCurrent: (token: HostToken | null) => void;
+} {
+  let current = initial;
+  let lastFailure: HostTokenMintFailure | null = null;
+  return {
+    access: {
+      current: () => current,
+      loaded: () => true,
+      whenLoaded: () => Promise.resolve(),
+      obtain: async () => {
+        const outcome =
+          outcomes.shift() ??
+          ({ kind: "unavailable", detail: "authn offline" } as const);
+        if (outcome.kind === "ok") current = outcome.token;
+        lastFailure = outcome.kind === "ok" ? null : outcome.kind;
+        return outcome;
+      },
+      lastFailureOf: () => lastFailure,
+    },
+    setCurrent: (token) => {
+      current = token;
+    },
+  };
+}
+
+function makeReleasedUnaryRig(input: {
+  readonly row: ReleasedSignOnRow;
+  readonly initialToken: HostToken | null;
+  readonly outcomes: HostTokenMintOutcome[];
+}) {
+  const mutable = mutableTokenAccess(input.initialToken, input.outcomes);
+  const hosts = createReleasedHostMemory();
+  const tokens = trackHostTokenMints(mutable.access, hosts);
+  const { factory, sockets } = makeFactory();
+  let requestNumber = 0;
+  let doorRefusals = 0;
+  const client = new WsRpcClient<typeof testRegistry>({
+    clientIdentity: TEST_CLIENT_IDENTITY,
+    registry: testRegistry,
+    requestId: () => {
+      requestNumber += 1;
+      return `req-released-${requestNumber}`;
+    },
+    webSocketFactory: factory,
+    dialTimeoutMs: 1_000,
+    frameTimeoutMs: 1_000,
+    hostAttestationWindowMs: 0,
+    evidence: NO_TRANSPORT_EVIDENCE,
+    hostBearerFor: hostTokenBearerFor(tokens, () => undefined),
+    releasedSignOnFor: signInForLocalRow(() => input.row, null, tokens),
+    releasedHosts: hosts,
+    doorFor: () => ({
+      refused: () => {
+        doorRefusals += 1;
+      },
+      admitted: () => () => undefined,
+    }),
+    heldTokenRefusedFor: (_authority, presented, instance) =>
+      heldTokenRefused(tokens, RELEASED_TEST_USER, instance, presented),
+    forgetHeldRefusalFor: () =>
+      tokens.forgetHeldRefused(RELEASED_TEST_USER, RELEASED_TEST_HOST),
+  });
+  const authority = authorityForBearer(
+    new MutableBearerLease(RELEASED_TEST_SIGN_IN, RELEASED_TEST_USER),
+  );
+  return {
+    client,
+    sockets,
+    tokens,
+    hosts,
+    doorRefusals: () => doorRefusals,
+    setCurrent: mutable.setCurrent,
+    start: async () => {
+      const previousCount = sockets.length;
+      const pending = client.request(
+        "host.status",
+        {},
+        {
+          replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
+          idempotencyKey: null,
+          authority,
+        },
+      );
+      await vi.waitFor(
+        () => expect(sockets).toHaveLength(previousCount + 1),
+        RELEASED_WAIT,
+      );
+      const recorded = sockets[previousCount];
+      if (recorded === undefined) throw new Error("unary socket missing");
+      const openSent = recorded.socket.nextSend();
+      recorded.socket.fireOpen();
+      await openSent;
+      const sentOpen = recorded.sent[0];
+      if (sentOpen === undefined) throw new Error("unary open missing");
+      return {
+        pending,
+        recorded,
+        socket: recorded.socket,
+        open: expectOpenFrame(sentOpen),
+      };
+    },
+  };
+}
+
+async function socketAfter(
+  sockets: readonly RecordedSocket[],
+  index: number,
+): Promise<RecordedSocket> {
+  await vi.waitFor(
+    () => expect(sockets.length).toBeGreaterThan(index),
+    RELEASED_WAIT,
+  );
+  const recorded = sockets[index];
+  if (recorded === undefined) throw new Error("expected unary socket");
+  return recorded;
+}
+
+async function openRecordedSocket(recorded: RecordedSocket): Promise<{
+  readonly socket: StubWebSocket;
+  readonly open: ClientOpenFrame;
+}> {
+  const openSent = recorded.socket.nextSend();
+  recorded.socket.fireOpen();
+  await openSent;
+  const sentOpen = recorded.sent[0];
+  if (sentOpen === undefined) throw new Error("unary open missing");
+  return { socket: recorded.socket, open: expectOpenFrame(sentOpen) };
+}
+
+async function completeReleasedStatusCall(
+  recorded: RecordedSocket,
+  pending: Promise<{ readonly ready: boolean }>,
+): Promise<void> {
+  const requestSent = recorded.socket.nextSend();
+  recorded.socket.fireMessage(
+    openAckWithOptionalHostEcho({ major: 1, minor: 0 }),
+  );
+  await requestSent;
+  const sentRequest = recorded.sent[1];
+  if (sentRequest === undefined) throw new Error("unary request missing");
+  const request = expectRequestFrame(sentRequest);
+  recorded.socket.fireMessage({
+    kind: "response",
+    requestId: request.requestId,
+    method: request.method,
+    schemaVersion: request.schemaVersion,
+    result: { ready: true },
+    error: null,
+  });
+  await expect(pending).resolves.toEqual({ ready: true });
+}
+
+function doorFatal(
+  doorReason:
+    | "not_admitted"
+    | "owner_sign_in"
+    | "not_provisioned"
+    | "token_expired",
+  reason: string,
+): HostFrame {
+  return {
+    kind: "fatalError",
+    details: {
+      code: "UNAUTHORIZED",
+      reason,
+      doorReason,
+      retryable: false,
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  };
 }
 
 async function expectPostOpenTimeoutRecovery(fatal: HostFrame): Promise<void> {
@@ -630,6 +831,280 @@ class RecordingEvidence implements TransportEvidenceReporter {
 }
 
 describe("WsRpcClient", () => {
+  describe("released local unary probes", () => {
+    const unavailable: HostTokenMintOutcome = {
+      kind: "unavailable",
+      detail: "authn offline",
+    };
+
+    it("probes again after not_provisioned, then uses the invited sign-in", async () => {
+      const rig = makeReleasedUnaryRig({
+        row: { owner: { kind: "user", id: RELEASED_TEST_USER } },
+        initialToken: null,
+        outcomes: [unavailable, unavailable, unavailable],
+      });
+
+      const first = await rig.start();
+      expect(first.open.token).toBe(NO_HOST_TOKEN_PROBE);
+      first.socket.fireMessage(
+        doorFatal(
+          "not_provisioned",
+          "Host is not provisioned - enroll this computer",
+        ),
+      );
+      await expect(first.pending).rejects.toSatisfy(
+        (error: unknown) =>
+          error instanceof HostRpcError &&
+          error.message.includes("No host-only token is held for this host"),
+      );
+      const second = await rig.start();
+      expect(second.open.token).toBe(NO_HOST_TOKEN_PROBE);
+      second.socket.fireMessage(doorFatal("owner_sign_in", "sign-in invited"));
+      const invited = await socketAfter(rig.sockets, 2);
+      const signIn = await openRecordedSocket(invited);
+      expect(signIn.open.token).toBe(RELEASED_TEST_SIGN_IN);
+      await completeReleasedStatusCall(invited, second.pending);
+      expect(
+        rig.sockets.map(({ sent }) => expectOpenFrame(sent[0] ?? "").token),
+      ).toEqual([
+        NO_HOST_TOKEN_PROBE,
+        NO_HOST_TOKEN_PROBE,
+        RELEASED_TEST_SIGN_IN,
+      ]);
+    });
+
+    it.each(["not_provisioned", "owner_sign_in"] as const)(
+      "probes again on the next call when the invited sign-in is refused %s",
+      async (doorReason) => {
+        const rig = makeReleasedUnaryRig({
+          row: { owner: { kind: "user", id: RELEASED_TEST_USER } },
+          initialToken: null,
+          outcomes: [unavailable, unavailable, unavailable],
+        });
+
+        const first = await rig.start();
+        expect(first.open.token).toBe(NO_HOST_TOKEN_PROBE);
+        first.socket.fireMessage(
+          doorFatal("owner_sign_in", "current computer invited sign-in"),
+        );
+        const invited = await socketAfter(rig.sockets, 1);
+        expect((await openRecordedSocket(invited)).open.token).toBe(
+          RELEASED_TEST_SIGN_IN,
+        );
+        invited.socket.fireMessage(
+          doorFatal(doorReason, "the invited sign-in was not taken"),
+        );
+        await expect(first.pending).rejects.toBeInstanceOf(HostRpcError);
+
+        const next = await rig.start();
+        expect(next.open.token).toBe(NO_HOST_TOKEN_PROBE);
+        next.socket.fireMessage(doorFatal("not_admitted", "not admitted"));
+        await expect(next.pending).rejects.toBeInstanceOf(HostRpcError);
+      },
+    );
+
+    it("uses the sign-in only after a current personal probe invites it", async () => {
+      const rig = makeReleasedUnaryRig({
+        row: { owner: { kind: "user", id: RELEASED_TEST_USER } },
+        initialToken: null,
+        outcomes: [unavailable, unavailable],
+      });
+
+      const first = await rig.start();
+      expect(first.open.token).toBe(NO_HOST_TOKEN_PROBE);
+      first.socket.fireMessage(
+        doorFatal("owner_sign_in", "current computer invited sign-in"),
+      );
+      const invited = await socketAfter(rig.sockets, 1);
+      const open = await openRecordedSocket(invited);
+      expect(open.open.token).toBe(RELEASED_TEST_SIGN_IN);
+      await completeReleasedStatusCall(invited, first.pending);
+
+      expect(
+        rig.sockets.map(({ sent }) => expectOpenFrame(sent[0] ?? "").token),
+      ).toEqual([NO_HOST_TOKEN_PROBE, RELEASED_TEST_SIGN_IN]);
+      expect(rig.doorRefusals()).toBe(0);
+      expect(
+        rig.hosts.opensReleasedWay(RELEASED_TEST_USER, RELEASED_TEST_HOST),
+      ).toBe(false);
+    });
+
+    it("does not send sign-in when owner_sign_in follows a not-admitted mint", async () => {
+      const rig = makeReleasedUnaryRig({
+        row: { owner: { kind: "user", id: RELEASED_TEST_USER } },
+        initialToken: null,
+        outcomes: [{ kind: "not-admitted" }],
+      });
+
+      const first = await rig.start();
+      expect(first.open.token).toBe(NO_HOST_TOKEN_PROBE);
+      first.socket.fireMessage(
+        doorFatal("owner_sign_in", "authn already answered not-admitted"),
+      );
+      await expect(first.pending).rejects.toBeInstanceOf(HostRpcError);
+      expect(
+        rig.sockets.map(({ sent }) => expectOpenFrame(sent[0] ?? "").token),
+      ).toEqual([NO_HOST_TOKEN_PROBE]);
+    });
+
+    it("uses the host-only token on the call after invited sign-in admission", async () => {
+      const freshToken = "unary-host-token-after-invited-sign-in";
+      const rig = makeReleasedUnaryRig({
+        row: { owner: { kind: "user", id: RELEASED_TEST_USER } },
+        initialToken: null,
+        outcomes: [
+          unavailable,
+          {
+            kind: "ok",
+            token: { token: freshToken, expiresAtMs: Date.now() + 60_000 },
+          },
+        ],
+      });
+
+      const invitedCall = await rig.start();
+      expect(invitedCall.open.token).toBe(NO_HOST_TOKEN_PROBE);
+      invitedCall.socket.fireMessage(
+        doorFatal("owner_sign_in", "current computer invited sign-in"),
+      );
+      const invited = await socketAfter(rig.sockets, 1);
+      expect((await openRecordedSocket(invited)).open.token).toBe(
+        RELEASED_TEST_SIGN_IN,
+      );
+      await completeReleasedStatusCall(invited, invitedCall.pending);
+
+      const nextCall = await rig.start();
+      expect(nextCall.open.token).toBe(freshToken);
+      await completeReleasedStatusCall(nextCall.recorded, nextCall.pending);
+      expect(
+        rig.sockets.map(({ sent }) => expectOpenFrame(sent[0] ?? "").token),
+      ).toEqual([NO_HOST_TOKEN_PROBE, RELEASED_TEST_SIGN_IN, freshToken]);
+      expect(rig.doorRefusals()).toBe(0);
+      expect(
+        rig.hosts.opensReleasedWay(RELEASED_TEST_USER, RELEASED_TEST_HOST),
+      ).toBe(false);
+    });
+
+    it("retries an expired held token through a probe and invitation in one call", async () => {
+      const expired = {
+        token: "unary-held-token-refused-as-expired",
+        expiresAtMs: Date.now() - 1,
+      };
+      const rig = makeReleasedUnaryRig({
+        row: { owner: { kind: "user", id: RELEASED_TEST_USER } },
+        initialToken: expired,
+        outcomes: [unavailable, unavailable, unavailable],
+      });
+
+      const attempt = await rig.start();
+      expect(attempt.open.token).toBe(expired.token);
+      attempt.socket.fireMessage(
+        doorFatal("token_expired", "held host-only token expired"),
+      );
+      const probe = await socketAfter(rig.sockets, 1);
+      expect((await openRecordedSocket(probe)).open.token).toBe(
+        NO_HOST_TOKEN_PROBE,
+      );
+      probe.socket.fireMessage(
+        doorFatal("owner_sign_in", "current computer invited sign-in"),
+      );
+      const invited = await socketAfter(rig.sockets, 2);
+      expect((await openRecordedSocket(invited)).open.token).toBe(
+        RELEASED_TEST_SIGN_IN,
+      );
+      await completeReleasedStatusCall(invited, attempt.pending);
+
+      expect(
+        rig.sockets.map(({ sent }) => expectOpenFrame(sent[0] ?? "").token),
+      ).toEqual([expired.token, NO_HOST_TOKEN_PROBE, RELEASED_TEST_SIGN_IN]);
+      expect(rig.doorRefusals()).toBe(0);
+    });
+
+    it("probes again after an admitted host token clears a declined probe", async () => {
+      const rig = makeReleasedUnaryRig({
+        row: { owner: { kind: "user", id: RELEASED_TEST_USER } },
+        initialToken: null,
+        outcomes: [
+          unavailable,
+          {
+            kind: "ok",
+            token: {
+              token: "unary-admitted-host-token",
+              expiresAtMs: Date.now() + 60_000,
+            },
+          },
+          unavailable,
+        ],
+      });
+
+      const first = await rig.start();
+      expect(first.open.token).toBe(NO_HOST_TOKEN_PROBE);
+      first.socket.fireMessage(doorFatal("not_admitted", "not admitted"));
+      await expect(first.pending).rejects.toBeInstanceOf(HostRpcError);
+      const admitted = await rig.start();
+      expect(admitted.open.token).toBe("unary-admitted-host-token");
+      await completeReleasedStatusCall(admitted.recorded, admitted.pending);
+
+      rig.setCurrent(null);
+      const laterOutage = await rig.start();
+      expect(laterOutage.open.token).toBe(NO_HOST_TOKEN_PROBE);
+      laterOutage.socket.fireMessage(
+        doorFatal("not_admitted", "not admitted during the later outage"),
+      );
+      await expect(laterOutage.pending).rejects.toBeInstanceOf(HostRpcError);
+    });
+
+    it("keeps a token minted before the held-token refusal is handled", async () => {
+      const rig = makeReleasedUnaryRig({
+        row: { owner: { kind: "team", id: "team-1", name: "Team" } },
+        initialToken: {
+          token: "held-expired-before-mint",
+          expiresAtMs: Date.now() - 1,
+        },
+        outcomes: [
+          unavailable,
+          {
+            kind: "ok",
+            token: {
+              token: "minted-before-refusal-handled",
+              expiresAtMs: Date.now() + 60_000,
+            },
+          },
+          unavailable,
+        ],
+      });
+
+      const first = await rig.start();
+      expect(first.open.token).toBe("held-expired-before-mint");
+      const minted = await rig.tokens.obtain(
+        RELEASED_TEST_USER,
+        RELEASED_TEST_HOST,
+        false,
+        { signal: null, owner: null },
+      );
+      expect(minted.kind).toBe("ok");
+
+      first.socket.fireMessage(
+        doorFatal("token_expired", "expired held token"),
+      );
+      await expect(first.pending).rejects.toBeInstanceOf(HostRpcError);
+
+      rig.setCurrent({
+        token: "minted-before-refusal-handled",
+        expiresAtMs: Date.now() - 1,
+      });
+
+      const afterExpiry = await rig.start();
+      expect(afterExpiry.open.token).toBe("minted-before-refusal-handled");
+      await completeReleasedStatusCall(
+        afterExpiry.recorded,
+        afterExpiry.pending,
+      );
+      expect(
+        rig.sockets.map(({ sent }) => expectOpenFrame(sent[0] ?? "").token),
+      ).toEqual(["held-expired-before-mint", "minted-before-refusal-handled"]);
+    });
+  });
+
   it("puts the configured client identity on every open frame", async () => {
     // EVERY open frame, not just the first: this transport dials a fresh
     // socket per RPC, so an identity resolved anywhere other than

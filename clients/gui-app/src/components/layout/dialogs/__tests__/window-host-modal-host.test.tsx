@@ -1,7 +1,16 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import {
   createHostTokenSource,
   createMemoryHostTokenPersistence,
+  type HostTokenSource,
 } from "@traycer-clients/shared/auth/host-token-source";
 import {
   act,
@@ -698,10 +707,33 @@ describe("<WindowHostModalHost />", () => {
     expect(screen.getByText("This computer belongs to a team")).toBeTruthy();
   });
 
-  it("draws the older-host cover after a real host-token refusal when the directory version is unknown", async () => {
-    const hostId = "host-token-older-host-cover";
-    const hostToken = "host-only-token";
-    const signInToken = "sign-in-token";
+  const HOST_ONLY_TOKEN = "host-only-token";
+  const SIGN_IN_TOKEN_OF_PERSON = "sign-in-token";
+  const bareRefusalFrame = JSON.stringify({
+    kind: "fatalError",
+    details: {
+      code: "UNAUTHORIZED",
+      reason: "refused at the host door",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  });
+
+  /** A rendered local stream whose first socket has written its open with the host-only token. */
+  async function openLocalStreamOnHostOnlyToken(
+    hostId: string,
+    owner: {
+      readonly kind: "team";
+      readonly id: string;
+      readonly name: string;
+    } | null,
+  ): Promise<{
+    readonly socket: FakeNativeWebSocket;
+    readonly hostTokens: HostTokenSource;
+    readonly mintCalls: () => number;
+    readonly signInRecoveryCalls: () => number;
+    readonly close: () => void;
+  }> {
     let mintCalls = 0;
     let signInRecoveryCalls = 0;
     clearHostDoorState(hostId);
@@ -709,7 +741,7 @@ describe("<WindowHostModalHost />", () => {
     FakeNativeWebSocket.instances.length = 0;
 
     const provider = newProvider();
-    signIn(provider, USER_A, signInToken);
+    signIn(provider, USER_A, SIGN_IN_TOKEN_OF_PERSON);
     const hostTokens = createHostTokenSource({
       persistence: createMemoryHostTokenPersistence(),
       mint: () => {
@@ -723,12 +755,13 @@ describe("<WindowHostModalHost />", () => {
       USER_A,
       hostId,
       {
-        token: hostToken,
+        token: HOST_ONLY_TOKEN,
         expiresAtMs: Date.now() + 3_600_000,
       },
       hostTokens.era(USER_A),
+      () => true,
     );
-    const target = { ...mockLocalHostEntry, hostId, version: null };
+    const target = { ...mockLocalHostEntry, hostId, version: null, owner };
     const client = buildHostStreamClient({
       target,
       endpoint: () =>
@@ -748,39 +781,48 @@ describe("<WindowHostModalHost />", () => {
       userId: USER_A,
       proactiveWakeEligible: false,
       autoStart: false,
+      watchHostTokens: true,
     });
     if (client === null) throw new Error("local stream client did not build");
     const session = client.subscribe("epic.subscribe", { epicId: "epic-a" });
+    applySnapshot({ targetHostId: hostId });
+    renderHost(EMPTY_PRESENTATION, false, undefined);
+    await waitFor(() => expect(FakeNativeWebSocket.instances).toHaveLength(1));
+    const socket = FakeNativeWebSocket.instances.at(0);
+    if (socket === undefined) throw new Error("host socket missing");
+    socket.fireOpen();
+    await waitFor(() =>
+      expect(sentFramesOfKind(socket, "open")).toHaveLength(1),
+    );
+    const open = sentFramesOfKind(socket, "open").at(0);
+    if (open === undefined) throw new Error("host open frame missing");
+    expect(open.token).toBe(HOST_ONLY_TOKEN);
+    expect(JSON.stringify(open)).not.toContain(SIGN_IN_TOKEN_OF_PERSON);
+    return {
+      socket,
+      hostTokens,
+      mintCalls: () => mintCalls,
+      signInRecoveryCalls: () => signInRecoveryCalls,
+      close: () => {
+        session.close();
+        client.close("test complete");
+        clearHostDoorState(hostId);
+      },
+    };
+  }
 
+  it("draws the older-host cover after a real host-token refusal when the directory version is unknown", async () => {
+    const hostId = "host-token-older-host-cover";
+    // A team's computer is never handed the person's sign-in, so its bare
+    // refusal of the host-only token is the end: no attach follows it.
+    const stream = await openLocalStreamOnHostOnlyToken(hostId, {
+      kind: "team",
+      id: "team-1",
+      name: "Team",
+    });
     try {
-      applySnapshot({ targetHostId: hostId });
-      renderHost(EMPTY_PRESENTATION, false, undefined);
-      await waitFor(() =>
-        expect(FakeNativeWebSocket.instances).toHaveLength(1),
-      );
-      const socket = FakeNativeWebSocket.instances.at(0);
-      if (socket === undefined) throw new Error("host socket missing");
-      socket.fireOpen();
-      await waitFor(() =>
-        expect(sentFramesOfKind(socket, "open")).toHaveLength(1),
-      );
-      const open = sentFramesOfKind(socket, "open").at(0);
-      if (open === undefined) throw new Error("host open frame missing");
-      expect(open.token).toBe(hostToken);
-      expect(JSON.stringify(open)).not.toContain(signInToken);
-
       act(() => {
-        socket.fireMessage(
-          JSON.stringify({
-            kind: "fatalError",
-            details: {
-              code: "UNAUTHORIZED",
-              reason: "refused at the host door",
-              incompatibleMethods: null,
-              upgradeGuidance: null,
-            },
-          }),
-        );
+        stream.socket.fireMessage(bareRefusalFrame);
       });
 
       await waitFor(() =>
@@ -795,13 +837,49 @@ describe("<WindowHostModalHost />", () => {
       expect(
         screen.getByTestId("window-host-modal-incompatible-detail").textContent,
       ).not.toContain("Host version:");
-      expect(signInRecoveryCalls).toBe(0);
-      expect(mintCalls).toBe(0);
-      expect(hostTokens.current(USER_A, hostId)?.token).toBe(hostToken);
+      expect(stream.signInRecoveryCalls()).toBe(0);
+      expect(stream.mintCalls()).toBe(0);
+      expect(stream.hostTokens.current(USER_A, hostId)?.token).toBe(
+        HOST_ONLY_TOKEN,
+      );
     } finally {
-      session.close();
-      client.close("test complete");
-      clearHostDoorState(hostId);
+      stream.close();
+    }
+  });
+
+  it("draws no cover when the person's own computer refuses the host-only token bare and the sign-in attach that follows is refused bare too", async () => {
+    const hostId = "host-token-sign-in-attach-refused";
+    const stream = await openLocalStreamOnHostOnlyToken(hostId, null);
+    try {
+      act(() => {
+        stream.socket.fireMessage(bareRefusalFrame);
+      });
+      // The released way: the stream attaches again with the person's sign-in.
+      await waitFor(() =>
+        expect(FakeNativeWebSocket.instances).toHaveLength(2),
+      );
+      const signInSocket = FakeNativeWebSocket.instances.at(1);
+      if (signInSocket === undefined) throw new Error("sign-in socket missing");
+      signInSocket.fireOpen();
+      await waitFor(() =>
+        expect(sentFramesOfKind(signInSocket, "open")).toHaveLength(1),
+      );
+      expect(sentFramesOfKind(signInSocket, "open").at(0)?.token).toBe(
+        SIGN_IN_TOKEN_OF_PERSON,
+      );
+      expect(hostDoorStateFor(hostId)).toBeNull();
+
+      act(() => {
+        signInSocket.fireMessage(bareRefusalFrame);
+      });
+
+      // That refusal is the person's sign-in's: recovery is asked, and the door is told nothing.
+      await waitFor(() => expect(stream.signInRecoveryCalls()).toBe(1));
+      expect(hostDoorStateFor(hostId)).toBeNull();
+      expect(screen.queryByTestId("window-host-modal")).toBeNull();
+      expect(stream.mintCalls()).toBe(0);
+    } finally {
+      stream.close();
     }
   });
 
@@ -903,6 +981,7 @@ describe("<WindowHostModalHost />", () => {
         expiresAtMs: Date.now() + 3_600_000,
       },
       hostTokens.era("user-1"),
+      () => true,
     );
     const fetchMock = vi.fn<typeof fetch>(() =>
       Promise.resolve(
@@ -973,6 +1052,7 @@ describe("<WindowHostModalHost />", () => {
       userId: "user-1",
       proactiveWakeEligible: false,
       autoStart: false,
+      watchHostTokens: true,
     });
     if (client === null) throw new Error("remote stream client did not build");
     const sharedClient = buildHostStreamClient({
@@ -986,6 +1066,7 @@ describe("<WindowHostModalHost />", () => {
       userId: "user-1",
       proactiveWakeEligible: false,
       autoStart: false,
+      watchHostTokens: true,
     });
     if (sharedClient === null)
       throw new Error("shared remote stream client did not build");
@@ -996,97 +1077,12 @@ describe("<WindowHostModalHost />", () => {
 
     const toastError = vi.spyOn(toast, "error");
     let usingFakeTimers = false;
-    try {
-      await waitFor(() => expect(peer.openCount).toBe(1));
-      await waitFor(() => expect(hasReadyRemoteSession(hostId)).toBe(true));
-      expect(dialAttempts).toBe(1);
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(peer.errors).toEqual([]);
-      const atFloor = fixture.directory.findById(hostId);
-      if (atFloor === null || !isRemoteHostDirectoryEntry(atFloor)) {
-        throw new Error("the connected remote directory row was missing");
-      }
-      expect(atFloor.remoteStatus.appVersion).toBe(MINIMUM_HOST_VERSION);
-
-      await act(async () => {
-        fixture.rows.current = [
-          {
-            ...remoteHostEntry("1.5.4", "current"),
-            publicKey: peer.hostPublicKey,
-            websocketUrl: relayAttachUrl,
-          },
-        ];
-        await fixture.directory.refresh();
-      });
-
-      const surface = await screen.findByTestId("window-host-modal");
-      expect(surface.getAttribute("data-cause")).toBe("no-usable-host");
-      expect(surface.getAttribute("data-variant")).toBe("update-host");
-      expect(
-        within(surface).getByTestId("window-host-modal-title").textContent,
-      ).toBe("Host update needed");
-      expect(
-        within(surface).getByTestId("window-host-modal-description")
-          .textContent,
-      ).toBe(
-        "That computer's Traycer Host is running a version this app can't talk to. Update it to continue - its agents and history are untouched.",
-      );
-      expect(buttonsOf(surface)).toEqual(["Update now", "Open settings"]);
-      expect(useSelectionAuthorityStore.getState().effectiveHostId).toBe(
-        hostId,
-      );
-
-      vi.useFakeTimers();
-      usingFakeTimers = true;
-      stream.close();
-      sharedStream.close();
-      client.close("release into shared-session linger");
-      sharedClient.close("release into shared-session linger");
-      expect(hasReadyRemoteSession(hostId)).toBe(true);
-      expect(client.isClosed()).toBe(false);
-
-      const firstSocket = sockets.at(0);
-      if (firstSocket === undefined || firstSocket.onclose === null) {
-        throw new Error("established relay socket had no close handler");
-      }
-      // A ready session's first recovery redial uses the immediate rung.
-      await act(async () => {
-        firstSocket.onclose?.({
-          code: 1006,
-          reason: "relay connection interrupted",
-          wasClean: false,
-        });
-        await vi.advanceTimersByTimeAsync(0);
-        await failedRedial.promise;
-      });
-      expect(dialAttempts).toBe(2);
-      expect(hasReadyRemoteSession(hostId)).toBe(false);
-      expect(client.isClosed()).toBe(false);
-      const belowFloor = fixture.directory.findById(hostId);
-      if (belowFloor === null || !isRemoteHostDirectoryEntry(belowFloor)) {
-        throw new Error("the downgraded remote directory row was missing");
-      }
-      expect(belowFloor.remoteStatus.appVersion).toBe("1.5.4");
-      expect(useSelectionAuthorityStore.getState().effectiveHostId).toBe(
-        hostId,
-      );
-      expect(screen.getByTestId("window-host-modal")).toBe(surface);
-      expect(surface.getAttribute("data-cause")).toBe("no-usable-host");
-      expect(surface.getAttribute("data-variant")).toBe("update-host");
-      expect(
-        within(surface).getByTestId("window-host-modal-title").textContent,
-      ).toBe("Host update needed");
-      expect(
-        within(surface).getByTestId("window-host-modal-description")
-          .textContent,
-      ).toBe(
-        "That computer's Traycer Host is running a version this app can't talk to. Update it to continue - its agents and history are untouched.",
-      );
-      expect(buttonsOf(surface)).toEqual(["Update now", "Open settings"]);
-      expect(toast).not.toHaveBeenCalled();
-      expect(toastError).not.toHaveBeenCalled();
-      expect(authErrorToastHarness.show).not.toHaveBeenCalled();
-    } finally {
+    // Registered with the runner, so a wait that never ends still releases
+    // what this case opened before the next test runs.
+    onTestFinished(() => {
+      // The second dial settles this; a case that never reached it still
+      // lets the act holding it finish. A settled promise ignores this.
+      failedRedial.resolve();
       stream.close();
       sharedStream.close();
       client.close("test complete");
@@ -1098,7 +1094,90 @@ describe("<WindowHostModalHost />", () => {
         retireAllRemoteSessions();
         vi.useRealTimers();
       }
+    });
+    await waitFor(() => expect(peer.openCount).toBe(1));
+    await waitFor(() => expect(hasReadyRemoteSession(hostId)).toBe(true));
+    expect(dialAttempts).toBe(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(peer.errors).toEqual([]);
+    const atFloor = fixture.directory.findById(hostId);
+    if (atFloor === null || !isRemoteHostDirectoryEntry(atFloor)) {
+      throw new Error("the connected remote directory row was missing");
     }
+    expect(atFloor.remoteStatus.appVersion).toBe(MINIMUM_HOST_VERSION);
+
+    await act(async () => {
+      fixture.rows.current = [
+        {
+          ...remoteHostEntry("1.5.4", "current"),
+          publicKey: peer.hostPublicKey,
+          websocketUrl: relayAttachUrl,
+        },
+      ];
+      await fixture.directory.refresh();
+    });
+
+    const surface = await screen.findByTestId("window-host-modal");
+    expect(surface.getAttribute("data-cause")).toBe("no-usable-host");
+    expect(surface.getAttribute("data-variant")).toBe("update-host");
+    expect(
+      within(surface).getByTestId("window-host-modal-title").textContent,
+    ).toBe("Host update needed");
+    expect(
+      within(surface).getByTestId("window-host-modal-description").textContent,
+    ).toBe(
+      "That computer's Traycer Host is running a version this app can't talk to. Update it to continue - its agents and history are untouched.",
+    );
+    expect(buttonsOf(surface)).toEqual(["Update now", "Open settings"]);
+    expect(useSelectionAuthorityStore.getState().effectiveHostId).toBe(hostId);
+
+    vi.useFakeTimers();
+    usingFakeTimers = true;
+    stream.close();
+    sharedStream.close();
+    client.close("release into shared-session linger");
+    sharedClient.close("release into shared-session linger");
+    expect(hasReadyRemoteSession(hostId)).toBe(true);
+    expect(client.isClosed()).toBe(false);
+
+    const firstSocket = sockets.at(0);
+    if (firstSocket === undefined || firstSocket.onclose === null) {
+      throw new Error("established relay socket had no close handler");
+    }
+    // A ready session's first recovery redial uses the immediate rung.
+    await act(async () => {
+      firstSocket.onclose?.({
+        code: 1006,
+        reason: "relay connection interrupted",
+        wasClean: false,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await failedRedial.promise;
+    });
+    expect(dialAttempts).toBe(2);
+    expect(hasReadyRemoteSession(hostId)).toBe(false);
+    expect(client.isClosed()).toBe(false);
+    const belowFloor = fixture.directory.findById(hostId);
+    if (belowFloor === null || !isRemoteHostDirectoryEntry(belowFloor)) {
+      throw new Error("the downgraded remote directory row was missing");
+    }
+    expect(belowFloor.remoteStatus.appVersion).toBe("1.5.4");
+    expect(useSelectionAuthorityStore.getState().effectiveHostId).toBe(hostId);
+    expect(screen.getByTestId("window-host-modal")).toBe(surface);
+    expect(surface.getAttribute("data-cause")).toBe("no-usable-host");
+    expect(surface.getAttribute("data-variant")).toBe("update-host");
+    expect(
+      within(surface).getByTestId("window-host-modal-title").textContent,
+    ).toBe("Host update needed");
+    expect(
+      within(surface).getByTestId("window-host-modal-description").textContent,
+    ).toBe(
+      "That computer's Traycer Host is running a version this app can't talk to. Update it to continue - its agents and history are untouched.",
+    );
+    expect(buttonsOf(surface)).toEqual(["Update now", "Open settings"]);
+    expect(toast).not.toHaveBeenCalled();
+    expect(toastError).not.toHaveBeenCalled();
+    expect(authErrorToastHarness.show).not.toHaveBeenCalled();
   });
 
   it("the real older-host cover offers Update now and Open settings before a remote update is pending", async () => {

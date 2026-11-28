@@ -20,7 +20,14 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
@@ -83,6 +90,17 @@ export interface OwnershipReceipt {
   readonly giveStarted: (give: StartedGive) => void;
 }
 
+/**
+ * The person's act of opening this host's Overview, counted by the pick store
+ * (`startFollow`): the rail follow writes only while no later act has
+ * happened. Held above the card, because the card unmounts while the host's
+ * reads fail and comes back with them.
+ */
+export interface RailFollowOwner {
+  readonly hostId: string;
+  readonly act: number;
+}
+
 /** The named host's settings place, above the Overview's tabs. */
 export function HostOverviewSettingsCard(props: {
   readonly client: HostClient<HostRpcRegistry>;
@@ -93,6 +111,7 @@ export function HostOverviewSettingsCard(props: {
   readonly owner: HostOwnerPrincipal | null;
   readonly isLocalMachine: boolean;
   readonly receipt: OwnershipReceipt;
+  readonly railFollowRef: RefObject<RailFollowOwner | null>;
 }): ReactNode {
   const openMoveSheet = useMoveSheetStore((state) => state.openSheet);
   const [stopOpen, setStopOpen] = useState(false);
@@ -116,7 +135,7 @@ export function HostOverviewSettingsCard(props: {
           status: props.status,
           version: statusVersion,
         });
-  useMatchEnvironmentRail(railPick);
+  useMatchEnvironmentRail(props.hostId, railPick, props.railFollowRef);
   if (model.kind === "loading" || props.status === null) {
     return (
       <>
@@ -576,13 +595,39 @@ function railFollowKey(pick: EnvironmentPick): string {
 }
 
 /**
- * Writes the host's source into the rail once per source. The source is
- * remembered even when the rail already shows it, so a pick made afterwards
- * is never replaced by it. A stale Local pick arrives as null and is never
- * written.
+ * The follow's owner for this host, counting the Overview's opening as an act
+ * when this host's Overview has none yet: the Overview has just opened. A
+ * host id that goes null and comes back as the same host is the same opening.
  */
-function useMatchEnvironmentRail(pick: EnvironmentPick | null): void {
-  const setPick = useSettingsEnvironmentPickStore((state) => state.setPick);
+function railFollowOwner(
+  railFollowRef: RefObject<RailFollowOwner | null>,
+  hostId: string,
+): RailFollowOwner {
+  const held = railFollowRef.current;
+  if (held !== null && held.hostId === hostId) return held;
+  const opened = {
+    hostId,
+    act: useSettingsEnvironmentPickStore.getState().startFollow(),
+  };
+  railFollowRef.current = opened;
+  return opened;
+}
+
+/**
+ * Writes the host's source into the rail once per source. A stale Local pick
+ * arrives as null and is never written. The write lands only while the
+ * Overview's opening is still the person's newest act (`followPick`), so a
+ * source that answers late never replaces a pick made after the Overview
+ * opened, and a write the person did not make leaves the follow going.
+ */
+function useMatchEnvironmentRail(
+  hostId: string,
+  pick: EnvironmentPick | null,
+  railFollowRef: RefObject<RailFollowOwner | null>,
+): void {
+  const followPick = useSettingsEnvironmentPickStore(
+    (state) => state.followPick,
+  );
   const current = useSettingsEnvironmentPickStore(
     (state) => state.pick ?? state.defaultPick,
   );
@@ -590,11 +635,13 @@ function useMatchEnvironmentRail(pick: EnvironmentPick | null): void {
   const currentKey = railFollowKey(current);
   const held = useRef<string | null>(null);
   useEffect(() => {
+    const owner = railFollowOwner(railFollowRef, hostId);
     if (pick === null || nextKey === null) return;
     if (held.current === nextKey) return;
     held.current = nextKey;
-    if (nextKey !== currentKey) setPick(pick);
-  }, [pick, nextKey, currentKey, setPick]);
+    if (nextKey === currentKey) return;
+    followPick(owner.act, pick);
+  }, [hostId, pick, nextKey, currentKey, followPick, railFollowRef]);
 }
 
 /**
@@ -654,6 +701,11 @@ export function HostOverviewSettingsCardSlot(props: {
   readonly receipt: OwnershipReceipt;
   /** The card shows again after a time it could not: the host is back. */
   readonly onReturn: () => void;
+  /**
+   * Settings shows the host from its account row while it still places it
+   * (`SettingsHostScope.shownFromRow`).
+   */
+  readonly shownFromRow: boolean;
 }): ReactNode {
   const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
   const status = useEnvironmentStatusRead(
@@ -687,6 +739,18 @@ export function HostOverviewSettingsCardSlot(props: {
     if (wasHidden.current && !hidden) onReturn();
     wasHidden.current = hidden;
   }, [hidden, onReturn]);
+  // The opening is counted here, even while the card is hidden: a pick made
+  // before the card first shows is the person's newer act. Not for a host
+  // Settings shows from its account row while it still places it: that
+  // opening is the entry's own, and counting it would refuse the entry's
+  // environment follow.
+  const railFollowRef = useRef<RailFollowOwner | null>(null);
+  const { hostId } = props;
+  const { shownFromRow } = props;
+  useEffect(() => {
+    if (hostId !== null && !shownFromRow)
+      railFollowOwner(railFollowRef, hostId);
+  }, [hostId, shownFromRow]);
   if (hidden) return null;
   return (
     <HostOverviewSettingsCard
@@ -699,6 +763,7 @@ export function HostOverviewSettingsCardSlot(props: {
       owner={props.owner}
       isLocalMachine={props.isLocalMachine}
       receipt={props.receipt}
+      railFollowRef={railFollowRef}
     />
   );
 }

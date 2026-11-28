@@ -284,16 +284,26 @@ async function drained(): Promise<void> {
  * every update they caused has rendered.
  */
 async function settled(mounted: Mounted): Promise<void> {
-  await vi.waitFor(() => {
-    for (const method of SHARED_READS) {
-      const queries = mounted.queryClient.getQueryCache().findAll({
-        predicate: (query) =>
-          query.queryKey.includes(method) && query.state.status !== "pending",
+  const { queryClient } = mounted;
+  const cache = queryClient.getQueryCache();
+  const ready = (): boolean =>
+    queryClient.isFetching() === 0 &&
+    SHARED_READS.every(
+      (method) =>
+        cache.findAll({
+          predicate: (query) =>
+            query.queryKey.includes(method) && query.state.status !== "pending",
+        }).length > 0,
+    );
+  if (!ready()) {
+    await new Promise<void>((resolve) => {
+      const unsubscribe = cache.subscribe(() => {
+        if (!ready()) return;
+        unsubscribe();
+        resolve();
       });
-      expect(queries.length, `${method} has no answer yet`).toBeGreaterThan(0);
-    }
-    expect(mounted.queryClient.isFetching()).toBe(0);
-  });
+    });
+  }
   await drained();
 }
 

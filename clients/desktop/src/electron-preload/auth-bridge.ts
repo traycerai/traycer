@@ -50,6 +50,7 @@ import type {
   SandboxAutomationOpenFetchResult,
   SandboxCatalogueFetchResult,
   SandboxCostsFetchResult,
+  SandboxCostFetchResult,
   SandboxCreateFetchResult,
   TraycerModelsFetchResult,
   SandboxAutomationOpenTarget,
@@ -96,11 +97,13 @@ import {
   NO_ISSUED_HOST_TOKEN_ERA,
   type HostTokenBridgeChange,
   type HostTokenEraReply,
+  type HostTokenAdoptReply,
   type HostTokenObtainReply,
   type HostTokenRenewReply,
+  type HostTokenSnapshotReply,
   type HostTokensBridgeSurface,
 } from "../ipc-contracts/host-token-types";
-import { readSyncNumberFor } from "./sync-bootstrap";
+import { readSyncNullableStringFor, readSyncNumberFor } from "./sync-bootstrap";
 
 /**
  * Eagerly subscribe at module load so a cold-start browser-return deep link
@@ -206,6 +209,10 @@ export interface AuthBridgeSurface {
     request: TaskEnvironmentAttachmentRequest,
   ): Promise<TaskEnvironmentAttachmentResult>;
   getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult>;
+  getSandboxCost(
+    bearerToken: string,
+    sandboxId: string,
+  ): Promise<SandboxCostFetchResult>;
   getSandboxCatalogue(
     bearerToken: string,
     context: SandboxCatalogueReadinessRequest | null,
@@ -463,6 +470,13 @@ export function buildAuthBridge(): AuthBridgeSurface {
         RunnerHostInvoke.getSandboxCosts,
         bearerToken,
       ) as Promise<SandboxCostsFetchResult>,
+
+    getSandboxCost: (bearerToken, sandboxId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.getSandboxCost,
+        bearerToken,
+        sandboxId,
+      ) as Promise<SandboxCostFetchResult>,
 
     getSandboxCatalogue: (bearerToken, context) =>
       ipcRenderer.invoke(
@@ -768,13 +782,16 @@ export function buildHostTokensBridge(): HostTokensBridgeSurface {
         userId,
         NO_ISSUED_HOST_TOKEN_ERA,
       ),
-    obtain: (userId, hostId, fresh, expectedEra) =>
+    signIn: (userId) =>
+      readSyncNullableStringFor(RunnerHostSync.hostTokensSignIn, userId),
+    obtain: (userId, hostId, fresh, expectedEra, owner) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.hostTokensObtain,
         userId,
         hostId,
         fresh,
         expectedEra,
+        owner,
       ) as Promise<HostTokenObtainReply>,
     renew: (userId, hostIds, expectedEra) =>
       ipcRenderer.invoke(
@@ -783,19 +800,24 @@ export function buildHostTokensBridge(): HostTokensBridgeSurface {
         hostIds,
         expectedEra,
       ) as Promise<HostTokenRenewReply>,
-    adopt: (userId, hostId, token, expectedEra) =>
+    adopt: (userId, hostId, token, expectedEra, owner) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.hostTokensAdopt,
         userId,
         hostId,
         token,
         expectedEra,
-      ) as Promise<HostTokenEraReply>,
+        owner,
+      ) as Promise<HostTokenAdoptReply>,
     forgetUser: (userId) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.hostTokensForgetUser,
         userId,
       ) as Promise<HostTokenEraReply>,
+    snapshot: () =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.hostTokensSnapshot,
+      ) as Promise<HostTokenSnapshotReply>,
     subscribe: (handler) =>
       subscribe<HostTokenBridgeChange>(
         RunnerHostEvent.hostTokensChange,

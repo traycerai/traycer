@@ -27,6 +27,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { chatTreeLayout } from "@/__tests__/chat-tree-virtual-layout";
 import { ChatTreePanelBody } from "@/components/epic-canvas/sidebar/epic-sidebar-chat-tree";
 import { CHAT_TREE_MESSAGE_HITS_NONE } from "@/components/epic-canvas/sidebar/epic-sidebar-message-hits-state";
+import { OverlayAnchorHoldContext } from "@/components/ui/overlay-anchor-hold";
+import {
+  TooltipWrapper,
+  TooltipsSuppressedProvider,
+} from "@/components/ui/tooltip-wrapper";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -367,4 +372,36 @@ describe("an open overlay holds its chat-tree row in the window", () => {
     // The rest of the tree is untouched.
     expect(rowOf(BYSTANDER)).not.toBeNull();
   });
+});
+
+it("pins a controlled tooltip only while its label can be shown", () => {
+  const release = vi.fn();
+  const hold = vi.fn(() => release);
+  function view(suppressed: boolean, label: string) {
+    return (
+      <TooltipProvider>
+        <OverlayAnchorHoldContext.Provider value={hold}>
+          <TooltipsSuppressedProvider value={suppressed}>
+            <TooltipWrapper
+              label={label}
+              open
+              side="top"
+              sideOffset={undefined}
+              align={undefined}
+            >
+              <button type="button">Trigger</button>
+            </TooltipWrapper>
+          </TooltipsSuppressedProvider>
+        </OverlayAnchorHoldContext.Provider>
+      </TooltipProvider>
+    );
+  }
+  const { rerender } = render(view(false, ""));
+  expect(hold).not.toHaveBeenCalled();
+
+  rerender(view(false, "Shown"));
+  expect(hold).toHaveBeenCalledTimes(1);
+  rerender(view(true, "Shown"));
+  expect(release).toHaveBeenCalledTimes(1);
+  expect(hold).toHaveBeenCalledTimes(1);
 });

@@ -689,7 +689,7 @@ function hostAuth(
       return {
         bearer,
         authz: { v: 1, grant: attachGrant.grant },
-        fingerprint: `${bearer}:${attachGrant.grant}`,
+        fingerprint: bearer,
       };
     },
     readCredentialUpdateBearer: readBearer,

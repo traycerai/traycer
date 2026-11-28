@@ -397,6 +397,44 @@ describe("getModelLabelIndex", () => {
       ),
     ).toBe("Extra High");
   });
+  it("shows Claude's default as plain Default and keeps every other catalog label raw", () => {
+    const grouped = (
+      harnessId: GuiAgentModelOption["harnessId"],
+      label: string,
+    ): GuiAgentModelOption => ({
+      ...modelOption(harnessId, "anthropic/claude-opus", label, []),
+      metadata: { openCodeProviderLabel: "Anthropic" },
+    });
+    const index = getModelLabelIndex([
+      catalogEntry("claude", [
+        modelOption("claude", "default", "Default (Sonnet 4.6)", []),
+      ]),
+      catalogEntry("codex", [
+        modelOption("codex", "default", "Default (GPT-5.5)", []),
+      ]),
+      catalogEntry("opencode", [grouped("opencode", "Anthropic: Claude Opus")]),
+      catalogEntry("kilocode", [grouped("kilocode", "Anthropic: Claude Opus")]),
+    ]);
+    const context = displayContextFrom(index);
+    const modelLabelFor = (
+      harnessId: AgentSender["harnessId"],
+      agentId: string,
+    ): string | null =>
+      resolveAgentSenderDisplay(agentSender(harnessId, agentId, null), context)
+        .modelLabel;
+
+    expect(modelLabelFor("claude", "default")).toBe("Default");
+    // Only Claude's default is neutralised; group prefixes stay on the labels
+    // that carry them.
+    expect(modelLabelFor("codex", "default")).toBe("Default (GPT-5.5)");
+    expect(modelLabelFor("opencode", "anthropic/claude-opus")).toBe(
+      "Anthropic: Claude Opus",
+    );
+    expect(modelLabelFor("kilocode", "anthropic/claude-opus")).toBe(
+      "Anthropic: Claude Opus",
+    );
+  });
+
   it("maps each advertised service tier id to its label per model", () => {
     const dualTier: GuiAgentModelOption = {
       ...modelOption("codex", "gpt-6.1-sol", "GPT-6.1-Sol", []),

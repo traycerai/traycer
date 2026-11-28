@@ -35,7 +35,9 @@ import {
   configShellAddRequestSchemaV12,
   configWorktreesGetRequestSchema,
   configWorktreesResponseSchema,
+  configWorktreesResponseSchemaV10,
   configWorktreesSetRequestSchema,
+  configWorktreesSetRequestSchemaV10,
   configWorktreesSetResponseSchema,
   configVisualizationGetRequestSchema,
   configVisualizationResponseSchema,
@@ -251,15 +253,59 @@ export const configWorktreesGetV10 = defineRpcContract({
   method: "config.worktrees.get",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: configWorktreesGetRequestSchema,
+  responseSchema: configWorktreesResponseSchemaV10,
+});
+
+// v1.1 adds `recoverMissing`. The extra key is strippable, so a 1.1 host
+// answering a 1.0 client drops it on the wire.
+export const configWorktreesGetV11 = defineRpcContract({
+  method: "config.worktrees.get",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: configWorktreesGetRequestSchema,
   responseSchema: configWorktreesResponseSchema,
+});
+
+// A 1.0 host refuses a run whose bound folder is gone, so it recovers nothing.
+export const configWorktreesGetUpgradeV10ToV11 = defineUpgradePath<
+  typeof configWorktreesGetV10,
+  typeof configWorktreesGetV11
+>({
+  from: configWorktreesGetV10.schemaVersion,
+  to: configWorktreesGetV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({ ...response, recoverMissing: false }),
 });
 
 /** Writes the machine-user-global policy for worktrees agents create. */
 export const configWorktreesSetV10 = defineRpcContract({
   method: "config.worktrees.set",
   schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: configWorktreesSetRequestSchemaV10,
+  responseSchema: configWorktreesResponseSchemaV10,
+});
+
+// v1.1 writes either setting on its own; the response grows `recoverMissing`
+// as `config.worktrees.get` does.
+export const configWorktreesSetV11 = defineRpcContract({
+  method: "config.worktrees.set",
+  schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: configWorktreesSetRequestSchema,
   responseSchema: configWorktreesSetResponseSchema,
+});
+
+// A 1.0 body only ever wrote the agent-create policy, so it leaves
+// `recoverMissing` as it is.
+export const configWorktreesSetUpgradeV10ToV11 = defineUpgradePath<
+  typeof configWorktreesSetV10,
+  typeof configWorktreesSetV11
+>({
+  from: configWorktreesSetV10.schemaVersion,
+  to: configWorktreesSetV11.schemaVersion,
+  upgradeRequest: (request) => ({
+    agentCreate: request.agentCreate,
+    recoverMissing: null,
+  }),
+  upgradeResponse: (response) => ({ ...response, recoverMissing: false }),
 });
 
 /** Reads whether agents get the page tools. */
@@ -358,7 +404,8 @@ export const configCatalogSetUpgradeV10ToV11 = defineUpgradePath<
   upgradeResponse: (response) => ({ ...response, overrides: {} }),
 });
 
-// The installed v1.1 lines remain after their unused grant field is retired.
+// The v1.1 lines as released: each carries the inert grant field, which a v1.0
+// request gains as `null` and no host reads.
 
 export const configShellSetV11 = defineRpcContract({
   method: "config.shell.set",
@@ -373,7 +420,7 @@ export const configShellSetUpgradeV10ToV11 = defineUpgradePath<
 >({
   from: configShellSetV10.schemaVersion,
   to: configShellSetV11.schemaVersion,
-  upgradeRequest: (request) => request,
+  upgradeRequest: (request) => ({ ...request, executableWriteGrant: null }),
   upgradeResponse: (response) => response,
 });
 
@@ -390,7 +437,7 @@ export const configShellResetUpgradeV10ToV11 = defineUpgradePath<
 >({
   from: configShellResetV10.schemaVersion,
   to: configShellResetV11.schemaVersion,
-  upgradeRequest: (request) => request,
+  upgradeRequest: (request) => ({ ...request, executableWriteGrant: null }),
   upgradeResponse: (response) => response,
 });
 
@@ -407,7 +454,7 @@ export const configShellAddUpgradeV10ToV11 = defineUpgradePath<
 >({
   from: configShellAddV10.schemaVersion,
   to: configShellAddV11.schemaVersion,
-  upgradeRequest: (request) => request,
+  upgradeRequest: (request) => ({ ...request, executableWriteGrant: null }),
   upgradeResponse: (response) => response,
 });
 
@@ -424,7 +471,7 @@ export const configShellRemoveUpgradeV10ToV11 = defineUpgradePath<
 >({
   from: configShellRemoveV10.schemaVersion,
   to: configShellRemoveV11.schemaVersion,
-  upgradeRequest: (request) => request,
+  upgradeRequest: (request) => ({ ...request, executableWriteGrant: null }),
   upgradeResponse: (response) => response,
 });
 
@@ -441,7 +488,7 @@ export const configShellRevertArgsUpgradeV10ToV11 = defineUpgradePath<
 >({
   from: configShellRevertArgsV10.schemaVersion,
   to: configShellRevertArgsV11.schemaVersion,
-  upgradeRequest: (request) => request,
+  upgradeRequest: (request) => ({ ...request, executableWriteGrant: null }),
   upgradeResponse: (response) => response,
 });
 
@@ -458,7 +505,7 @@ export const configEnvSetUpgradeV10ToV11 = defineUpgradePath<
 >({
   from: configEnvSetV10.schemaVersion,
   to: configEnvSetV11.schemaVersion,
-  upgradeRequest: (request) => request,
+  upgradeRequest: (request) => ({ ...request, executableWriteGrant: null }),
   upgradeResponse: (response) => response,
 });
 

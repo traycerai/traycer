@@ -8253,6 +8253,83 @@ describe("E13: the verify leg says WHY the host never became healthy", () => {
     },
   );
 
+  // ---- No service to restart: the swap cannot activate itself ---------------
+
+  /**
+   * The shape `applyHost` reports when this account has no service
+   * registration: nothing is stopped or started, whatever else is running the
+   * host. `install-lifecycle.test.ts` pins that the lifecycle leaves it alone.
+   */
+  function applyWithoutServiceThenLeaveWorld(after: () => void): void {
+    mocks.applyHostWithAttempt.mockImplementation(
+      async (
+        _capability: unknown,
+        _contenderOptions: unknown,
+        _origin: unknown,
+        options: ApplyMockOptions,
+      ) => {
+        const previous = world.installedVersion ?? "1.0.0";
+        await options.hooks.beforeSwapCommit();
+        await seedInstalled("2.0.0");
+        await seedStaged(null);
+        await options.hooks.afterSwap();
+        after();
+        return {
+          ...appliedOutcome(previous, "2.0.0"),
+          runningActivated: false,
+          serviceLifecycle: {
+            priorServiceState: "not-installed" as const,
+            stoppedBeforeSwap: false,
+            postSwapAction: "none" as const,
+          },
+        };
+      },
+    );
+  }
+
+  it("says the running host was not restarted when there was no service to restart it with", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    applyWithoutServiceThenLeaveWorld(() => {
+      world.runningVersion = "1.0.0";
+    });
+
+    const failure = await runUpdate({}).then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    const message =
+      "host update: 2.0.0 is installed, but the running host was not restarted because no Traycer host service is registered. To run 2.0.0, stop that host where it was started and start it again, or stop it and run 'traycer host service install'.";
+    expect(failure).toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_RESTART_REQUIRED,
+      message,
+      details: { diagnosis: "running-version-mismatch" },
+    });
+    const record = await requireRecord();
+    expect(record.phase).toBe("failed");
+    expect(record.error).toMatchObject({
+      code: "verify-timeout",
+      phase: "verifying",
+      message,
+    });
+  });
+
+  it("keeps the health failure when there was no service and no host is left running", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    applyWithoutServiceThenLeaveWorld(() => {
+      world.runningVersion = null;
+      world.runningDiagnosis = "host-process-dead";
+    });
+
+    await expect(runUpdate({})).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_HEALTH_CHECK_FAILED,
+      message:
+        "host update: applied 2.0.0 but the host did not become healthy at that version: host-process-dead",
+    });
+  });
+
   // ---- Q19: a host that ANSWERED and refused ends the leg now ---------------
   //
   // The Linux lane measured the case: an old host that fails enrollment stays
@@ -8295,6 +8372,47 @@ describe("E13: the verify leg says WHY the host never became healthy", () => {
     expect(record.error).toMatchObject({
       code: "host-refuses-rpc",
       phase: "verifying",
+    });
+  });
+
+  it("the line `traycer host update` prints for a host that refuses the authenticated call, word for word", async () => {
+    // Pinned whole: what the gate's ending is read as must not reword it.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    applyThenLeaveWorld(() => {
+      world.runningVersion = null;
+      world.runningDiagnosis = "host-refuses-authenticated-rpc";
+      world.runningRefusal = "UNAUTHORIZED: Token expired";
+    });
+    const failure = await runUpdate({}).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(mocks.observeAttemptRecoveryEvidence).toHaveBeenCalledTimes(2);
+    expect(failure).toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_HEALTH_CHECK_FAILED,
+      message:
+        "host update: applied 2.0.0 and the host is running it, but it REFUSED this client's authenticated call, so the update could not be verified: UNAUTHORIZED: Token expired. The bytes ARE committed at 2.0.0. The host at this version cannot authenticate this CLI's calls, and retrying cannot change that. Run 'traycer host doctor' to inspect the credential plane; updating forward to a newer host is the recovery.",
+    });
+  });
+
+  it("the line `traycer host update` prints for a rejected sign-in, word for word", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    applyThenLeaveWorld(() => {
+      world.runningVersion = null;
+      world.runningDiagnosis = "sign-in-rejected";
+      world.runningRefusal = "sign-in-rejected";
+    });
+    const failure = await runUpdate({}).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(mocks.observeAttemptRecoveryEvidence).toHaveBeenCalledTimes(2);
+    expect(failure).toMatchObject({
+      code: CLI_ERROR_CODES.AUTH_REJECTED,
+      message:
+        "host update: applied 2.0.0 and the host is running it, but this CLI's sign-in was rejected, so the update could not be verified. The bytes ARE committed at 2.0.0. Run 'traycer login' to sign in again, then 'traycer host status' to see the running host.",
     });
   });
 

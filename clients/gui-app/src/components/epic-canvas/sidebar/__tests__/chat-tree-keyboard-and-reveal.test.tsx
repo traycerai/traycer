@@ -523,6 +523,33 @@ describe("reveal of a row outside the window", () => {
     expect(pendingRequest()).toBeUndefined();
   });
 
+  it("keeps a reveal pending for a pinned row in a hidden tab", async () => {
+    mountTree(rootChats(ROOT_COUNT));
+    const item = rowButton("c0");
+    focus(item);
+    chatTreeLayout.scrollTo(MIDDLE_OFFSET_PX);
+    expect(rowButton("c0")).toBe(item);
+
+    // CSS visibility changes before the virtualizer receives the resize.
+    const region = screen.getByTestId("epic-chat-tree-region");
+    let visible = false;
+    Object.defineProperty(region, "checkVisibility", {
+      value: () => visible,
+    });
+
+    revealNode("c0");
+    expect(pendingRequest()).toBeDefined();
+    expect(item.dataset.sidebarRevealHighlighted).toBeUndefined();
+
+    chatTreeLayout.hide();
+    visible = true;
+    chatTreeLayout.show();
+    await waitFor(() => {
+      expect(highlighted("epic-sidebar-item-c0")).toBe(true);
+    });
+    expect(pendingRequest()).toBeUndefined();
+  });
+
   it("waits while the tab is hidden and reveals once it shows", async () => {
     mountTree(rootChats(ROOT_COUNT));
     chatTreeLayout.hide();

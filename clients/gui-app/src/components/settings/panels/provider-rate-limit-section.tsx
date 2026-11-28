@@ -114,6 +114,7 @@ function EmbeddedProviderRateLimitSettingsCard({
         isPending={query.isPending}
         isFetching={query.isFetching}
         isError={query.isError}
+        readError={query.error}
         envelope={query.data}
         codexResetAction={resolveCodexResetCreditAction(
           providerId,
@@ -174,6 +175,7 @@ function ProviderRateLimitSettingsCard({
         isPending={query.isPending}
         isFetching={query.isFetching}
         isError={query.isError}
+        readError={query.error}
         envelope={query.data}
         codexResetAction={resolveCodexResetCreditAction(
           providerId,

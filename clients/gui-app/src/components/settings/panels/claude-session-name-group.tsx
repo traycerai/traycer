@@ -26,6 +26,7 @@ import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mut
 import { trackSettingChanged } from "@/lib/analytics";
 import { configMutationKeys, sessionNamesWriteScope } from "@/lib/query-keys";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import { HostReadFailure } from "@/components/settings/host-scope/host-scope-gate";
 
 const SESSION_NAMES_GET = "config.sessionNames.get";
 const SESSION_NAMES_SET = "config.sessionNames.set";
@@ -126,7 +127,13 @@ function ClaudeSessionNameRows(props: {
         <SettingsRow
           row={PROVIDERS.definitions.sessionNameTemplate}
           status={
-            query.isError ? <p role="alert">{READ_ERROR_STATUS}</p> : undefined
+            query.isError ? (
+              <p role="alert">
+                <HostReadFailure scope="picked" error={query.error} form="line">
+                  {READ_ERROR_STATUS}
+                </HostReadFailure>
+              </p>
+            ) : undefined
           }
           control={query.isError ? null : <MutedAgentSpinner />}
           controlSpansLine={false}

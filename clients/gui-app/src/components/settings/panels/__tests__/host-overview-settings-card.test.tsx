@@ -7,7 +7,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { useState, type ReactNode } from "react";
+import { useState, type ReactNode, type RefObject } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import {
@@ -47,7 +47,10 @@ import {
   hostSettingsCardState,
   hostSettingsRowModel,
 } from "@/components/settings/panels/host-overview-settings-card-model";
-import { HostOverviewSettingsCard } from "@/components/settings/panels/host-overview-settings-card";
+import {
+  HostOverviewSettingsCard,
+  type RailFollowOwner,
+} from "@/components/settings/panels/host-overview-settings-card";
 import { WithReceipt } from "@/components/settings/panels/__tests__/ownership-receipt-test-support";
 import { moveDiagnosticsExport } from "@/components/settings/move/move-diagnostics-export";
 import {
@@ -432,6 +435,7 @@ function renderCardWithBinding(
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
+  const railFollowRef: RefObject<RailFollowOwner | null> = { current: null };
   render(
     <QueryClientProvider client={queryClient}>
       <WithReceipt>
@@ -449,6 +453,7 @@ function renderCardWithBinding(
             owner={options.owner}
             isLocalMachine={options.isLocalMachine}
             receipt={receipt}
+            railFollowRef={railFollowRef}
           />
         )}
       </WithReceipt>

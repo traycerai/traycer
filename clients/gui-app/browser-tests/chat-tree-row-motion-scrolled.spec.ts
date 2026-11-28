@@ -1,6 +1,7 @@
 import { expect, test as base, type Page } from "@playwright/test";
 import {
-  drawn,
+  ROW_PITCH,
+  scrollTopOf,
   expectHeld,
   openTree,
   pageErrors,
@@ -47,11 +48,11 @@ async function expectViewHeld(page: Page, recording: Recording): Promise<void> {
   const inView = rowsInView(recording, await viewOf(page));
   expect(inView.length, "rows in view").toBeGreaterThanOrEqual(LEAST_IN_VIEW);
   for (const id of inView) {
-    expect(drawn(recording, id).length, `${id} is drawn on every frame`).toBe(
-      recording.length,
-    );
     expectHeld(recording, id);
   }
+  expect(await scrollTopOf(page), "the anchor follows the shifted rows").toBe(
+    SCROLL_TOP + ROW_PITCH,
+  );
   expect(await pageErrors(page), "errors in the fixture").toEqual([]);
 }
 

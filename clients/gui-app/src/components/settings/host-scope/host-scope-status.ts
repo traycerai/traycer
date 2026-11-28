@@ -67,6 +67,36 @@ export function hostScopeNeedsUpdate(host: HostScopeOption | null): boolean {
   );
 }
 
+/**
+ * Why Settings shows the computer it waits on from its account row alone,
+ * with no route so nothing dials it. The computer is routed and listed by the
+ * account, and this app cannot read it: it is too old for this app
+ * (`needs-update`, by its version or by an `older-host` door), or its read was refused or failed for good (`refused`,
+ * which a status read again may clear). `null` otherwise: an unlisted
+ * computer has no account row to speak for it, and one with no route is left
+ * to the wait, as every offline computer is.
+ */
+export function hostRowDemotion(input: {
+  readonly host: HostScopeOption | null;
+  readonly readRefused: boolean;
+  /** The host's door says it is too old for this app, whatever it reports. */
+  readonly outdated: boolean;
+}): "needs-update" | "refused" | null {
+  const { host } = input;
+  if (host === null || !host.registered || !host.connectable) return null;
+  if (hostScopeNeedsUpdate(host) || input.outdated) return "needs-update";
+  return input.readRefused ? "refused" : null;
+}
+
+/**
+ * A remote computer the HOSTS list shows offline: the row's own verdict, with
+ * no version folded in, which `deriveHostScopeStatus` reads as away on a
+ * surface that asks it to.
+ */
+export function hostListedOffline(host: HostScopeOption): boolean {
+  return !host.isLocalMachine && host.health.state === "offline";
+}
+
 /** One host list's outcome, reduced to what the scope needs from it. */
 export interface HostListOutcome {
   /** The query has produced data at least once. */
@@ -170,6 +200,11 @@ export function deriveHostScopeStatus(input: {
   readonly overrideClient: HostClient<HostRpcRegistry> | null;
   readonly hasRequestAuthority: boolean;
   readonly listsResolved: boolean;
+  /**
+   * The surface reads a remote computer the HOSTS list shows offline as away
+   * (`HostScopeSelection.offlineReadsAway`); `false` for every other surface.
+   */
+  readonly listedOffline: boolean;
 }): HostScopeStatus {
   if (input.vanishedHostId !== null) return "vanished";
   // No host AND no answer yet from the lists is the one genuine pending state
@@ -189,7 +224,7 @@ export function deriveHostScopeStatus(input: {
   // that case bypass the availability rule the model had just been fixed to
   // enforce: `connectable` was correctly false, and the active host alone
   // ignored it, mounting RPC panels on a route the transport refuses.
-  if (!input.host.connectable) return "unreachable";
+  if (!input.host.connectable || input.listedOffline) return "unreachable";
   if (input.isFollowing) return "following";
   if (input.overrideClient !== null) return "ready";
   // Connectable, but no client. The transient client is built SYNCHRONOUSLY

@@ -211,8 +211,7 @@ function modelRow(harness: HarnessOption, model: ModelOption): HarnessModelRow {
     providerGroupId,
     openCodeProviderLabel,
   );
-  const browseLabel =
-    providerGroupLabel === null ? model.label : modelDisplayLabel(model);
+  const browseLabel = modelDisplayLabel(model);
   return {
     id: rowId(harness.id, model.slug),
     value: model.slug,

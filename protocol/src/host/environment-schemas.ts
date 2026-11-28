@@ -5,6 +5,7 @@ import {
 } from "@traycer/protocol/framework/environment-stale-write";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import { providerIdSchema } from "@traycer/protocol/host/provider-ids";
+import { releasedExecutableWriteGrantSchema } from "@traycer/protocol/host/released-executable-write-grant";
 import {
   SANDBOX_ROUTE_PROTOCOLS,
   SANDBOX_SECRET_FORM_KINDS,
@@ -428,11 +429,12 @@ export type EnvironmentNoticesResponse = z.infer<
 
 /**
  * `environment.undo@1.0`: writes a notice's displaced value back as a new
- * revision (source `undo`).
+ * revision (source `undo`). As released, with the inert grant field.
  */
 export const environmentUndoRequestSchema = lazySchema(() =>
   z.object({
     noticeId: z.string().min(1),
+    executableWriteGrant: releasedExecutableWriteGrantSchema,
   }),
 );
 export type EnvironmentUndoRequest = z.infer<
@@ -651,11 +653,13 @@ export type EnvironmentLocalOverridesResponse = z.infer<
 
 /**
  * `config.env.localOverride.set@1.0`: a value that applies on this host only.
+ * As released, with the inert grant field.
  */
 export const configEnvLocalOverrideSetRequestSchema = lazySchema(() =>
   z.object({
     target: localOverrideTargetSchema,
     value: z.string(),
+    executableWriteGrant: releasedExecutableWriteGrantSchema,
   }),
 );
 export type ConfigEnvLocalOverrideSetRequest = z.infer<
@@ -769,13 +773,15 @@ export type EnvironmentAgentDefinitionsListResponse = z.infer<
 
 /**
  * `environment.agentDefinitions.put@1.0`: a live edit, compare-and-set on
- * `expectedRevision` (`null` for a new name).
+ * `expectedRevision` (`null` for a new name). As released, with the inert
+ * grant field.
  */
 export const environmentAgentDefinitionsPutRequestSchema = lazySchema(() =>
   z.object({
     name: z.string().min(1),
     text: z.string(),
     expectedRevision: z.number().int().nullable(),
+    executableWriteGrant: releasedExecutableWriteGrantSchema,
   }),
 );
 export type EnvironmentAgentDefinitionsPutRequest = z.infer<
@@ -816,12 +822,13 @@ export type EnvironmentSetupGetResponse = z.infer<
   typeof environmentSetupGetResponseSchema
 >;
 
-/** `environment.setup.put@1.0`: one OS's script. */
+/** `environment.setup.put@1.0`: one OS's script. As released, with the inert grant field. */
 export const environmentSetupPutRequestSchema = lazySchema(() =>
   z.object({
     os: environmentOsSchema,
     text: z.string(),
     expectedRevision: z.number().int().nullable(),
+    executableWriteGrant: releasedExecutableWriteGrantSchema,
   }),
 );
 export type EnvironmentSetupPutRequest = z.infer<

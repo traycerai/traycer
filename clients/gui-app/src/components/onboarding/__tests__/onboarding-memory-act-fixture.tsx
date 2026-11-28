@@ -3,7 +3,7 @@
  * real tour over a `MockHostMessenger` with a recorded negotiated manifest.
  * The `vi.mock` calls stay in each test file, which hoists its own.
  */
-import { expect, vi } from "vitest";
+import { expect, vi, type MockInstance } from "vitest";
 import {
   act,
   cleanup,
@@ -33,7 +33,12 @@ import {
   MockTraycerCli,
 } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { remoteEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
-import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import type {
+  HostListFetchResult,
+  RemoteHostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/remote-fetcher";
+import type { SandboxListFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
+import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
@@ -639,6 +644,22 @@ function signInWindow(runnerHost: MockRunnerHost): void {
   });
 }
 
+/**
+ * The cloud reads a signed-in window starts here, the tour's host picker's
+ * and Settings' team label's: an account with no registered hosts, no
+ * sandboxes and no listed environments.
+ */
+function answerCloudReads(runnerHost: MockRunnerHost): void {
+  Object.assign(runnerHost, {
+    listRegisteredHosts: (): Promise<HostListFetchResult> =>
+      Promise.resolve({ kind: "ok", response: { hosts: [] } }),
+    listSandboxes: (): Promise<SandboxListFetchResult> =>
+      Promise.resolve({ kind: "ok", response: { sandboxes: [] } }),
+    listEnvironments: (): Promise<EnvironmentDirectoryResult> =>
+      Promise.resolve({ kind: "ok", list: { environments: [] } }),
+  });
+}
+
 /** Renders `ui` inside the faked host's real providers. */
 export function renderInHost(ui: ReactNode): void {
   queryClient = new QueryClient({
@@ -675,6 +696,7 @@ export function renderInHost(ui: ReactNode): void {
     traycerCli: new MockTraycerCli(),
   });
   signInWindow(runnerHost);
+  answerCloudReads(runnerHost);
   for (const other of world.otherHosts)
     recordNegotiatedHostManifest(other.hostId, FULL_MANIFEST);
   const streams = streamBinding();
@@ -834,6 +856,18 @@ export async function settled(): Promise<void> {
 
 const skipAnimationsBefore = MotionGlobalConfig.skipAnimations;
 
+/**
+ * Every read the page starts is answered by the fixture, so a request that
+ * reaches `fetch` is one it missed: it is refused at once and fails the test.
+ */
+const unansweredRequests: string[] = [];
+let fetchGuard: MockInstance<typeof fetch> | null = null;
+
+function requestUrl(input: RequestInfo | URL): string {
+  if (typeof input === "string") return input;
+  return input instanceof URL ? input.href : input.url;
+}
+
 const scrollToDescriptor = Object.getOwnPropertyDescriptor(
   HTMLElement.prototype,
   "scrollTo",
@@ -869,6 +903,13 @@ export function resetMemoryActFixture(): void {
   resetNegotiatedManifests();
   recordNegotiatedHostManifest(HOST_ID, FULL_MANIFEST);
   useOnboardingStore.setState({ completedAt: null, step: 0 });
+  unansweredRequests.length = 0;
+  fetchGuard = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+    unansweredRequests.push(requestUrl(input));
+    return Promise.reject(
+      new TypeError("the Memory act fixture answers no network request"),
+    );
+  });
 }
 
 /** Every test file's afterEach. */
@@ -888,4 +929,7 @@ export function cleanupMemoryActFixture(): void {
     );
   resetNegotiatedManifests();
   useOnboardingStore.setState({ completedAt: null, step: 0 });
+  fetchGuard?.mockRestore();
+  fetchGuard = null;
+  expect(unansweredRequests, "requests the fixture did not answer").toEqual([]);
 }

@@ -316,15 +316,25 @@ function runCleanupCommand(
                 settle({ kind: "failed", reason });
               },
               onUnsupported: () => reportUnsupported(),
+              // Before the start request was sent the host never had it:
+              // nothing was attempted. The transport entering backoff, or a
+              // close, fails the paths rather than leaving them unknown; a
+              // `reconnecting` is waited out, as the transport redials.
+              onBackoffEntered: (startSent) => {
+                if (!startSent)
+                  settle({
+                    kind: "failed",
+                    reason: NEVER_REACHED_HOST_REASON,
+                  });
+              },
               onConnectionStatus: ({ status, continuity, startSent }) => {
                 state.startSent = startSent;
                 if (continuity === "held") return;
                 if (status !== "reconnecting" && status !== "closed") return;
-                // A drop before the start request was sent means the host
-                // never had it: nothing was attempted, so the paths failed
-                // rather than being unknown. After the send the command may
-                // exist and keeps running without us.
+                // After the send the command may exist and keeps running
+                // without us.
                 if (!startSent) {
+                  if (status === "reconnecting") return;
                   settle({
                     kind: "failed",
                     reason: NEVER_REACHED_HOST_REASON,
@@ -435,9 +445,10 @@ type DeleteOneOutcome =
  * re-run the host delete pipeline) - so exactly one subscribe is ever sent per
  * path, and the overall promise always resolves.
  *
- * A drop after `open` is `uncertain` (the host may still finish). A drop
- * before the session opened, an open failure, or an app terminal failure is
- * `failed`.
+ * A drop after `open` is `uncertain` (the host may still finish). Before the
+ * session opened, a `reconnecting` is waited out as the transport redials; the
+ * transport entering backoff, a close, an open failure, or an app terminal
+ * failure is `failed`.
  */
 function deleteOneWorktree(input: {
   readonly openStreamTransport: (hostId: string) => DurableStreamTransport;
@@ -454,7 +465,6 @@ function deleteOneWorktree(input: {
       requestClose(holder);
       resolve(outcome);
     };
-
     try {
       const owned = openOwnedDurableStreamClient(
         input.openStreamTransport,
@@ -485,6 +495,14 @@ function deleteOneWorktree(input: {
                 }
                 finish({ kind: "uncertain" });
               },
+              // A drop or close after the request was sent arrives as
+              // `onDroppedAfterStart`, so these came before it: nothing was
+              // started, and no subscribe went out to repeat. The transport
+              // entering backoff, or a close, fails it, so the summary toast
+              // and the cache invalidation still fire; a `reconnecting` is
+              // waited out, as the transport redials.
+              onBackoffEntered: () =>
+                finish({ kind: "failed", reason: NEVER_REACHED_HOST_REASON }),
               onConnectionStatus: (
                 status,
                 _reason,
@@ -492,13 +510,7 @@ function deleteOneWorktree(input: {
                 continuity,
               ) => {
                 if (continuity === "held") return;
-                // A drop or close after the request was sent arrives as
-                // `onDroppedAfterStart`, so one here came before it: nothing
-                // was started. It fails at once rather than wait on the
-                // transport's retry, so the summary toast and the cache
-                // invalidation still fire. `connecting`/`open` are the normal
-                // startup.
-                if (status !== "reconnecting" && status !== "closed") return;
+                if (status !== "closed") return;
                 finish({ kind: "failed", reason: NEVER_REACHED_HOST_REASON });
               },
             },

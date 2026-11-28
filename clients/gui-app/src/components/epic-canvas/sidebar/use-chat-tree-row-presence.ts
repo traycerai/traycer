@@ -2,6 +2,7 @@ import { useCallback, useLayoutEffect, useReducer, useRef } from "react";
 import {
   indexRowsByKey,
   sameRowKeySequence,
+  subtreeEnds,
   type ChatTreeRow,
   type ChatTreeRowModel,
 } from "@/components/epic-canvas/sidebar/chat-tree-rows";
@@ -67,13 +68,18 @@ function departingRows(
   const departing = new Map<string, ChatTreeRow>();
   // Preorder, so a parent is decided before its children.
   for (const row of previous.model.rows) {
-    if (next.indexByKey.has(row.key)) continue;
+    if (next.indexByKey.has(row.key) || isRowGone(row)) continue;
+    const { parentKey } = row;
     if (previous.departing.has(row.key)) {
-      departing.set(row.key, row);
+      if (
+        parentKey === null ||
+        departing.has(parentKey) ||
+        next.indexByKey.has(parentKey)
+      ) {
+        departing.set(row.key, row);
+      }
       continue;
     }
-    if (isRowGone(row)) continue;
-    const { parentKey } = row;
     if (
       parentKey === null ||
       departing.has(parentKey) ||
@@ -85,28 +91,39 @@ function departingRows(
   return departing;
 }
 
-/** `next`'s rows with each departing row kept after the row it followed. */
+/** Keep each exit after its preceding sibling's whole subtree. */
 function presentRows(
   previous: readonly ChatTreeRow[],
   departing: ReadonlyMap<string, ChatTreeRow>,
   next: ChatTreeRowModel,
 ): readonly ChatTreeRow[] {
   if (departing.size === 0) return next.rows;
-  const after = new Map<string | null, ChatTreeRow[]>();
-  let anchor: string | null = null;
+  const ends = subtreeEnds(next.rows);
+  const lastSibling = new Map<string | null, number>();
+  const anchorByDeparture = new Map<string, number>();
+  const after = new Map<number, ChatTreeRow[]>();
   for (const row of previous) {
-    if (departing.has(row.key)) {
-      const held = after.get(anchor);
-      if (held === undefined) after.set(anchor, [row]);
-      else held.push(row);
-    } else if (next.indexByKey.has(row.key)) {
-      anchor = row.key;
+    const { key, parentKey } = row;
+    const activeIndex = next.indexByKey.get(key);
+    if (activeIndex !== undefined) {
+      lastSibling.set(parentKey, ends[activeIndex]);
+      continue;
     }
+    if (!departing.has(key)) continue;
+    // A departing parent's children share its anchor and follow it in preorder.
+    const anchor =
+      (parentKey === null ? undefined : anchorByDeparture.get(parentKey)) ??
+      lastSibling.get(parentKey) ??
+      (parentKey === null ? -1 : (next.indexByKey.get(parentKey) ?? -1));
+    anchorByDeparture.set(key, anchor);
+    const held = after.get(anchor);
+    if (held === undefined) after.set(anchor, [row]);
+    else held.push(row);
   }
-  const rows: ChatTreeRow[] = [...(after.get(null) ?? [])];
-  for (const row of next.rows) {
+  const rows: ChatTreeRow[] = [...(after.get(-1) ?? [])];
+  for (const [index, row] of next.rows.entries()) {
     rows.push(row);
-    const held = after.get(row.key);
+    const held = after.get(index);
     if (held !== undefined) rows.push(...held);
   }
   return rows;
@@ -167,8 +184,15 @@ function withoutDeparted(previous: PresenceState, key: string): PresenceState {
   const row = previous.departing.get(key);
   if (row === undefined) return previous;
   const departing = new Map(previous.departing);
-  departing.delete(key);
-  const rows = previous.model.rows.filter((entry) => entry.key !== key);
+  const subtree = key + "/";
+  for (const fadingKey of previous.departing.keys()) {
+    if (fadingKey === key || fadingKey.startsWith(subtree)) {
+      departing.delete(fadingKey);
+    }
+  }
+  const rows = previous.model.rows.filter(
+    (entry) => !previous.departing.has(entry.key) || departing.has(entry.key),
+  );
   const tick = previous.tick + 1;
   const groupStamps = new Map(previous.groupStamps);
   if (row.parentKey !== null) groupStamps.set(row.parentKey, tick);
@@ -198,7 +222,13 @@ function derivePresence(
   exitEnabled: boolean,
 ): PresenceState {
   if (committed === null) return initialState(source);
-  if (committed.source === source) return committed;
+  if (
+    committed.source === source &&
+    (committed.departing.size === 0 ||
+      (exitEnabled && ![...committed.departing.values()].some(isRowGone)))
+  ) {
+    return committed;
+  }
   return follow(committed, source, isRowGone, exitEnabled);
 }
 

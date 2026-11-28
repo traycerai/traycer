@@ -221,6 +221,7 @@ import {
   listChatRecordsResponseV13Schema,
   listChatRecordsResponseV14Schema,
   listChatRecordsResponseV15Schema,
+  listChatRecordsResponseV16Schema,
   getChatRunSettingsRequestSchema,
   getChatRunSettingsResponseSchema,
   getChatRunSettingsResponseSchemaV10,
@@ -261,6 +262,7 @@ import {
 import {
   fetchArtifactAttachmentRequestSchema,
   fetchArtifactAttachmentResponseSchema,
+  fetchArtifactAttachmentResponseSchemaV10,
 } from "@traycer/protocol/host/epic/artifact-attachment";
 import {
   attachEnvironmentRequestSchema,
@@ -2168,6 +2170,29 @@ export const epicListChatRecordsUpgradeV14ToV15 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
+// `@1.6` carries the publication redirect revision on either answer arm:
+// redirect freshness is independent of whether the record rows changed.
+export const epicListChatRecordsV16 = defineRpcContract({
+  method: "epic.listChatRecords",
+  schemaVersion: { major: 1, minor: 6 } as const,
+  requestSchema: listChatRecordsRequestV13Schema,
+  responseSchema: listChatRecordsResponseV16Schema,
+});
+
+/** An older host carries no redirect revision; request shape is unchanged. */
+export const epicListChatRecordsUpgradeV15ToV16 = defineUpgradePath<
+  typeof epicListChatRecordsV15,
+  typeof epicListChatRecordsV16
+>({
+  from: epicListChatRecordsV15.schemaVersion,
+  to: epicListChatRecordsV16.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    publicationRedirectRevision: null,
+  }),
+});
+
 // Brings an evicted chat's records back onto its host before a message is
 // sent to it (`chat-hydration.ts`). Optional and off the released floor: a
 // host that predates it does not evict chats.
@@ -2302,7 +2327,27 @@ export const epicFetchArtifactAttachmentV10 = defineRpcContract({
   method: "epic.fetchArtifactAttachment",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: fetchArtifactAttachmentRequestSchema,
+  responseSchema: fetchArtifactAttachmentResponseSchemaV10,
+});
+
+// 1.1 adds the `downloading` answer for bytes the host is still fetching. The
+// request is unchanged.
+export const epicFetchArtifactAttachmentV11 = defineRpcContract({
+  method: "epic.fetchArtifactAttachment",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: fetchArtifactAttachmentRequestSchema,
   responseSchema: fetchArtifactAttachmentResponseSchema,
+});
+
+// A 1.0 host never answers `downloading`, so its answer is already a 1.1 one.
+export const epicFetchArtifactAttachmentUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicFetchArtifactAttachmentV10,
+  typeof epicFetchArtifactAttachmentV11
+>({
+  from: epicFetchArtifactAttachmentV10.schemaVersion,
+  to: epicFetchArtifactAttachmentV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 // The per-chat run-settings tuple the row above deliberately does not carry.

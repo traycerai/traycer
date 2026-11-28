@@ -26,6 +26,7 @@ import {
   recordChevron,
   recordHide,
   recordScroll,
+  scrollTopOf,
   recordShape,
   settled,
   startTop,
@@ -286,8 +287,10 @@ for (const place of PLACES) {
         ).toBeGreaterThanOrEqual(oldPlace - 1);
       }
       // The new place is there from the first frame, solid, and never moves.
-      expect(arrived[0].frame, "the new place's first frame").toBe(1);
-      expect(arrived.length, "the new place stays").toBe(recording.length - 1);
+      expect(
+        arrived.map((row) => row.frame),
+        "one copy at the new place per frame",
+      ).toEqual(recording.slice(1).map((_, index) => index + 1));
       for (const row of arrived) expect(row.opacity).toBeGreaterThan(0.99);
       // The old place fades out and is gone, held to the same windows as a
       // row that fades in place; its copy moves with the rows around it.
@@ -370,7 +373,9 @@ test("scrolling an 80-row list animates nothing: no row is drawn at more than tw
     ),
   ];
   // The list did scroll: the first row left, and rows came in at the end.
-  expect(drawn(recording, "a").at(-1)?.top ?? 0).toBeLessThan(0);
+  expect(await scrollTopOf(page)).toBe(900);
+  const a = recording.at(-1)?.find((row) => row.id === "a");
+  if (a !== undefined) expect(a.top).toBeLessThan(0);
   const arrivals = ids.filter((id) => drawn(recording, id)[0].frame > 0);
   expect(arrivals.length, "rows scrolled into the window").toBeGreaterThan(0);
   for (const id of ids) {

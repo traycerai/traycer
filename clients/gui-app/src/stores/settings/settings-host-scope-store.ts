@@ -17,6 +17,8 @@ interface SettingsHostScopeState {
   >;
   /** A named entry waits for its environment before any host panel can read. */
   readonly pendingHostId: string | null;
+  /** The pick store's act that requested `pendingHostId` (`startFollow`). */
+  readonly pendingAct: number;
   readonly selectHost: (
     pick: EnvironmentPick,
     host: SettingsHostSelection | null,
@@ -35,6 +37,7 @@ export const useSettingsHostScopeStore = create<SettingsHostScopeState>(
   (set) => ({
     hostByEnvironment: {},
     pendingHostId: null,
+    pendingAct: 0,
     selectHost: (pick, host) =>
       set((state) => {
         const hostByEnvironment = { ...state.hostByEnvironment };
@@ -43,7 +46,11 @@ export const useSettingsHostScopeStore = create<SettingsHostScopeState>(
         else hostByEnvironment[key] = host;
         return { hostByEnvironment, pendingHostId: null };
       }),
-    requestHost: (pendingHostId) => set({ pendingHostId }),
+    requestHost: (pendingHostId) =>
+      set({
+        pendingHostId,
+        pendingAct: useSettingsEnvironmentPickStore.getState().startFollow(),
+      }),
     completeHostEntry: (host, pick) =>
       set((state) =>
         state.pendingHostId !== host.hostId
@@ -77,7 +84,7 @@ export const useSettingsHostScopeStore = create<SettingsHostScopeState>(
         environment.pick?.kind === "local" &&
         environment.pick.hostId === previous
       ) {
-        environment.setPick({ ...environment.pick, hostId: next });
+        environment.setPickUnprompted({ ...environment.pick, hostId: next });
       }
       if (
         environment.defaultPick.kind === "local" &&

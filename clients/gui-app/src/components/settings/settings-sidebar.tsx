@@ -28,6 +28,7 @@ import {
   useHostScopeFor,
   WINDOW_HOST_SELECTION,
   type HostScope,
+  type SettingsHostScope,
 } from "@/components/settings/host-scope/use-host-scope";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { AddHostDialog } from "@/components/settings/host-scope/add-host-dialog";
@@ -140,10 +141,9 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
                 />
               ) : null}
               {group.id === "personal" ? (
-                <SettingsSidebarEnvironmentPicker
-                  scope={globalScope}
-                  mode={props.mode}
-                />
+                <div className="mb-1 px-1">
+                  <EnvironmentPicker scope={globalScope} />
+                </div>
               ) : null}
               {group.id === "host" ? (
                 <SettingsSidebarHostPicker
@@ -186,41 +186,7 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
   );
 }
 
-/**
- * The Environment dropdown, between the "Environment" heading and the pages
- * it governs. The section on screen comes from the mode: the modal names it,
- * the routed surface has it in its path.
- */
-function SettingsSidebarEnvironmentPicker(props: {
-  readonly scope: HostScope;
-  readonly mode: SettingsSidebarMode;
-}): ReactNode {
-  return (
-    <div className="mb-1 px-1">
-      {props.mode.kind === "modal" ? (
-        <EnvironmentPicker
-          scope={props.scope}
-          activeSection={props.mode.activeSection}
-        />
-      ) : (
-        <RoutedEnvironmentPicker scope={props.scope} />
-      )}
-    </div>
-  );
-}
-
-function RoutedEnvironmentPicker(props: {
-  readonly scope: HostScope;
-}): ReactNode {
-  const pathname = useRouterState({ select: (s) => s.location.pathname });
-  const activeSection =
-    visibleSettingsSections().find((section) =>
-      isSectionPathname(pathname, section.id),
-    )?.id ?? null;
-  return (
-    <EnvironmentPicker scope={props.scope} activeSection={activeSection} />
-  );
-}
+const NO_HOST_IDS: readonly string[] = [];
 
 /**
  * The scope control, between the "Host" heading and the sections it governs —
@@ -230,7 +196,7 @@ function SettingsSidebarHostPicker(props: {
   // Resolved once by the sidebar above — the composition behind `useHostScope`
   // is six hooks deep, and this component would run all of it a second time
   // in the same render pass.
-  readonly scope: HostScope;
+  readonly scope: SettingsHostScope;
   readonly allHosts: HostScope["hosts"];
 }): ReactNode {
   const { scope } = props;
@@ -240,9 +206,13 @@ function SettingsSidebarHostPicker(props: {
   // have a borrowable session, so opening this list causes no connection and
   // improves no badge by dialling — every other host simply projects `unknown`
   // and shows nothing.
+  // While Settings still waits to place a host and shows it from its account
+  // row, no row is read: the rows exist only to show that host and offer a
+  // way out, and a new read here would re-read the host whose read failed.
   const hostIds = useMemo(
-    () => scope.hosts.map((host) => host.hostId),
-    [scope.hosts],
+    () =>
+      scope.shownFromRow ? NO_HOST_IDS : scope.hosts.map((host) => host.hostId),
+    [scope.shownFromRow, scope.hosts],
   );
   const updateViewForHost = useFleetUpdateViews(hostIds);
   // The environment label (Tracy Bots) causes no connection either: every
@@ -250,7 +220,7 @@ function SettingsSidebarHostPicker(props: {
   // session this client already holds; every other row says nothing.
   const environmentLabelForHost = useHostEnvironmentLabelResolver(
     hostIds,
-    scope.hostId,
+    scope.shownFromRow ? null : scope.hostId,
   );
   // `gap-0.5` matches the section rows below, so the picker reads as the first
   // row of the tier it heads rather than a control docked above it.

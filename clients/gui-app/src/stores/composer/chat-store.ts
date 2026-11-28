@@ -857,7 +857,7 @@ export interface ChatMessage {
   /**
    * The message a row answers, by its message id: on a bot's row, the
    * member's post its direct reply answers (Tracy Bots, reply mode
-   * `direct`); on a member's row, the message they chose to reply to (T166).
+   * `direct`); on a member's row, the message they chose to reply to.
    * Absent on every other row.
    */
   repliesTo?: string;

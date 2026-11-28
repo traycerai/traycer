@@ -203,6 +203,29 @@ export type AgentFeedbackConfig = z.infer<
 >["agentFeedback"];
 
 /**
+ * The `worktreeRecovery` block in `~/.traycer/cli/config.json`: whether a run
+ * whose bound worktree or folder is gone is recovered - the worktree's
+ * repository folder is used, a missing folder is detached - instead of refused.
+ * On when absent; off when it holds anything but a boolean.
+ *
+ * Its own top-level block, not a key of `worktrees`, for the reason
+ * `agentFeedback` is: the value that must survive is the user's `false`, and an
+ * older binary strips an unknown key inside `worktrees` on its next write. The
+ * top level of `cliConfigSchema` is passthrough, so this block survives.
+ */
+export const worktreeRecoveryOnlyConfigSchema = lazySchema(() =>
+  z.object({
+    worktreeRecovery: z
+      .object({ recoverMissing: z.boolean().catch(false).default(true) })
+      .catch({ recoverMissing: false })
+      .default({ recoverMissing: true }),
+  }),
+);
+export type WorktreeRecoveryConfig = z.infer<
+  typeof worktreeRecoveryOnlyConfigSchema
+>["worktreeRecovery"];
+
+/**
  * The `simulator` block in `~/.traycer/cli/config.json`: the one switch for
  * mobile simulators (iOS Simulator / Android Emulator support). `enabled`
  * installs the `simulator-tools` pack, runs the hub, shows the tile AND lets
