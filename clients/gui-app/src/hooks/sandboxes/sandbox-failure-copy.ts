@@ -115,6 +115,9 @@ const REFUSAL_COPY: ReadonlyMap<string, string> = new Map([
   [SANDBOX_REFUSAL_CODE_NOT_FOUND, "This sandbox no longer exists."],
   [SANDBOX_REFUSAL_CODE_VERB_NOT_AVAILABLE, "This action isn't available yet."],
   [SANDBOX_REFUSAL_CODE_TEAM_HOST_EXISTS, "The team already has a host."],
+  // A 503 from the Auto-update write: the outcome is unknown, so the
+  // sentence must not say nothing changed.
+  ["update_policy_unavailable", "Couldn't confirm that change."],
 ]);
 
 /**

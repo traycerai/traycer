@@ -85,10 +85,14 @@ export function VersionPicker(
     (row) => row.version === confirmingVersion,
   );
   const confirmationBody = confirmation?.storeFormatConfirmation ?? null;
-  // A catalog/status refresh can withdraw the offer or finish the survey.
-  // Clear the selection immediately so an old confirmation cannot reappear
-  // later for a different observation of the same version.
-  if (confirmingVersion !== null && confirmationBody === null) {
+  // A catalog/status refresh can withdraw the offer or finish the survey, and
+  // the update verdict can stop admitting writes. Clear the selection
+  // immediately so an old confirmation cannot reappear later for a different
+  // observation of the same version.
+  if (
+    confirmingVersion !== null &&
+    (confirmationBody === null || !props.writable)
+  ) {
     setConfirmingVersion(null);
   }
   return (

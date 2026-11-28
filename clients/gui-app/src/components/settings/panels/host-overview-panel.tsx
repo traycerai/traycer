@@ -1145,6 +1145,11 @@ export function HostOverviewPanel(props: {
   if (forceUpdateOffer !== null && updates.degrade !== null) {
     setForceUpdateOffer(null);
   }
+  // And when the update verdict stops admitting writes: the force is the same
+  // `host.update.install` the verdict gates everywhere else on this page.
+  if (forceUpdateOffer !== null && !policyWritable) {
+    setForceUpdateOffer(null);
+  }
   // And when the fact it describes is gone - the stage was applied by another
   // actor, or the host went idle and the next run is about to take it. A
   // force over a stage that no longer waits would install something the
@@ -1250,6 +1255,11 @@ export function HostOverviewPanel(props: {
   // why the auto-open waits on `updates.degrade` as well as on the page-wide
   // gate — see `gateArmed` there.
   if (boundOffer !== null && updates.degrade !== null) {
+    setBoundOffer(null);
+  }
+  // And when the update verdict stops admitting writes, as for the
+  // staged-wait force above; a bound dispatch is an update like any other.
+  if (boundOffer !== null && !policyWritable) {
     setBoundOffer(null);
   }
   // And when the attempt it describes is no longer the one on screen — the
@@ -1506,6 +1516,7 @@ export function HostOverviewPanel(props: {
       : () => openRestartConfirm();
   const legacyStagedForce =
     !statusLive ||
+    !policyWritable ||
     updates.degrade !== null ||
     anyPending ||
     legacyFacts === null ||
@@ -1533,10 +1544,11 @@ export function HostOverviewPanel(props: {
           });
         };
   // The BOUND dispatch's control. `attemptControl` already carries the live
-  // status read and the two handshake gates; the region gate and the
-  // page-wide one are the same two the legacy handlers take, for the same
-  // reasons — an offer whose confirm the render-time rules would close in the
-  // same commit is not a control.
+  // status read and the two handshake gates, and with them the update verdict:
+  // `useHostOverviewUpdates` withholds both verbs while it admits no writes.
+  // The region gate and the page-wide one are the same two the legacy handlers
+  // take, for the same reasons — an offer whose confirm the render-time rules
+  // would close in the same commit is not a control.
   // A manual open of the ACTIVATE offer spends the auto-open's one shot too.
   // The auto-open can be on hold while this control is live (a catalog answer
   // in flight, `awaitingAnswer`), and a shot still unspent when the hold ends

@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
+import { toast } from "sonner";
 import {
   QueryClient,
   QueryClientProvider,
@@ -17,7 +24,10 @@ import type {
   UpdateHostVersionPolicyFetchResult,
   UpdateHostVersionPolicyInput,
 } from "@traycer-clients/shared/host-client/host-version-policy-fetcher";
-import type { SandboxVersionPolicyFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
+import {
+  updateSandboxVersionPolicyViaHttp,
+  type SandboxVersionPolicyFetchResult,
+} from "@traycer-clients/shared/host-client/sandbox-control";
 import { authQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { HostAutoUpdateRow } from "@/components/settings/host-scope/host-registry-updates";
@@ -67,10 +77,11 @@ vi.mock("@/lib/host", async (importOriginal) => ({
   useHostBinding: () =>
     hookState.auth === null ? null : { auth: hookState.auth },
 }));
-const { toastFromAuthError } = vi.hoisted(() => ({
-  toastFromAuthError: vi.fn(),
-}));
-vi.mock("@/lib/auth-error-toast", () => ({ toastFromAuthError }));
+const { toastError } = vi.hoisted(() => ({ toastError: vi.fn() }));
+vi.mock("sonner", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("sonner")>();
+  return { ...actual, toast: { ...actual.toast, error: toastError } };
+});
 
 const HOST_ID = "sandbox-host";
 const SANDBOX_ID = "sandbox-row";
@@ -164,6 +175,35 @@ function renderRow(item: HostListItem | undefined) {
   );
 }
 
+function answerPolicyWritesWith(status: number, body: object): void {
+  const auth = hookState.auth;
+  if (auth === null) throw new Error("test setup has no auth binding");
+  const fetchMock = vi.fn<typeof fetch>(() =>
+    Promise.resolve(
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { "content-type": "application/json" },
+      }),
+    ),
+  );
+  vi.stubGlobal("fetch", fetchMock);
+  const runnerHost = createFakeRunnerHost({
+    updateSandboxVersionPolicy: (bearerToken, sandboxId, input) =>
+      updateSandboxVersionPolicyViaHttp(
+        "https://server.example.invalid",
+        bearerToken,
+        null,
+        sandboxId,
+        input,
+      ),
+  });
+  hookState.auth = {
+    ...auth,
+    updateSandboxVersionPolicy: (sandboxId, input) =>
+      runnerHost.updateSandboxVersionPolicy("test-bearer", sandboxId, input),
+  };
+}
+
 beforeEach(async () => {
   const sandboxBinding = createFakeSandboxBinding();
   sandboxBinding.auth.listSandboxes.mockResolvedValue({
@@ -216,7 +256,8 @@ afterEach(() => {
   hookState.entry = null;
   hookState.sandboxList = null;
   hookState.auth = null;
-  toastFromAuthError.mockReset();
+  toastError.mockReset();
+  vi.unstubAllGlobals();
   useAuthStore.setState({ status: "signed-out", contextMetadata: null });
 });
 
@@ -320,9 +361,18 @@ describe("HostAutoUpdateRow sandbox routing", () => {
     },
   );
 
-  it("refetches the host list after a refused write and renders the stored switch value", async () => {
-    const stored = hostItem("auto");
-    const refetchHostList = vi.fn(() => Promise.resolve(stored));
+  it("shows the changed registry value after a refused write whose reply was lost", async () => {
+    let reads = 0;
+    const updatedRead: { resolve: ((item: HostListItem) => void) | null } = {
+      resolve: null,
+    };
+    const refetchHostList = vi.fn(() => {
+      reads += 1;
+      if (reads === 1) return Promise.resolve(hostItem("auto"));
+      return new Promise<HostListItem>((resolve) => {
+        updatedRead.resolve = resolve;
+      });
+    });
     const auth = hookState.auth;
     if (auth === null) throw new Error("test setup has no auth binding");
     const sandboxWrite = vi.fn<IRunnerHost["updateSandboxVersionPolicy"]>(() =>
@@ -365,12 +415,17 @@ describe("HostAutoUpdateRow sandbox routing", () => {
       const mutation = useUpdateHostVersionPolicy(HOST_ID);
       const writable = hostPolicyWritable(useHostPolicyWriteRoute(HOST_ID));
       return query.data === undefined ? null : (
-        <HostAutoUpdateRow
-          item={query.data}
-          mutation={mutation}
-          writable={writable}
-          className=""
-        />
+        <>
+          <span data-testid="policy-mutation-pending">
+            {String(mutation.isPending)}
+          </span>
+          <HostAutoUpdateRow
+            item={query.data}
+            mutation={mutation}
+            writable={writable}
+            className=""
+          />
+        </>
       );
     }
     render(
@@ -383,18 +438,84 @@ describe("HostAutoUpdateRow sandbox routing", () => {
     expect(toggle.getAttribute("aria-checked")).toBe("true");
     fireEvent.click(toggle);
 
-    await vi.waitFor(() => expect(refetchHostList).toHaveBeenCalledTimes(2));
     await vi.waitFor(() => {
-      expect(toastFromAuthError).toHaveBeenCalledWith(
-        expect.objectContaining({ message: "Traycer refused that request." }),
+      expect(toast.error).toHaveBeenCalledWith(
         "Couldn't update this host.",
+        expect.objectContaining({
+          description: "Couldn't confirm that change.",
+        }),
       );
     });
+    await vi.waitFor(() => {
+      expect(screen.getByTestId("policy-mutation-pending").textContent).toBe(
+        "false",
+      );
+    });
+    expect(refetchHostList).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("switch").getAttribute("aria-checked")).toBe(
+      "true",
+    );
     expect(sandboxWrite).toHaveBeenCalledWith(
       "test-bearer",
       SANDBOX_ID,
       expect.objectContaining({ updatePolicy: "manual" }),
     );
+    const resolveRead = updatedRead.resolve;
+    if (resolveRead === null) {
+      throw new Error("updated registry read did not start");
+    }
+    act(() => {
+      resolveRead(hostItem("manual"));
+    });
+    await vi.waitFor(() => {
+      expect(screen.getByRole("switch").getAttribute("aria-checked")).toBe(
+        "false",
+      );
+    });
+  });
+
+  it("shows the unavailable-change copy from the parsed 503 policy refusal", async () => {
+    answerPolicyWritesWith(503, { code: "update_policy_unavailable" });
+    renderRow(undefined);
+
+    const toggle = screen.getByRole("switch");
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(toggle);
+
+    await vi.waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        "Couldn't update this host.",
+        expect.objectContaining({
+          description: "Couldn't confirm that change.",
+        }),
+      );
+    });
+    expect(screen.getByRole("switch").getAttribute("aria-checked")).toBe(
+      "true",
+    );
+  });
+
+  it("shows the refused-request copy from an older server's missing-route envelope", async () => {
+    answerPolicyWritesWith(404, {
+      statusCode: 404,
+      error: "Not Found",
+      code: "ROUTE_NOT_FOUND",
+      requestId: "request-1",
+    });
+    renderRow(undefined);
+
+    const toggle = screen.getByRole("switch");
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(toggle);
+
+    await vi.waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        "Couldn't update this host.",
+        expect.objectContaining({
+          description: "Traycer refused that request.",
+        }),
+      );
+    });
     expect(screen.getByRole("switch").getAttribute("aria-checked")).toBe(
       "true",
     );
