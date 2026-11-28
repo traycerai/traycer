@@ -45,6 +45,7 @@ import {
   unaryDoorHarness,
 } from "@/lib/__tests__/fixtures/unary-door-harness";
 import { onHostDoorRetry } from "@/lib/host/host-door-retry";
+import { appHostDoorObserver } from "@/lib/host/host-door-observer";
 import { toast } from "sonner";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
@@ -932,6 +933,36 @@ describe("<SandboxTileStateFrame /> on a computer that refuses this account", ()
       ),
     ).toBeTruthy();
     expect(tileButtons()).toEqual([]);
+  });
+
+  it("covers the tile with two lines and no button when the computer's remote door says nobody is signed in there", () => {
+    appHostDoorObserver(HOST_ID).refused({
+      code: "UNAUTHORIZED",
+      reason:
+        "Host is not provisioned - run `traycer login` on the host machine to authorize it",
+      retryable: false,
+      doorReason: "not_provisioned",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    });
+    expect(useHostDoorStateStore.getState().byHost.get(HOST_ID)?.kind).toBe(
+      "nobody-signed-in",
+    );
+    renderFrame(false);
+
+    const cover = screen.getByTestId("tile-door-cover");
+    expect(
+      Array.from(
+        cover.querySelectorAll("p"),
+        (paragraph) => paragraph.textContent,
+      ),
+    ).toEqual([
+      "Nobody is signed in on this computer",
+      "Sign in on it to use it from here.",
+    ]);
+    expect(tileButtons()).toEqual([]);
+    expect(document.body.textContent).not.toContain("traycer login");
+    expect(bodyWrapper().hasAttribute("inert")).toBe(true);
   });
 
   it("leaves the tile to the window's own cover when its computer is the window's", () => {

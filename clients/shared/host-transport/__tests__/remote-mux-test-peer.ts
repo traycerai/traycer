@@ -118,6 +118,13 @@ export class RemoteMuxTestPeer {
     this.openRefusals.push(...details);
   }
 
+  /** A session fatal on the connection dialed last: a host ending one it had admitted. */
+  async sendSessionFatal(details: FatalErrorDetails): Promise<void> {
+    const connection = this.connections.at(-1);
+    if (connection === undefined) throw new Error("no relay connection");
+    await this.sendFatal(connection, details);
+  }
+
   readonly factory: IStreamWebSocketFactory = {
     create: (): StreamWebSocketLike => {
       let connection: RelayConnection;
@@ -194,13 +201,7 @@ export class RemoteMuxTestPeer {
     this.opens.push(open);
     const refusal = this.openRefusals.shift();
     if (refusal !== undefined) {
-      await this.sendMessage(connection, {
-        type: MuxFrameType.FATAL,
-        streamId: SESSION_CONTROL_STREAM_ID,
-        qos: QosClass.INTERACTIVE,
-        json: { details: refusal },
-        binary: null,
-      });
+      await this.sendFatal(connection, refusal);
       return;
     }
     await this.sendMessage(connection, {
@@ -218,6 +219,19 @@ export class RemoteMuxTestPeer {
         },
         capabilities: [...this.openAckCapabilities],
       },
+      binary: null,
+    });
+  }
+
+  private sendFatal(
+    connection: RelayConnection,
+    details: FatalErrorDetails,
+  ): Promise<void> {
+    return this.sendMessage(connection, {
+      type: MuxFrameType.FATAL,
+      streamId: SESSION_CONTROL_STREAM_ID,
+      qos: QosClass.INTERACTIVE,
+      json: { details },
       binary: null,
     });
   }

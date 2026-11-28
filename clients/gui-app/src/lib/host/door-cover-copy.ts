@@ -39,6 +39,10 @@ const DOOR_COVER_COPY: Readonly<
     title: "You no longer have access to this team's computer",
     description: "Work you started continues for the team.",
   },
+  "nobody-signed-in": {
+    title: "Nobody is signed in on this computer",
+    description: "Sign in on it to use it from here.",
+  },
   "team-membership-required": {
     title: "This computer belongs to a team",
     description:

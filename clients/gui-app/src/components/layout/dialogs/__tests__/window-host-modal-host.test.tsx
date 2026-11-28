@@ -21,11 +21,14 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { toast } from "sonner";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+import type { StreamCloseReason } from "@traycer/protocol/host-transport/stream-session";
+import { isReopenableHostStreamClose } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 import {
   MockRunnerHost,
   MockTraycerCli,
@@ -68,7 +71,11 @@ import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
-import { buildHostStreamClient } from "@/hooks/host/use-host-stream-client-for";
+import {
+  buildHostStreamClient,
+  useHostStreamClientBindingFor,
+} from "@/hooks/host/use-host-stream-client-for";
+import { resetHostStreamClientCacheForTest } from "@/lib/host/host-stream-client-cache";
 import { HOST_BOOT_CARD_SURFACE } from "@/components/centered-card";
 import { WindowHostModalHost } from "@/components/layout/dialogs/window-host-modal-host";
 import { SignOutConfirmDialog } from "@/components/auth/sign-out-confirm-dialog";
@@ -90,6 +97,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 import { setMobileApp } from "@/lib/mobile-app";
 import { onHostDoorRetry } from "@/lib/host/host-door-retry";
+import { appStreamDoorObserver } from "@/lib/host/host-door-observer";
 import { appLogger } from "@/lib/logger";
 import { HostRuntimeContext } from "@/lib/host/runtime";
 import { MINIMUM_HOST_VERSION } from "@traycer-clients/shared/host-client/minimum-host-version";
@@ -590,6 +598,97 @@ function renderHostWithRuntime(
   );
 }
 
+/** A count of one event, awaited by its ordinal: no wait runs on a clock. */
+interface Milestones {
+  readonly count: () => number;
+  readonly reach: () => void;
+  readonly nth: (ordinal: number) => Promise<void>;
+}
+
+function milestones(): Milestones {
+  let reached = 0;
+  const waiters = new Map<number, PromiseWithResolvers<void>>();
+  const waiterFor = (ordinal: number): PromiseWithResolvers<void> => {
+    const waiter = waiters.get(ordinal) ?? Promise.withResolvers<void>();
+    waiters.set(ordinal, waiter);
+    return waiter;
+  };
+  return {
+    count: () => reached,
+    reach: () => {
+      reached += 1;
+      waiterFor(reached).resolve();
+    },
+    nth: (ordinal) => waiterFor(ordinal).promise,
+  };
+}
+
+/**
+ * Waits for `event` without moving the fake clock: only timers already due run
+ * (the mux writes its frames on them), and each turn lets the real crypto
+ * behind the Noise transport finish. `ended` stops a case that gave up.
+ */
+async function reachedOnThisInstant(
+  event: Promise<unknown>,
+  ended: AbortSignal,
+): Promise<void> {
+  const wait: { reached: boolean } = { reached: false };
+  void event.then(() => {
+    wait.reached = true;
+  });
+  while (!wait.reached && !ended.aborted) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+    });
+  }
+}
+
+interface StreamOwnerLog {
+  /** When the owner was handed each client it built. */
+  readonly builtAt: number[];
+  /** When each of those clients closed underneath it. */
+  readonly closedAt: number[];
+  readonly closeReasons: Array<StreamCloseReason | null>;
+  readonly opened: Milestones;
+  readonly closed: Milestones;
+}
+
+/** A tile's use of one computer's stream: the app's owner, which rebuilds a closed client. */
+function StreamOwner(props: {
+  readonly target: RemoteHostDirectoryEntry;
+  readonly auth: StreamAuthRevalidator;
+  readonly log: StreamOwnerLog;
+}): ReactNode {
+  const { log } = props;
+  const client =
+    useHostStreamClientBindingFor(props.target, props.auth)?.client ?? null;
+  useEffect(() => {
+    if (client === null) return;
+    log.builtAt.push(Date.now());
+    const stopHearingClose = client.onClosed(() => {
+      log.closedAt.push(Date.now());
+      log.closed.reach();
+    });
+    // The session's ready boundary: an open the host admitted.
+    const stopHearingReady = client.subscribeAvailabilityRecovered(() => {
+      log.opened.reach();
+    });
+    const stream = client.subscribe("epic.subscribe", { epicId: "epic-a" });
+    stream.onStatusChange((status, reason) => {
+      if (status === "closed") log.closeReasons.push(reason);
+    });
+    return () => {
+      stopHearingReady();
+      stopHearingClose();
+      stream.close();
+    };
+  }, [client, log]);
+  return null;
+}
+
 const BOOTSTRAP_MARKERS = {
   bootstrapMarkers: [
     {
@@ -707,6 +806,8 @@ describe("<WindowHostModalHost />", () => {
     expect(screen.getByText("This computer belongs to a team")).toBeTruthy();
   });
 
+  const NOT_PROVISIONED_HOST_SENTENCE =
+    "Host is not provisioned - run `traycer login` on the host machine to authorize it";
   const HOST_ONLY_TOKEN = "host-only-token";
   const SIGN_IN_TOKEN_OF_PERSON = "sign-in-token";
   const bareRefusalFrame = JSON.stringify({
@@ -811,6 +912,210 @@ describe("<WindowHostModalHost />", () => {
     };
   }
 
+  const NOBODY_SIGNED_IN_TITLE = "Nobody is signed in on this computer";
+
+  /*
+   * The same dials, at the same pace, whichever reason ends them: the host
+   * ends the connection it admitted at its recheck, refuses the next three
+   * opens, then admits one. Nobody presses anything.
+   */
+  it.each([
+    {
+      doorReason: "not_provisioned",
+      code: "UNAUTHORIZED",
+      state: "nobody-signed-in",
+      coverTitle: NOBODY_SIGNED_IN_TITLE,
+      coverLine: "Sign in on it to use it from here.",
+    },
+    {
+      doorReason: "host_claimed",
+      code: "UNAUTHORIZED",
+      state: "host-claimed",
+      // Its own cover waits for who claimed the computer.
+      coverTitle: "No host is available",
+      coverLine:
+        "Traycer can't reach any of this account's hosts right now. It will connect again on its own as soon as one comes back.",
+    },
+    {
+      doorReason: "membership_removed",
+      code: "TEAM_MEMBERSHIP_REQUIRED",
+      state: "membership-removed",
+      coverTitle: "You no longer have access to this team's computer",
+      coverLine: "Work you started continues for the team.",
+    },
+  ] as const)(
+    "rebuilds a remote stream ended by $doorReason at once, then after 1s, 2s and 4s, and drops the state when an open is admitted",
+    async (testCase) => {
+      const refusal: FatalErrorDetails = {
+        code: testCase.code,
+        reason: NOT_PROVISIONED_HOST_SENTENCE,
+        retryable: false,
+        doorReason: testCase.doorReason,
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      };
+      const hostId = REMOTE_HOST_ID;
+      const peer = new RemoteMuxTestPeer();
+      const entry: RemoteHostDirectoryEntry = {
+        ...remoteHostEntry(MINIMUM_HOST_VERSION, "current"),
+        publicKey: peer.hostPublicKey,
+        websocketUrl: "wss://relay.test/attach",
+      };
+      const fixture = await createModalHostRuntimeFixture(entry, "normal");
+      fixture.runtime.hostClient.setRequestContext(
+        fixture.auth.getRequestContextProvider().current(),
+      );
+      const { hostTokens } = fixture.runnerHost;
+      await hostTokens.adopt(
+        "user-1",
+        hostId,
+        { token: "host-only-token", expiresAtMs: Date.now() + 3_600_000 },
+        hostTokens.era("user-1"),
+        () => true,
+      );
+      vi.stubGlobal(
+        "fetch",
+        vi.fn<typeof fetch>(() =>
+          Promise.resolve(
+            new Response(
+              JSON.stringify({
+                grant: "relay-pass",
+                role: "client",
+                expires_in: 300,
+                session_grant: "relay-session-grant",
+                session_grant_expires_in: 300,
+              }),
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            ),
+          ),
+        ),
+      );
+      const dialed = milestones();
+      const dialedAt: number[] = [];
+      remoteSocketFactoryHarness.delegate = {
+        create: (url, priority) => {
+          dialedAt.push(Date.now());
+          dialed.reach();
+          return peer.factory.create(url, priority);
+        },
+      };
+      const signInRecovery = vi.fn(() => Promise.resolve("rotated" as const));
+      const log: StreamOwnerLog = {
+        builtAt: [],
+        closedAt: [],
+        closeReasons: [],
+        opened: milestones(),
+        closed: milestones(),
+      };
+      const ended = new AbortController();
+      onTestFinished(() => {
+        ended.abort();
+        cleanup();
+        resetHostStreamClientCacheForTest();
+        retireAllRemoteSessions();
+        clearHostDoorState(hostId);
+        vi.useRealTimers();
+      });
+      // `setImmediate` stays real: `reachedOnThisInstant` takes its turns on it.
+      vi.useFakeTimers({
+        toFake: [
+          "setTimeout",
+          "clearTimeout",
+          "setInterval",
+          "clearInterval",
+          "Date",
+        ],
+      });
+
+      applySnapshot({ targetHostId: hostId });
+      renderHostWithRuntime(
+        fixture,
+        {
+          ...EMPTY_PRESENTATION,
+          targetKind: "remote",
+          canManageHost: true,
+          provisioningError: new Error("install failed"),
+        },
+        false,
+        GATE_OPEN,
+      );
+      render(
+        <RunnerHostProvider runnerHost={fixture.runnerHost}>
+          <HostRuntimeContext.Provider value={fixture.binding}>
+            <StreamOwner
+              target={entry}
+              auth={{ revalidateForReconnect: signInRecovery }}
+              log={log}
+            />
+          </HostRuntimeContext.Provider>
+        </RunnerHostProvider>,
+      );
+      const surface = (): HTMLElement =>
+        screen.getByTestId("window-host-modal");
+      const expectRefusedCover = (): void => {
+        expect(hostDoorStateFor(hostId)?.kind).toBe(testCase.state);
+        expect(
+          within(surface()).getByTestId("window-host-modal-title").textContent,
+        ).toBe(testCase.coverTitle);
+        expect(within(surface()).getByText(testCase.coverLine)).toBeTruthy();
+        expect(document.body.textContent).not.toContain("traycer login");
+      };
+
+      const reached = (event: Promise<unknown>): Promise<void> =>
+        reachedOnThisInstant(event, ended.signal);
+
+      await reached(log.opened.nth(1));
+      expect(hostDoorStateFor(hostId)).toBeNull();
+
+      peer.refuseNextOpens([refusal, refusal, refusal]);
+      await peer.sendSessionFatal(refusal);
+      await reached(log.closed.nth(1));
+      expectRefusedCover();
+      if (testCase.state === "nobody-signed-in") {
+        // No Retry, though this presentation has one to offer.
+        expect(buttonsOf(surface())).toEqual(["Open settings"]);
+      }
+
+      // The first quick close rebuilds at once; each one after it waits twice as long.
+      const delaysMs = [0, 1_000, 2_000, 4_000];
+      for (const [index, delayMs] of delaysMs.entries()) {
+        const rebuilds = index + 1;
+        if (delayMs > 0) {
+          await act(async () => {
+            await vi.advanceTimersByTimeAsync(delayMs - 1);
+          });
+          expect(log.builtAt).toHaveLength(rebuilds);
+          await act(async () => {
+            await vi.advanceTimersByTimeAsync(1);
+          });
+        }
+        expect(log.builtAt).toHaveLength(rebuilds + 1);
+        await reached(dialed.nth(rebuilds + 1));
+        if (rebuilds < delaysMs.length) {
+          await reached(log.closed.nth(rebuilds + 1));
+          expectRefusedCover();
+        }
+      }
+      await reached(log.opened.nth(2));
+
+      expect(hostDoorStateFor(hostId)).toBeNull();
+      expect(screen.queryByText(NOBODY_SIGNED_IN_TITLE)).toBeNull();
+      const waitedSinceClose = (instants: readonly number[]): number[] =>
+        instants.slice(1).map((at, index) => at - log.closedAt[index]);
+      expect(waitedSinceClose(log.builtAt)).toEqual(delaysMs);
+      expect(waitedSinceClose(dialedAt)).toEqual(delaysMs);
+      expect(peer.openCount).toBe(5);
+      expect(peer.errors).toEqual([]);
+      // The refusal ends each session for good, and never starts sign-in recovery.
+      expect(log.closed.count()).toBe(4);
+      expect(signInRecovery).not.toHaveBeenCalled();
+      // The per-stream reopen lanes would take this close too.
+      expect(
+        log.closeReasons.map((reason) => isReopenableHostStreamClose(reason)),
+      ).toEqual([true, true, true, true]);
+    },
+  );
+
   it("draws the older-host cover after a real host-token refusal when the directory version is unknown", async () => {
     const hostId = "host-token-older-host-cover";
     // A team's computer is never handed the person's sign-in, so its bare
@@ -878,6 +1183,47 @@ describe("<WindowHostModalHost />", () => {
       expect(hostDoorStateFor(hostId)).toBeNull();
       expect(screen.queryByTestId("window-host-modal")).toBeNull();
       expect(stream.mintCalls()).toBe(0);
+    } finally {
+      stream.close();
+    }
+  });
+
+  it("raises no state and draws no cover when this computer's socket refuses the host-only token as not provisioned", async () => {
+    const hostId = "local-stream-not-provisioned";
+    const refused = Promise.withResolvers<FatalErrorDetails>();
+    const tellDoor = appStreamDoorObserver.refused;
+    vi.spyOn(appStreamDoorObserver, "refused").mockImplementation(
+      (details, instance) => {
+        tellDoor(details, instance);
+        refused.resolve(details);
+      },
+    );
+    const stream = await openLocalStreamOnHostOnlyToken(hostId, null);
+    try {
+      await act(async () => {
+        stream.socket.fireMessage(
+          JSON.stringify({
+            kind: "fatalError",
+            details: {
+              code: "UNAUTHORIZED",
+              reason: NOT_PROVISIONED_HOST_SENTENCE,
+              retryable: false,
+              doorReason: "not_provisioned",
+              incompatibleMethods: null,
+              upgradeGuidance: null,
+            },
+          }),
+        );
+        // The local door heard it: the empty store below is its decision.
+        expect((await refused.promise).doorReason).toBe("not_provisioned");
+      });
+
+      expect(hostDoorStateFor(hostId)).toBeNull();
+      expect(screen.queryByTestId("window-host-modal")).toBeNull();
+      expect(document.body.textContent).not.toContain(
+        "Nobody is signed in on this computer",
+      );
+      expect(stream.signInRecoveryCalls()).toBe(0);
     } finally {
       stream.close();
     }

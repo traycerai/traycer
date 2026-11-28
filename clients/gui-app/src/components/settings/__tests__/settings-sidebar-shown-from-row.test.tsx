@@ -52,6 +52,7 @@ const harness = vi.hoisted(() => ({
   fleetHostIds: [] as string[],
   observeStatus: true,
   showPanel: false,
+  standInNotices: true,
   management: null as IHostManagement | null,
   messengers: {} as Record<string, MockHostMessenger<HostRpcRegistry>>,
   accountRemovals: [] as string[],
@@ -363,6 +364,7 @@ import { HostSettingsPanel } from "@/components/settings/panels/host-settings-pa
 import { SettingsSidebar } from "@/components/settings/settings-sidebar";
 import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
+import { appHostDoorObserver } from "@/lib/host/host-door-observer";
 import {
   clearHostDoorState,
   noteHostDoorState,
@@ -423,6 +425,27 @@ function refuseXForGood(): void {
     kind: "not-a-member",
     detail: { code: "FORBIDDEN", doorReason: "not_a_member" },
   });
+}
+
+/** X's row in the account's registry: a computer it knows and can configure. */
+function registryItemForX(): HostListItem {
+  return {
+    hostId: X.hostId,
+    displayName: "Host X",
+    platform: "darwin-arm64",
+    kind: "personal",
+    publicKey: "pk",
+    createdAt: "2026-03-03T12:00:00Z",
+    status: {
+      connectivity: "connectable",
+      viewerReachability: "unknown",
+      clientCloud: "ok",
+      updateState: "current",
+      appVersion: "1.5.0",
+      lastSeenAt: null,
+    },
+    updatePolicy: "manual",
+  };
 }
 
 function makeClients(): void {
@@ -536,13 +559,15 @@ function HostScopePage(): React.ReactNode {
       <span data-testid="scope-shown-from-row">
         {scope.shownFromRow ? "row" : "placed"}
       </span>
-      <HostOverviewNotices
-        offlineNotice={null}
-        offlineRetry={scope.retryEntryStatus}
-        offlineRetryPending={false}
-        operation={null}
-        drainGate={null}
-      />
+      {harness.standInNotices ? (
+        <HostOverviewNotices
+          offlineNotice={null}
+          offlineRetry={scope.retryEntryStatus}
+          offlineRetryPending={false}
+          operation={null}
+          drainGate={null}
+        />
+      ) : null}
     </>
   );
 }
@@ -608,6 +633,7 @@ function resetState(): void {
   harness.fleetHostIds = [];
   harness.observeStatus = true;
   harness.showPanel = false;
+  harness.standInNotices = true;
   harness.management = null;
   harness.messengers = {};
   harness.accountRemovals = [];
@@ -726,6 +752,45 @@ describe("<SettingsSidebar /> while a named host is shown from its row", () => {
     expect(harness.statusCalls["host-x"] ?? 0).toBe(0);
   });
 
+  it("offers removal and Try again on the Overview of an X nobody is signed in on, without the host's sentence", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    makeClients();
+    harness.xItem = registryItemForX();
+    harness.showPanel = true;
+    harness.standInNotices = false;
+    harness.observeStatus = false;
+    act(() => {
+      carryViewedHostIntoSettingsScope(X.hostId);
+      appHostDoorObserver(X.hostId).refused({
+        code: "UNAUTHORIZED",
+        reason:
+          "Host is not provisioned - run `traycer login` on the host machine to authorize it",
+        retryable: false,
+        doorReason: "not_provisioned",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      });
+    });
+    renderPage(queryClient);
+
+    expect(
+      await screen.findByText(
+        "Can't reach Host X. Auto-update settings still apply at its next check-in; everything else here needs a connection.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Remove from account" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
+    expect(document.body.textContent).not.toContain("traycer login");
+    expect(harness.statusCalls["host-x"] ?? 0).toBe(0);
+  });
+
   it("closes A's removal confirmation before the real panel removes refused X", async () => {
     const queryClient = new QueryClient({
       defaultOptions: {
@@ -800,23 +865,7 @@ describe("<SettingsSidebar /> while a named host is shown from its row", () => {
       },
     });
     makeClients();
-    harness.xItem = {
-      hostId: X.hostId,
-      displayName: "Host X",
-      platform: "darwin-arm64",
-      kind: "personal",
-      publicKey: "pk",
-      createdAt: "2026-03-03T12:00:00Z",
-      status: {
-        connectivity: "connectable",
-        viewerReachability: "unknown",
-        clientCloud: "ok",
-        updateState: "current",
-        appVersion: "1.5.0",
-        lastSeenAt: null,
-      },
-      updatePolicy: "manual",
-    };
+    harness.xItem = registryItemForX();
     harness.showPanel = true;
     harness.observeStatus = false;
     act(() => {

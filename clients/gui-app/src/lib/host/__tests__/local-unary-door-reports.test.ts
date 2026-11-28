@@ -124,6 +124,22 @@ function membershipRemovedRefusal(): string {
   });
 }
 
+/** The refusal a computer's remote door gives while nobody is signed in there. */
+function notProvisionedRefusal(): string {
+  return JSON.stringify({
+    kind: "fatalError",
+    details: {
+      code: "UNAUTHORIZED",
+      reason:
+        "Host is not provisioned - run `traycer login` on the host machine to authorize it",
+      doorReason: "not_provisioned",
+      retryable: false,
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  });
+}
+
 function entryFor(
   hostId: string,
   owner: HostOwnerPrincipal,
@@ -316,6 +332,26 @@ describe("a unary call's reports to the app's door", () => {
     entryFor(hostId, { kind: "user", id: USER_A });
   const team = (hostId: string): HostDirectoryEntry =>
     entryFor(hostId, { kind: "team", id: "team-a", name: "Alpha" });
+
+  it("raises no state when this computer refuses a call's host-only token as not provisioned, and still raises another named refusal", async () => {
+    const hostId = "unary-door-local-not-provisioned";
+    const tokens = await heldTokenSource(hostId);
+    const first = begin(personal(hostId), tokens, null);
+    expect(await answerDial(0, notProvisionedRefusal())).toBe(HOST_TOKEN);
+    const outcome = await first.call;
+    if (outcome.kind !== "rejected") throw new Error("call was admitted");
+    expect(outcome.error).toHaveProperty(
+      "fatalDetails.doorReason",
+      "not_provisioned",
+    );
+    expect(hostDoorStateFor(hostId)).toBeNull();
+
+    // The same messenger's door, so the empty store above is not a silent one.
+    const second = begin(personal(hostId), tokens, null);
+    expect(await answerDial(1, membershipRemovedRefusal())).toBe(HOST_TOKEN);
+    expect(await second.call).toMatchObject({ kind: "rejected" });
+    expect(hostDoorStateFor(hostId)?.kind).toBe("membership-removed");
+  });
 
   describe("with a released personal host that refuses the sign-in too", () => {
     it("raises no 'Host update needed' state when the resend after a refresh that changed nothing is refused bare again", async () => {

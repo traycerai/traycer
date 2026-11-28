@@ -131,24 +131,27 @@ describe("door state narration", () => {
     ).toEqual(deriveWindowNarration(served));
   });
 
-  it("draws membership-removed's cover even while a host is serving", () => {
-    const served = narrationInput({
-      effectiveHostId: "remote-host",
-      targetHostId: "remote-host",
-      hasBeenServed: true,
-      leases: [servingLease("remote-host")],
-    });
-    expect(
-      deriveWindowNarration({
-        ...served,
-        doorState: door("membership-removed", "remote-host"),
-      }),
-    ).toEqual({
-      kind: "narrating",
-      cause: "door-state",
-      variant: { kind: "membership-removed", hostId: "remote-host" },
-    });
-  });
+  it.each(["membership-removed", "nobody-signed-in"] as const)(
+    "draws %s's cover even while a host is serving",
+    (kind) => {
+      const served = narrationInput({
+        effectiveHostId: "remote-host",
+        targetHostId: "remote-host",
+        hasBeenServed: true,
+        leases: [servingLease("remote-host")],
+      });
+      expect(
+        deriveWindowNarration({
+          ...served,
+          doorState: door(kind, "remote-host"),
+        }),
+      ).toEqual({
+        kind: "narrating",
+        cause: "door-state",
+        variant: { kind, hostId: "remote-host" },
+      });
+    },
+  );
 
   it("draws nothing for a non-blocking door state", () => {
     const waiting = narrationInput({});

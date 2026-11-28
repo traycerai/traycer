@@ -172,8 +172,9 @@ const RECOGNISED_RPC_DOOR_OUTCOMES: Record<HostDoorReason, RpcDoorOutcome> = {
     expectedRequests: 1,
     refuseAgainAfterMint: false,
   },
+  // The shared mapping names it; which of the app's doors keeps it is the app's call.
   not_provisioned: {
-    expectedKind: null,
+    expectedKind: "nobody-signed-in",
     expectedMintAttempts: 0,
     expectedRequests: 1,
     refuseAgainAfterMint: false,

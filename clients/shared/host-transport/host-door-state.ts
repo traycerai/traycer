@@ -25,6 +25,8 @@ export type HostDoorStateKind =
   /** A second `not_admitted` after one fresh token, or a mint refusal that does not say "team". */
   | "not-admitted"
   | "host-claimed"
+  /** A computer's remote door, while nobody is signed in on that computer. */
+  | "nobody-signed-in"
   /** A host-only token refused with no `doorReason` and not retryable: an older host. */
   | "older-host"
   /** A newer host, never an older one. */
@@ -105,6 +107,7 @@ export type HostDoorStateClears =
   | "admin-restores-enrolment"
   | "admin-adds-back"
   | "account-switched"
+  | "someone-signs-in"
   | "host-updated";
 
 export interface HostDoorStatePolicy {
@@ -178,6 +181,12 @@ export const HOST_DOOR_STATE_POLICY: Readonly<
     retry: "none",
     clears: null,
   },
+  "nobody-signed-in": {
+    raisedBy: ["host"],
+    blocks: true,
+    retry: "none",
+    clears: "someone-signs-in",
+  },
   "older-host": {
     raisedBy: ["host"],
     blocks: true,
@@ -216,8 +225,9 @@ const DOOR_REASON_STATES: Readonly<
   session_revoked: null,
   // Answered by the owner's sign-in on the next dial.
   owner_sign_in: null,
-  // Given only to the probe, which raises no state.
-  not_provisioned: null,
+  // Raised only from a computer's remote door: the probe reports to no door, and
+  // the app's local doors drop this state.
+  not_provisioned: "nobody-signed-in",
 };
 
 export function hostRefusalOf(error: HostRpcError): FatalErrorDetails | null {

@@ -10,6 +10,7 @@ import {
 } from "@traycer-clients/shared/auth/host-token-lease";
 import {
   appHostDoorObserver,
+  appLocalHostDoorObserver,
   noteHostTokenRefusal,
 } from "@/lib/host/host-door-observer";
 import { localDoorHostTokens } from "@/lib/host/local-door-host-tokens";
@@ -264,7 +265,7 @@ export function buildRawHostMessengerForTarget<
       // no-dispatch attestation when the client's timer wins that race.
       hostAttestationWindowMs: HOST_POST_OPEN_ATTESTATION_WINDOW_MS,
       clientIdentity: getGuiClientIdentity(),
-      doorFor: appHostDoorObserver,
+      doorFor: appLocalHostDoorObserver,
       ...localDoorBearers(
         localDoorHostTokens(params.hostTokens),
         () => params.target,
@@ -523,7 +524,7 @@ class RuntimeHostMessenger<
       // Same post-`openAck` attestation grace as the standalone builder above.
       hostAttestationWindowMs: HOST_POST_OPEN_ATTESTATION_WINDOW_MS,
       clientIdentity: getGuiClientIdentity(),
-      doorFor: appHostDoorObserver,
+      doorFor: appLocalHostDoorObserver,
       ...localDoorBearers(
         localDoorHostTokens(this.hostTokens),
         this.resolveTarget,
