@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { QueryClient } from "@tanstack/react-query";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import {
   COMMAND_AUTO_RETRY_WINDOW_MS,
   createCommandQueue,
@@ -19,14 +22,23 @@ import type {
 } from "@traycer-clients/shared/host-client/host-client";
 import { StaleHostBindingAuthorityError } from "@traycer-clients/shared/host-client/host-binding-authority-error";
 import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { poolHostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
-import { transportFailureBeforeSend } from "@traycer/protocol/host-transport/remote/rpc-types";
+import {
+  markTargetAnswer,
+  transportFailureBeforeSend,
+} from "@traycer/protocol/host-transport/remote/rpc-types";
+import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import {
   classifyEpicWriteCommandFailure,
   EpicWriteCommandTransportUnavailableError,
   type EpicWriteCommandIntent,
 } from "../epic-write-command";
 import { dispatchEpicWriteCommand } from "../epic-write-command-dispatch";
+
+const POOL_ENTRY = poolHostDirectoryEntry("wss://pool.test/rpc");
+if (POOL_ENTRY === null) throw new Error("pool fixture must build");
 
 function makeEnvironment(now: () => number): RuntimeEnvironment {
   return {
@@ -105,6 +117,104 @@ function requesterThatNeverSends(): HostRequester<typeof hostRpcRegistry> {
 }
 
 describe("classifyEpicWriteCommandFailure", () => {
+  it("keeps a queued title unknown after the exact received pool wire answer", async () => {
+    const messenger = new MockHostMessenger<typeof hostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "wire-unknown-title-request",
+      handlers: {
+        "epic.updateTitle": () => {
+          const error = HostRpcError.fromWireEnvelope(
+            {
+              code: "E_IDEMPOTENCY_OUTCOME_UNKNOWN",
+              message:
+                "The authoritative write outcome could not be confirmed.",
+            },
+            "wire-unknown-title-request",
+            "epic.updateTitle",
+          );
+          markTargetAnswer(error);
+          throw error;
+        },
+      },
+    });
+    const queryClient = new QueryClient();
+    const spine = new HostClient<typeof hostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) => (hostId === POOL_HOST_ID ? POOL_ENTRY : null),
+      messenger,
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "pool-write-test-token",
+      }),
+    );
+    const requester = spine.createRequesterForHostId(POOL_HOST_ID);
+    const unknownCommandIds: string[] = [];
+    let nextCommandId = 0;
+    const queue = createCommandQueue<EpicWriteCommandIntent>({
+      environment: makeEnvironment(() => 100),
+      idFactory: {
+        next: () => {
+          nextCommandId += 1;
+          return `wire-command-${String(nextCommandId)}`;
+        },
+      },
+      send: async (command) => {
+        const result = await dispatchEpicWriteCommand(
+          { epicId: "epic-pool-wire-unknown", requester: () => requester },
+          command.commandId,
+          command.intent,
+        );
+        return {
+          kind: "committed",
+          hostId: result.hostId,
+          entityVersion: null,
+        };
+      },
+      classifyFailure: classifyEpicWriteCommandFailure,
+      accept: () => true,
+      onEnqueued: () => true,
+      onUnknownOutcome: (command) => {
+        unknownCommandIds.push(command.commandId);
+      },
+      onResolved: () => undefined,
+    });
+
+    try {
+      const command = queue.enqueue({
+        intent: {
+          kind: "update-epic-title",
+          title: "Pool title target",
+          updatedAt: 100,
+        },
+        expectedEntityVersion: null,
+      });
+      if (command === null)
+        throw new Error("expected title command to enqueue");
+      await settleQueueMicrotasks();
+
+      expect(messenger.calls).toHaveLength(1);
+      expect(messenger.calls[0]?.method).toBe("epic.updateTitle");
+      expect(messenger.calls[0]?.authority.endpoint.hostId).toBe(POOL_HOST_ID);
+      expect(messenger.calls[0]?.idempotencyKey).toBe(command.commandId);
+      expect(queue.list()).toMatchObject([
+        {
+          commandId: command.commandId,
+          state: "pending",
+          delivery: "unknown-outcome",
+          attempts: 1,
+        },
+      ]);
+      expect(unknownCommandIds).toEqual([command.commandId]);
+    } finally {
+      queue.dispose();
+      spine.dispose();
+      queryClient.clear();
+    }
+  });
+
   it("leaves a pool write queued when dispatch proves it was not sent", async () => {
     const unknownCommandIds: string[] = [];
     let nextCommandId = 0;
