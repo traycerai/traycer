@@ -14,7 +14,6 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import * as Y from "yjs";
 import {
   DndContext,
   PointerSensor,
@@ -43,6 +42,29 @@ import {
 } from "@/providers/keybinding-context";
 import { LEADER_SCOPE_HEADER_TABS } from "@/lib/keybindings/leader-scope";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@traycer/protocol/host";
+import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
+import { settleProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
+import {
+  cloudEpicTasksQueryKey,
+  LIST_CLOUD_TASKS_REQUEST,
+} from "@/lib/cloud-epic-tasks-query";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { useCloudEpicTasksPagesStore } from "@/stores/epics/cloud-epic-tasks-pages-store";
+import type { ListTasksResponse } from "@traycer/protocol/host/epic/unary-schemas";
+import { toast } from "sonner";
+import {
+  createTitleRequesterFixture,
+  mountPoolServingWithHomeOffline,
+  resetTitleRequesterFixture,
+  seedPoolCloudHistoryRow,
+  signInTaskTitleTestUser,
+  titleUpdateCalls,
+  TITLE_TEST_HOME_HOST_ID,
+  TITLE_TEST_PINNED_HOST_ID,
+  TITLE_TEST_USER_ID,
+} from "@/lib/test-support/epic-title-requester-fixture";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import {
   __getChatSessionRegistryForTests,
@@ -53,14 +75,27 @@ import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import type { EpicWriteCommandIntent } from "@/stores/epics/open-epic/runtime/epic-write-command";
-import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
-import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
-import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
+import { registerEditableEpicSession } from "@/stores/epics/open-epic/test-support/editable-epic-session-fixture";
 import {
   EMPTY_NOTIFICATION_INDICATOR_STATE,
   type SurfaceNotificationIndicators,
 } from "@/stores/notifications/notification-indicator-state";
 import type { HeaderTab } from "@/stores/tabs/types";
+
+const titleRequesterState = vi.hoisted(() => ({
+  client: null as HostClient<HostRpcRegistry> | null,
+}));
+
+vi.mock("@/lib/host/runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host/runtime")>();
+  return {
+    ...actual,
+    getHostBindingSnapshot: () =>
+      titleRequesterState.client === null
+        ? null
+        : { hostClient: titleRequesterState.client },
+  };
+});
 
 const navigation = vi.hoisted((): { calls: unknown[] } => ({ calls: [] }));
 vi.mock("@/lib/tab-navigation", async (importOriginal) => {
@@ -90,6 +125,21 @@ vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
     error: null,
   }),
 }));
+
+vi.mock(
+  "@/hooks/epic/use-epic-task-pinned-states-query",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/epic/use-epic-task-pinned-states-query")
+      >();
+    return {
+      ...actual,
+      useComputerTaskPinReading: () => null,
+      usePoolTaskPinReading: () => null,
+    };
+  },
+);
 
 const EPIC_ID = "epic-row";
 const CHAT_ID = "chat-row";
@@ -191,6 +241,15 @@ async function renderInApp(
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
+  await renderInAppWithQueryClient(node, leader, indicators, queryClient);
+}
+
+async function renderInAppWithQueryClient(
+  node: ReactNode,
+  leader: LeaderState,
+  indicators: SurfaceNotificationIndicators,
+  queryClient: QueryClient,
+): Promise<void> {
   const rootRoute = createRootRoute({
     component: () => (
       <QueryClientProvider client={queryClient}>
@@ -214,68 +273,20 @@ async function renderInApp(
   });
 }
 
-function encodeBase64(bytes: Uint8Array): string {
-  return btoa(String.fromCharCode(...bytes));
+async function beginStripTitleRename(): Promise<HTMLElement> {
+  const row = await screen.findByTestId(`tab-epic-${EPIC_TAB.id}`);
+  fireEvent.contextMenu(row);
+  fireEvent.click(await screen.findByText("Edit Title"));
+  const input = await screen.findByTestId(
+    `tab-title-input-epic-${EPIC_TAB.id}`,
+  );
+  await waitFor(() => expect(document.activeElement).toBe(input));
+  return input;
 }
 
-function snapshotMeta(): SnapshotMetaEpic {
-  return {
-    schemaVersion: "1.0",
-    epicLight: {
-      id: EPIC_ID,
-      title: "Row task",
-      initialUserPrompt: "",
-      ticketCount: 0,
-      specCount: 0,
-      storyCount: 0,
-      reviewCount: 0,
-      status: "open",
-      createdAt: 0,
-      updatedAt: 0,
-      createdBy: "u",
-      version: "1",
-    },
-    permissionRole: "owner",
-    repos: [],
-    workspaces: [],
-    repoMapping: [],
-    workspaceFolders: [],
-    unresolvedRepos: [],
-    hostStateVectorBase64: encodeBase64(Y.encodeStateVector(new Y.Doc())),
-  };
-}
-
-/**
- * A live epic session an owner can rename, whose write commands land in
- * `writes`. Transport opens before the snapshot so the command queue has a
- * fresh root snapshot to send behind.
- */
-function registerEditableEpic(writes: EpicWriteCommandIntent[]): void {
-  const captured: { value: EpicStreamCallbacks | null } = { value: null };
-  const factory: EpicStreamClientFactory = (_id, callbacks) => {
-    captured.value = callbacks;
-    return {
-      applyUpdate: () => undefined,
-      awareness: () => undefined,
-      applyArtifactRoomUpdate: () => undefined,
-      artifactRoomAwareness: () => undefined,
-      retryMigration: () => undefined,
-      close: () => undefined,
-    };
-  };
-  const handle = openStoreForTest({
-    epicId: EPIC_ID,
-    userId: null,
-    factories: { streamClientFactory: factory, laneSelection: null },
-    writeCommand: (_commandId, intent) => {
-      writes.push(intent);
-      return Promise.resolve({ hostId: "host-a" });
-    },
-  });
-  if (captured.value === null) throw new Error("factory not invoked");
-  captured.value.onConnectionStatus("open", null, false, null);
-  captured.value.onSnapshot(snapshotMeta(), Y.encodeStateAsUpdate(new Y.Doc()));
-  __getOpenEpicRegistryForTests().acquire(EPIC_ID, () => handle);
+function submitStripTitleRename(input: HTMLElement, title: string): void {
+  fireEvent.change(input, { target: { value: title } });
+  fireEvent.keyDown(input, { key: "Enter" });
 }
 
 /** A live epic projection holding `CHAT_ID`, with a warm session parked on a command approval. */
@@ -348,12 +359,22 @@ beforeEach(() => {
   navigation.calls.length = 0;
   // A cloud-homed epic's rename and History pin are cloud capabilities.
   useAuthStore.setState({ status: "signed-in" });
+  titleRequesterState.client = null;
+  settleProcessHostRpcTierPlan(poolEntry);
 });
 
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
   useAuthStore.setState({ status: "signed-out" });
+  titleRequesterState.client = null;
+  resetTitleRequesterFixture();
+  useCloudEpicTasksPagesStore.setState({
+    pagesByIdentity: {},
+    generationByIdentity: {},
+    identitiesWithDisplacedRowsPage: new Set(),
+    deletedEpicIdsByScope: {},
+  });
   __getOpenEpicRegistryForTests().disposeAll();
   disposeAllChatSessions();
   useEpicDndStore.setState({ topLevelStripPairPreview: null });
@@ -430,7 +451,13 @@ describe("useStripTabItem through a bare presentation", () => {
   });
 
   it("ignores a middle click while the inline title rename is open", async () => {
-    registerEditableEpic([]);
+    registerEditableEpicSession({
+      epicId: EPIC_ID,
+      title: "Row task",
+      userId: null,
+      hostId: "host-a",
+      writes: [],
+    });
     const onClose = vi.fn<(tab: HeaderTab) => void>();
     await renderInApp(
       <BareRow input={{ ...makeInput(), onClose }} />,
@@ -524,7 +551,15 @@ describe("useStripTabItem through a bare presentation", () => {
 
   it("renames through Edit Title and commits on the epic's write path", async () => {
     const writes: EpicWriteCommandIntent[] = [];
-    registerEditableEpic(writes);
+    const requesterFixture = createTitleRequesterFixture();
+    titleRequesterState.client = requesterFixture.client;
+    registerEditableEpicSession({
+      epicId: EPIC_ID,
+      title: "Row task",
+      userId: null,
+      hostId: "host-a",
+      writes,
+    });
     await renderInApp(
       <BareRow input={makeInput()} />,
       IDLE_LEADER,
@@ -554,9 +589,179 @@ describe("useStripTabItem through a bare presentation", () => {
       kind: "update-epic-title",
       title: "Renamed row",
     });
+    expect(titleUpdateCalls(requesterFixture.messenger)).toEqual([]);
     expect(
       screen.queryByTestId(`tab-title-input-epic-${EPIC_TAB.id}`),
     ).toBeNull();
+  });
+
+  it("routes a detached cloud rename to its pool History row after home goes offline", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const requesterFixture = createTitleRequesterFixture();
+    titleRequesterState.client = requesterFixture.client;
+    signInTaskTitleTestUser();
+    mountPoolServingWithHomeOffline();
+    seedPoolCloudHistoryRow(queryClient, EPIC_ID);
+    const writes: EpicWriteCommandIntent[] = [];
+    const session = registerEditableEpicSession({
+      epicId: EPIC_ID,
+      title: "Task title",
+      userId: TITLE_TEST_USER_ID,
+      hostId: TITLE_TEST_HOME_HOST_ID,
+      writes,
+    });
+    await renderInAppWithQueryClient(
+      <BareRow input={makeInput()} />,
+      IDLE_LEADER,
+      NO_PROMPT_LIT_INDICATORS,
+      queryClient,
+    );
+
+    const input = await beginStripTitleRename();
+    act(() => {
+      session.release();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId(`tab-title-input-epic-${EPIC_TAB.id}`)).toBe(
+        input,
+      );
+    });
+    submitStripTitleRename(input, "Pool task title");
+
+    await waitFor(() => {
+      expect(titleUpdateCalls(requesterFixture.messenger)).toEqual([
+        {
+          hostId: POOL_HOST_ID,
+          epicId: EPIC_ID,
+          title: "Pool task title",
+        },
+      ]);
+    });
+    expect(writes).toEqual([]);
+    const poolPage = queryClient.getQueryData<ListTasksResponse>(
+      cloudEpicTasksQueryKey(
+        POOL_HOST_ID,
+        TITLE_TEST_USER_ID,
+        LIST_CLOUD_TASKS_REQUEST,
+      ),
+    );
+    expect(
+      poolPage?.tasks.find((task) => task.epic?.light?.id === EPIC_ID)?.epic
+        ?.light?.title,
+    ).toBe("Pool task title");
+  });
+
+  it("uses the explicit strip host ahead of pool row evidence after detachment", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const requesterFixture = createTitleRequesterFixture();
+    titleRequesterState.client = requesterFixture.client;
+    signInTaskTitleTestUser();
+    mountPoolServingWithHomeOffline();
+    seedPoolCloudHistoryRow(queryClient, EPIC_ID);
+    const session = registerEditableEpicSession({
+      epicId: EPIC_ID,
+      title: "Task title",
+      userId: TITLE_TEST_USER_ID,
+      hostId: TITLE_TEST_HOME_HOST_ID,
+      writes: [],
+    });
+    const pinnedInput: StripTabItemInput = {
+      ...makeInput(),
+      tab: { ...EPIC_TAB, hostId: TITLE_TEST_PINNED_HOST_ID },
+    };
+    await renderInAppWithQueryClient(
+      <BareRow input={pinnedInput} />,
+      IDLE_LEADER,
+      NO_PROMPT_LIT_INDICATORS,
+      queryClient,
+    );
+
+    const input = await beginStripTitleRename();
+    act(() => {
+      session.release();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId(`tab-title-input-epic-${EPIC_TAB.id}`)).toBe(
+        input,
+      );
+    });
+    submitStripTitleRename(input, "Pinned task title");
+
+    await waitFor(() => {
+      expect(titleUpdateCalls(requesterFixture.messenger)).toEqual([
+        {
+          hostId: TITLE_TEST_PINNED_HOST_ID,
+          epicId: EPIC_ID,
+          title: "Pinned task title",
+        },
+      ]);
+    });
+    const poolPage = queryClient.getQueryData<ListTasksResponse>(
+      cloudEpicTasksQueryKey(
+        POOL_HOST_ID,
+        TITLE_TEST_USER_ID,
+        LIST_CLOUD_TASKS_REQUEST,
+      ),
+    );
+    expect(
+      poolPage?.tasks.find((task) => task.epic?.light?.id === EPIC_ID)?.epic
+        ?.light?.title,
+    ).toBe("Task title");
+  });
+
+  it("keeps the strip failure toast and sends nothing when detached without row evidence", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const requesterFixture = createTitleRequesterFixture();
+    titleRequesterState.client = requesterFixture.client;
+    signInTaskTitleTestUser();
+    mountPoolServingWithHomeOffline();
+    const session = registerEditableEpicSession({
+      epicId: EPIC_ID,
+      title: "Task title",
+      userId: TITLE_TEST_USER_ID,
+      hostId: TITLE_TEST_HOME_HOST_ID,
+      writes: [],
+    });
+    await renderInAppWithQueryClient(
+      <BareRow input={makeInput()} />,
+      IDLE_LEADER,
+      NO_PROMPT_LIT_INDICATORS,
+      queryClient,
+    );
+    const failureToast = vi.spyOn(toast, "error");
+
+    const input = await beginStripTitleRename();
+    act(() => {
+      session.release();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId(`tab-title-input-epic-${EPIC_TAB.id}`)).toBe(
+        input,
+      );
+    });
+    submitStripTitleRename(input, "No evidence title");
+
+    await waitFor(() => {
+      expect(failureToast).toHaveBeenCalledWith(
+        "Couldn't reach the host to rename the epic.",
+      );
+    });
+    expect(titleUpdateCalls(requesterFixture.messenger)).toEqual([]);
   });
 
   it("shows the Alt-digit badge only while the header-tab scope owns alt", async () => {
@@ -668,7 +873,13 @@ describe("TabItem hover card", () => {
 
   it("keeps the hover card closed while the tab is being renamed", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    registerEditableEpic([]);
+    registerEditableEpicSession({
+      epicId: EPIC_ID,
+      title: "Row task",
+      userId: null,
+      hostId: "host-a",
+      writes: [],
+    });
     await renderTabItem();
     const row = await screen.findByTestId(`tab-epic-${EPIC_TAB.id}`);
     fireEvent.contextMenu(row);

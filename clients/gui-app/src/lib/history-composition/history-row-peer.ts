@@ -19,7 +19,9 @@ export interface HistoryRowEvidence {
   readonly listedByPeerId: string;
 }
 
-export function historyRowEvidence(item: HistoryItem): HistoryRowEvidence {
+export function historyRowEvidence(
+  item: Pick<HistoryItem, "home" | "isLocalHome" | "listedByPeerId">,
+): HistoryRowEvidence {
   const { listedByPeerId } = item;
   const listedHome = listedByPeerId === POOL_HOST_ID ? "cloud" : item.home;
   return {
