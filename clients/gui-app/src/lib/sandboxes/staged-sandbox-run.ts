@@ -1,3 +1,8 @@
+import {
+  chooseSandboxEvidence,
+  type ClaimedSandboxRow,
+} from "@/lib/sandboxes/claimed-sandbox-evidence";
+import { nextAccountRequestOrder } from "@/lib/auth/verified-account-orders";
 import { stagedSandboxName } from "@/lib/sandboxes/staged-sandbox-name";
 import { stageProviderForShape } from "@/lib/sandboxes/sandbox-stage-model";
 import { sandboxReadinessContext } from "@/lib/sandboxes/sandbox-readiness";
@@ -13,11 +18,11 @@ import type {
 import {
   SANDBOX_REFUSAL_CODE_ENVIRONMENT_NOT_FOUND,
   SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
-  SANDBOX_REFUSAL_CODE_NOT_FOUND,
   SANDBOX_REFUSAL_CODE_PROVIDER_FAILED,
   SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE,
   SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED,
   type SandboxCreateRequest,
+  type SandboxListResponse,
   type SandboxSummary,
   type SandboxVerbGesture,
 } from "@traycer/protocol/host/sandbox-control";
@@ -28,11 +33,20 @@ import {
   recordPendingSandboxStageCreated,
   markPendingSandboxStageRowSeen,
 } from "@/stores/sandboxes/pending-sandbox-send-store";
+import type { PendingSandboxObservation } from "@/lib/sandboxes/pending-sandbox-observation";
+import {
+  readKnownSandboxRow,
+  fetchIsolatedSandboxRead,
+  type SandboxRowRead,
+} from "@/lib/sandboxes/sandbox-row-read";
 import { sandboxCreateFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
 import { SandboxCreateError } from "@/hooks/sandboxes/use-sandbox-create-mutation";
 import {
   sandboxListQueryOptions,
+  sandboxListReadBoundary,
   sandboxListReadSentAt,
+  sandboxListReadStart,
+  sandboxListReadStartedAfter,
 } from "@/hooks/sandboxes/use-sandbox-list-query";
 import { teamEnvironmentQueryOptions } from "@/hooks/sandboxes/use-team-environment-query";
 import { sandboxCatalogueQueryOptions } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
@@ -145,7 +159,8 @@ export async function runStagedSandbox(
   // pick was New. No retry of that wake may replace the sandbox or its key.
   const retryingWake =
     stage.failure?.kind === "failed" && stage.failure.code === "wake";
-  const freshCreate = fresh && !retryingWake;
+  const freshCreate =
+    fresh && !retryingWake && createMayChangeKey(stage.failure);
   if (
     !freshCreate &&
     stage.clientRequestId !== null &&
@@ -518,14 +533,12 @@ async function startTarget(
   const result = await createSandbox(request, deps);
   if (!stillCurrent(surfaceKey, clientRequestId)) return null;
   if (result.kind !== "ok") {
-    fail(
+    recordCreateRefusal(
       surfaceKey,
-      createFailure(
-        result,
-        target.configuration.kind === "team"
-          ? target.configuration.teamName
-          : null,
-      ),
+      result,
+      target.configuration.kind === "team"
+        ? target.configuration.teamName
+        : null,
     );
     return null;
   }
@@ -539,6 +552,41 @@ async function startTarget(
     stepAt: deps.now(),
   });
   return { sandboxId, hostId };
+}
+
+function createMayChangeKey(failure: StagedSandboxFailure | null): boolean {
+  return (
+    failure === null || !("freshCreateKey" in failure) || failure.freshCreateKey
+  );
+}
+
+function recordCreateRefusal(
+  surfaceKey: string,
+  answer: SandboxControlFailure,
+  teamName: string | null,
+): void {
+  const failure = createFailure(answer, teamName);
+  const conflict =
+    answer.kind === "refused" &&
+    answer.createRefusal?.kind === "transition-conflict"
+      ? answer.createRefusal.row
+      : null;
+  if (
+    conflict === null ||
+    !recordPendingSandboxStageCreated(surfaceKey, conflict.sandboxId)
+  ) {
+    fail(surfaceKey, failure);
+    return;
+  }
+  useStagedSandboxStore.getState().report(surfaceKey, {
+    createdSandboxId: conflict.sandboxId,
+    createdHostId: conflict.hostId,
+    failure: {
+      ...failure,
+      freshCreateKey: false,
+      conflictingSandbox: conflict,
+    },
+  });
 }
 
 /**
@@ -655,7 +703,8 @@ function createFailureForLine(
 
 /** These create replies follow replay and report a refusal or a failed row. */
 function createAnswerNeedsFreshKey(failure: SandboxControlFailure): boolean {
-  if (failure.kind !== "refused") return false;
+  if (failure.kind !== "refused" || failure.uncertainCreateRow === true)
+    return false;
   switch (failure.code) {
     case SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT:
       return failure.status === 402;
@@ -663,10 +712,6 @@ function createAnswerNeedsFreshKey(failure: SandboxControlFailure): boolean {
       return failure.status === 400;
     case SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE:
       return failure.status === 503;
-    case SANDBOX_REFUSAL_CODE_NOT_FOUND:
-      // The GUI sends a person's create with no creating host. The route's
-      // earlier sandbox_not_found requires an inaccessible creating sandbox.
-      return failure.status === 404;
     case SANDBOX_REFUSAL_CODE_PROVIDER_FAILED:
       return failure.status === 502;
     default:
@@ -702,11 +747,11 @@ async function settle(
   budgetFrom: number,
   budgetMs: number,
 ): Promise<void> {
-  const { surfaceKey, clientRequestId, started, deps } = input;
+  const { surfaceKey, clientRequestId, deps } = input;
   const deadline = budgetFrom + budgetMs;
   while (deps.now() < deadline) {
     if (!stillCurrent(surfaceKey, clientRequestId)) return;
-    const row = await readRow(deps, started.sandboxId, surfaceKey);
+    const row = await readRow(input);
     if (!stillCurrent(surfaceKey, clientRequestId)) return;
     if ((await settleRow(input, row)) === "finished") return;
     await deps.sleep(POLL_INTERVAL_MS);
@@ -791,26 +836,153 @@ async function settleSettings(
   return "finished";
 }
 
-/**
- * One read of the sandbox's row: the row, `null` when the list answered
- * without it (it is gone), or `undefined` when the read failed, which says
- * nothing about the sandbox.
- */
+/** A list omission requests the exact row. Only a typed absence can end it. */
 async function readRow(
-  deps: StagedSandboxRunDeps,
-  sandboxId: string,
-  surfaceKey: string,
+  input: SandboxSettlement,
 ): Promise<SandboxSummary | null | undefined> {
-  // The list query every surface reads, read fresh: the Sandboxes page and
-  // the pickers see the new row as the wait does.
+  const { deps, started, surfaceKey, clientRequestId } = input;
+  const { sandboxId, hostId } = started;
+  const account = { userId: signedInUserId() };
+  if (deps.userId !== null && deps.userId !== account.userId) return undefined;
+  const listBoundary = sandboxListReadBoundary();
   const response = await deps.queryClient
     .fetchQuery({
       ...sandboxListQueryOptions(deps.auth, deps.userId, true),
       staleTime: 0,
     })
     .catch(() => undefined);
-  if (response === undefined || response === null) return undefined;
-  const row = response.sandboxes.find((item) => item.id === sandboxId) ?? null;
+  if (
+    !stillCurrent(surfaceKey, clientRequestId) ||
+    !settledForStartingAccount(account)
+  )
+    return undefined;
+  if (response && sandboxListReadStartedAfter(response, listBoundary)) {
+    const listed = response.sandboxes.find((item) => item.id === sandboxId);
+    if (listed !== undefined)
+      return applyStageRow(input, listed, {
+        kind: "list",
+        sentAt: sandboxListReadSentAt(response),
+        mountedAt: 0,
+      });
+  }
+  // The setup observer's in-flight request belongs to its own observation.
+  const exactReadBoundary = nextAccountRequestOrder();
+  const read = await fetchIsolatedSandboxRead(
+    deps.queryClient,
+    sandboxQueryKeys.stagedRead(surfaceKey, exactReadBoundary),
+    () =>
+      readKnownSandboxRow({
+        auth: deps.auth,
+        userId: deps.userId,
+        sandboxId,
+        hostId,
+        scope: readStagedSandbox(surfaceKey)?.target.configuration ?? null,
+      }),
+  ).catch(() => null);
+  const list = deps.queryClient
+    .getQueryCache()
+    .find<SandboxListResponse | null>({
+      queryKey: sandboxQueryKeys.list(deps.auth, deps.userId),
+      exact: true,
+    });
+  if (list?.state.fetchStatus === "fetching")
+    await list.promise?.catch(() => undefined);
+  if (
+    !stillCurrent(surfaceKey, clientRequestId) ||
+    !settledForStartingAccount(account)
+  )
+    return undefined;
+  return stageRowAfterExactRead(
+    input,
+    read,
+    exactReadBoundary,
+    list?.state.status === "success" ? list.state.data : null,
+  );
+}
+
+function stageRowAfterExactRead(
+  input: SandboxSettlement,
+  read: SandboxRowRead | null,
+  exactReadBoundary: number,
+  list: SandboxListResponse | null | undefined,
+): SandboxSummary | null | undefined {
+  const exact = stageExactEvidence(input, read, exactReadBoundary);
+  const listed = stageListEvidence(
+    input,
+    list,
+    read?.teamAccessLost?.fence ?? read?.listReadBoundary ?? exactReadBoundary,
+  );
+  const winner = chooseSandboxEvidence(exact, listed);
+  return winner === null
+    ? undefined
+    : applyStageRow(input, winner.row, stagedRowObservation(input, winner));
+}
+
+function stagedRowObservation(
+  input: SandboxSettlement,
+  evidence: ClaimedSandboxRow,
+): PendingSandboxObservation {
+  return evidence.source === "exact"
+    ? {
+        kind: "by-id",
+        sandboxId: input.started.sandboxId,
+        sentAt: evidence.sentAt,
+        mountedAt: 0,
+      }
+    : { kind: "list", sentAt: evidence.sentAt, mountedAt: 0 };
+}
+
+function admitStageEvidence(
+  input: SandboxSettlement,
+  evidence: ClaimedSandboxRow,
+): ClaimedSandboxRow | null {
+  return pendingSandboxStageObservation(
+    input.surfaceKey,
+    "awake",
+    stagedRowObservation(input, evidence),
+  ) === "unknown"
+    ? null
+    : evidence;
+}
+
+function stageExactEvidence(
+  input: SandboxSettlement,
+  read: SandboxRowRead | null,
+  order: number,
+): ClaimedSandboxRow | null {
+  if (read?.row === undefined) return null;
+  return admitStageEvidence(input, {
+    row: read.row,
+    order,
+    sentAt: read.sentAt,
+    source: "exact",
+  });
+}
+
+function stageListEvidence(
+  input: SandboxSettlement,
+  list: SandboxListResponse | null | undefined,
+  boundary: number,
+): ClaimedSandboxRow | null {
+  if (list === null || list === undefined) return null;
+  const start = sandboxListReadStart(list);
+  if (start === undefined || start.order <= boundary) return null;
+  const row = list.sandboxes.find(
+    (item) =>
+      item.id === input.started.sandboxId &&
+      item.hostId === input.started.hostId,
+  );
+  return row === undefined
+    ? null
+    : admitStageEvidence(input, { row, ...start, source: "list" });
+}
+
+function applyStageRow(
+  { started, surfaceKey }: SandboxSettlement,
+  row: SandboxSummary | null,
+  observation: PendingSandboxObservation,
+): SandboxSummary | null | undefined {
+  if (row !== null && row.hostId !== started.hostId) return undefined;
   let host: "awake" | "ended" | "resting" | "waking" = "waking";
   if (
     row === null ||
@@ -822,15 +994,9 @@ async function readRow(
   else if (row.state === "awake") host = "awake";
   else if (row.state === "stopped" || row.state === "suspended")
     host = "resting";
-  const observation = {
-    kind: "list",
-    sentAt: sandboxListReadSentAt(response),
-    mountedAt: 0,
-    missingSandboxId: row === null ? sandboxId : undefined,
-  } as const;
   if (
     row !== null &&
-    !markPendingSandboxStageRowSeen(surfaceKey, sandboxId, observation)
+    !markPendingSandboxStageRowSeen(surfaceKey, started.sandboxId, observation)
   )
     return undefined;
   return pendingSandboxStageObservation(surfaceKey, host, observation) ===

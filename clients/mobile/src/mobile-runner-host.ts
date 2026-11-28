@@ -201,6 +201,7 @@ import {
   getSandboxAutomationViaHttp,
   keepSandboxViaHttp,
   listSandboxesViaHttp,
+  getSandboxViaHttp,
   openSandboxAutomationViaHttp,
   patchSandboxViaHttp,
   runSandboxVerbViaHttp,
@@ -211,6 +212,7 @@ import {
   type SandboxCostFetchResult,
   type SandboxCreateFetchResult,
   type SandboxListFetchResult,
+  type SandboxGetFetchResult,
   type SandboxLifecycleVerbFetchResult,
   type SandboxVerbFetchResult,
   type TraycerModelsFetchResult,
@@ -953,6 +955,20 @@ export class MobileRunnerHost implements IRunnerHost {
 
   // The sandbox control plane, from the phone directly: `fetch` is patched by
   // CapacitorHttp, so traycer-server's CORS allow-list does not apply.
+  getSandbox(
+    bearerToken: string,
+    sandboxId: string,
+    teamId: string | null,
+  ): Promise<SandboxGetFetchResult> {
+    return getSandboxViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      sandboxId,
+      teamId,
+    );
+  }
+
   listSandboxes(bearerToken: string): Promise<SandboxListFetchResult> {
     return listSandboxesViaHttp(this.serverBaseUrl, bearerToken, null);
   }

@@ -56,6 +56,7 @@ import type {
   SandboxCostFetchResult,
   SandboxCreateFetchResult,
   SandboxListFetchResult,
+  SandboxGetFetchResult,
   SandboxLifecycleVerbFetchResult,
   SandboxVerbFetchResult,
 } from "../host-client/sandbox-control";
@@ -527,6 +528,11 @@ export interface IRunnerHost {
    * failures collapse into the discriminated results.
    */
   listSandboxes(bearerToken: string): Promise<SandboxListFetchResult>;
+  getSandbox(
+    bearerToken: string,
+    sandboxId: string,
+    teamId: string | null,
+  ): Promise<SandboxGetFetchResult>;
   /** Read from traycer-server so the list needs no computer awake. Never throws. */
   listEnvironments(bearerToken: string): Promise<EnvironmentDirectoryResult>;
   /** Never throws. */

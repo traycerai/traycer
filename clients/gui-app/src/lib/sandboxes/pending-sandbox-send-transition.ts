@@ -39,7 +39,9 @@ export type PendingSendObservation =
   | "terminal-row"
   | "unfrozen"
   | "settings-repaired"
-  | "client-restored";
+  | "client-restored"
+  | "wake-failed"
+  | "wake-recovered";
 
 export type PendingSendEvent =
   | "observe"
@@ -78,6 +80,7 @@ export type PendingSendEvent =
   | "provider-signed-in"
   | "prepare-failed"
   | "wake-failed"
+  | "wake-recovered"
   | "epic-create-failed"
   | "task-deleted"
   | "access-lost"
@@ -124,6 +127,7 @@ export interface PendingSendFacts {
   readonly stopRequested: boolean;
   readonly sandboxKnown: boolean;
   readonly host: "unknown" | "awake" | "resting" | "waking" | "ended";
+  readonly teamAccessLost?: boolean;
   readonly frozen: boolean;
   readonly settingsReady: boolean;
   readonly clientReady: boolean;
@@ -623,6 +627,12 @@ function observe(
   facts: PendingSendFacts,
 ): PendingSendTransition {
   if (facts.host === "ended") return terminalObservation(state, facts);
+  if (claimed(state) && facts.teamAccessLost === true)
+    return result(
+      { ...state, phase: "uncertain", blocker: "client" },
+      [],
+      facts,
+    );
   if (state.phase === "unconfirmed") return result(state, [], facts);
   const atRest = endedAtRest(state, facts);
   if (atRest !== null) return atRest;
@@ -749,6 +759,7 @@ function retry(
 ): PendingSendTransition {
   if (
     state.phase === "unconfirmed" ||
+    facts.teamAccessLost === true ||
     state.blocker === "stop" ||
     facts.inFlight ||
     (state.phase === "waiting" && !LATCHED_BLOCKERS.has(state.blocker))
@@ -994,14 +1005,17 @@ function activeSignal(
 ): PendingSendTransition {
   if (REQUEST_EVENTS.has(event)) return unreachable(state, facts);
   if (event === "late-accept") return result(state, [], facts);
+  if (
+    event === "wake-recovered" &&
+    claimed(state) &&
+    state.blocker === "wake" &&
+    facts.host === "awake"
+  )
+    return observe({ ...state, blocker: "none" }, facts);
   if (event === "wake-failed") {
     const waiting =
       state.phase === "waiting" &&
-      (state.blocker === "host" ||
-        state.blocker === "model" ||
-        state.blocker === "provider" ||
-        state.blocker === "none" ||
-        state.blocker === "wake");
+      ["host", "model", "provider", "none", "wake"].includes(state.blocker);
     const sending =
       state.phase === "sending" &&
       (state.blocker === "none" || state.blocker === "host");
@@ -1126,6 +1140,7 @@ function consumeRetry(
   const decision = requested.effects.includes("retry")
     ? requested
     : activeTransition(state, facts.retryObservation, facts);
+  if (claimed(state) && !requested.effects.includes("retry")) return decision;
   return result(
     decision.state,
     ["acknowledge-retry", ...decision.effects],

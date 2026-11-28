@@ -39,6 +39,7 @@ import {
   getSandboxAutomationViaHttp,
   keepSandboxViaHttp,
   listSandboxesViaHttp,
+  getSandboxViaHttp,
   openSandboxAutomationViaHttp,
   patchSandboxViaHttp,
   runSandboxVerbViaHttp,
@@ -49,6 +50,7 @@ import {
   type SandboxCostFetchResult,
   type SandboxCreateFetchResult,
   type SandboxListFetchResult,
+  type SandboxGetFetchResult,
   type SandboxLifecycleVerbFetchResult,
   type SandboxVerbFetchResult,
   type TraycerModelsFetchResult,
@@ -785,6 +787,20 @@ export class MockRunnerHost implements IRunnerHost {
   }
 
   // The sandbox control plane: same no-CORS-boundary parity as above.
+  getSandbox(
+    bearerToken: string,
+    sandboxId: string,
+    teamId: string | null,
+  ): Promise<SandboxGetFetchResult> {
+    return getSandboxViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      sandboxId,
+      teamId,
+    );
+  }
+
   listSandboxes(bearerToken: string): Promise<SandboxListFetchResult> {
     return listSandboxesViaHttp(this.serverBaseUrl, bearerToken, null);
   }

@@ -1,3 +1,12 @@
+import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
+import { useHostBinding } from "@/lib/host";
+import type { AuthService } from "@/lib/auth/auth-service";
+import {
+  beginAccountVerification,
+  nextAccountRequestOrder,
+  clearAccountVerifications,
+  finishAccountVerification,
+} from "@/lib/auth/verified-account-orders";
 /**
  * A message sent to a staged sandbox waits in its task, behind the setup line,
  * until the agent the person asked for is ready on the sandbox.
@@ -40,6 +49,7 @@ import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environm
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import type {
   SandboxCreateRequest,
+  SandboxListResponse,
   SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
 import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
@@ -51,6 +61,7 @@ import type { CreateChatResponseV12 } from "@traycer/protocol/host/epic/unary-sc
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type {
   SandboxCreateFetchResult,
+  SandboxGetFetchResult,
   SandboxListFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import type { CreateChatMutationInput } from "@/hooks/epic/use-epic-chat-mutations";
@@ -363,6 +374,8 @@ const mocks = vi.hoisted(() => ({
   /** Repairs started and not finished; calling one succeeds that repair. */
   repairFinishers: [] as Array<() => void>,
   retrySupported: true,
+  settingsReply: null as EnvironmentStatusResponseV11 | null,
+  settingsRequests: [] as string[],
   legacySupported: false,
   legacyMutate: vi.fn(),
   settingsStatus: undefined as
@@ -382,6 +395,14 @@ const mocks = vi.hoisted(() => ({
     error: Error | null;
   },
   listSandboxes: vi.fn<() => Promise<SandboxListFetchResult>>(),
+  getSandbox:
+    vi.fn<
+      (
+        sandboxId: string,
+        teamId: string | null,
+      ) => Promise<SandboxGetFetchResult>
+    >(),
+  fetchAuthenticatedUser: vi.fn<() => Promise<AuthenticatedUser | null>>(),
   findById: vi.fn<(hostId: string) => HostDirectoryEntry | null>(),
   /** The account's host directory, as the host chips and "Use <host>" read it. */
   directoryRows: [] as HostDirectoryEntry[],
@@ -485,13 +506,27 @@ const clients = vi.hoisted(
 const refetchNothing = vi.hoisted(() => () => Promise.resolve(undefined));
 
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostDirectoryEntryForHostId: () => null,
+  useHostDirectoryEntryForHostId: (hostId: string | null) => {
+    if (hostId === null || mocks.nullClientHosts.has(hostId)) return null;
+    return mocks.findById(hostId);
+  },
   useHostClientForHostId: (hostId: string | null) => {
     if (hostId === null || mocks.nullClientHosts.has(hostId)) return null;
     const known = clients.get(hostId);
     if (known !== undefined) return known;
     const created = {
       hostId,
+      ...(mocks.settingsReply === null
+        ? {}
+        : {
+            getActiveHostId: () => hostId,
+            getRequestContextUserId: () =>
+              useAuthStore.getState().profile?.userId ?? null,
+            requestWithSignal: (method: string) => {
+              mocks.settingsRequests.push(method);
+              return Promise.resolve(mocks.settingsReply);
+            },
+          }),
       requestWithOptions: (
         method: string,
         params: { readonly sha256: string },
@@ -683,6 +718,7 @@ export const environmentListAnswer = {
 export const sandboxListState = {
   pending: false,
   failed: false,
+  real: false,
 };
 
 vi.mock("@/components/epic-canvas/sidebar/new-terminal-tile-ref", () => ({
@@ -713,6 +749,18 @@ const hostBinding = vi.hoisted(() => ({
     createSandbox: (request: SandboxCreateRequest) =>
       mocks.createSandbox(request),
     listSandboxes: () => mocks.listSandboxes(),
+    getSandbox: (sandboxId: string, teamId: string | null) =>
+      mocks.getSandbox(sandboxId, teamId),
+    fetchAuthenticatedUser: () => mocks.fetchAuthenticatedUser(),
+    captureSandboxReadContext: () => () => true,
+    getSandboxReadEra: () => "claimed-fixture-era",
+    subscribeSandboxReadEra: () => () => {},
+    readSandboxTeamAccess: async (userId: string, teamId: string) => {
+      const user = await mocks.fetchAuthenticatedUser();
+      return user?.user.id === userId
+        ? user.teamSubscriptions.some((entry) => entry.team.id === teamId)
+        : undefined;
+    },
     getTeamEnvironment: () =>
       Promise.resolve<TeamEnvironmentFetchResult>({
         kind: "ok",
@@ -724,6 +772,37 @@ const hostBinding = vi.hoisted(() => ({
     findById: (hostId: string) => mocks.findById(hostId),
   },
 }));
+
+export function startAccountVerification(): number {
+  return beginAccountVerification(hostBinding.auth);
+}
+
+export function publishVerifiedAccount(
+  order: number,
+  user: AuthenticatedUser | null,
+): void {
+  finishAccountVerification(
+    hostBinding.auth,
+    order,
+    user === null
+      ? null
+      : {
+          userId: user.user.id,
+          teamIds: user.teamSubscriptions.map((entry) => entry.team.id),
+        },
+  );
+}
+
+export const pendingSandboxAuth = hostBinding.auth;
+
+let claimBinding: {
+  readonly auth: AuthService;
+  readonly directory: typeof hostBinding.directory;
+} | null = null;
+
+export function installClaimAuth(auth: AuthService): void {
+  claimBinding = { auth, directory: hostBinding.directory };
+}
 
 // The hosts the "Use <host>" action names, as the host chips list them.
 vi.mock("@/components/settings/host-scope/use-host-options", async () => {
@@ -760,7 +839,9 @@ vi.mock("@/lib/host", async (importOriginal) => {
     useHostClient: () =>
       mocks.useRuntimeBinding ? actual.useHostClient() : null,
     useHostBinding: () =>
-      mocks.useRuntimeBinding ? actual.useHostBinding() : hostBinding,
+      mocks.useRuntimeBinding
+        ? actual.useHostBinding()
+        : (claimBinding ?? hostBinding),
     // The failed line's real actions read the control plane through it.
     useAuthService: () =>
       mocks.useRuntimeBinding ? actual.useAuthService() : hostBinding.auth,
@@ -809,6 +890,9 @@ vi.mock("@/lib/sandboxes/sandbox-wake", () => ({
 
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({ data: mocks.authUser }),
+  useAuthUserWhen: (enabled: boolean) => ({
+    data: enabled ? mocks.authUser : null,
+  }),
 }));
 
 vi.mock(
@@ -823,25 +907,75 @@ vi.mock(
 
 // The real list query backs the staged run's own reads; the hook the ready
 // line reads is the account's rows.
-vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("@/hooks/sandboxes/use-sandbox-list-query")
-  >()),
-  useSandboxList: () => {
+vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => {
+  const original =
+    await importOriginal<
+      typeof import("@/hooks/sandboxes/use-sandbox-list-query")
+    >();
+  const observed = new WeakMap<
+    object,
+    { order: number; sentAt: number; era: string | null }
+  >();
+  const published = new WeakMap<
+    readonly SandboxSummary[],
+    Map<string, SandboxListResponse & { readonly sentAt: number }>
+  >();
+  return {
+    ...original,
+    useSandboxList: useFixtureSandboxList,
+    sandboxListObservation: (value: unknown) =>
+      typeof value === "object" && value !== null
+        ? (observed.get(value) ?? original.sandboxListObservation(value))
+        : undefined,
+    useObservedSandboxList: (enabled: boolean | (() => boolean)) => {
+      const useList = sandboxListState.real
+        ? original.useObservedSandboxList
+        : useFixtureSandboxList;
+      return useList(enabled);
+    },
+    // The answered request's send time; an old fixture's read is sent when it arrives.
+    sandboxListReadSentAt: (
+      data: Parameters<typeof original.sandboxListReadSentAt>[0],
+    ) =>
+      sandboxListState.real
+        ? original.sandboxListReadSentAt(data)
+        : (mocks.listReadSentAt ?? mocks.listReadAt),
+  };
+
+  function useFixtureSandboxList() {
     useAnswerVersion();
+    const { sandboxes, listReadAt, listReadSentAt } = mocks;
+    const era = useHostBinding()?.auth.getSandboxReadEra() ?? null;
+    let snapshots = published.get(sandboxes);
+    if (snapshots === undefined) {
+      snapshots = new Map();
+      published.set(sandboxes, snapshots);
+    }
+    const key = JSON.stringify([era, listReadAt, listReadSentAt]);
+    let response = snapshots.get(key);
+    if (response === undefined) {
+      response = { sandboxes, sentAt: listReadSentAt ?? listReadAt };
+      observed.set(response, {
+        order: nextAccountRequestOrder(),
+        sentAt: response.sentAt,
+        era,
+      });
+      snapshots.set(key, response);
+    }
     return {
       data:
         sandboxListState.pending || sandboxListState.failed
           ? undefined
-          : { sandboxes: mocks.sandboxes },
+          : response,
+      error: null,
       dataUpdatedAt: mocks.listReadAt,
       refetch: mocks.refetchSandboxes,
       isError: sandboxListState.failed,
+      fetchStatus: sandboxListState.pending ? "fetching" : "idle",
+      isFetching: sandboxListState.pending,
     };
-  },
-  // The answered request's send time; an old fixture's read is sent when it arrives.
-  sandboxListReadSentAt: () => mocks.listReadSentAt ?? mocks.listReadAt,
-}));
+  }
+});
 
 vi.mock("@/hooks/sandboxes/use-sandbox-verb-mutation", () => ({
   // A verb as the real mutation reports it: the call is recorded, the result
@@ -896,13 +1030,30 @@ vi.mock("@/lib/links/open-link", () => ({
 
 // The isolated fixtures read the host's settings as ready; a settings hold is
 // exercised by its own test, not by every send.
-vi.mock("@/hooks/sandboxes/use-sandbox-settings-status", () => ({
-  useSandboxSettingsStatus: () => ({
-    // A failed item keeps the host's settings unready, as the real read does.
-    ready: mocks.settingsStatus === undefined,
-    data: mocks.settingsStatus,
-  }),
-}));
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-settings-status",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/sandboxes/use-sandbox-settings-status")
+      >();
+    function useFixtureSettingsStatus() {
+      return {
+        ready: mocks.settingsStatus === undefined,
+        data: mocks.settingsStatus,
+      };
+    }
+    return {
+      useSandboxSettingsStatus: (row: SandboxSummary | null) => {
+        const useSettings =
+          mocks.settingsReply === null
+            ? useFixtureSettingsStatus
+            : actual.useSandboxSettingsStatus;
+        return useSettings(row);
+      },
+    };
+  },
+);
 
 vi.mock(
   "@/hooks/sandboxes/use-sandbox-repair-guest-configuration-mutation",
@@ -1139,7 +1290,11 @@ export function mount() {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
-  return render(
+  return mountPendingSandboxClient(client);
+}
+
+export function mountPendingSandboxClient(client: QueryClient) {
+  const view = render(
     <RunnerHostContext.Provider value={RUNNER_HOST}>
       <QueryClientProvider client={client}>
         <PendingSandboxSendsDriver />
@@ -1147,6 +1302,7 @@ export function mount() {
       </QueryClientProvider>
     </RunnerHostContext.Provider>,
   );
+  return { ...view, client };
 }
 
 function billingEnvironmentAnswer(): SandboxBillingEnvironmentAnswer {
@@ -1289,6 +1445,7 @@ export function mountInChatWithBillingRuntime(chatId: string) {
       }}
       onEnvironmentListRead={null}
     >
+      <PendingSandboxSendsDriver />
       <PendingSandboxSendForChat
         epicId="epic-1"
         chatId={chatId}
@@ -1395,6 +1552,15 @@ export function installImmediateExclusiveLocks(): () => void {
   Object.defineProperty(navigator, "locks", {
     configurable: true,
     value: {
+      query: () =>
+        Promise.resolve({
+          held: [
+            {
+              name: "traycer:pending-sandbox-send:" + SEND_ID,
+              clientId: "fixture-owner",
+            },
+          ],
+        }),
       request: (
         _name: string,
         _options: LockOptions,
@@ -1471,11 +1637,18 @@ afterEach(async () => {
 
 beforeEach(() => {
   mocks.useRuntimeBinding = false;
+  claimBinding = null;
   // Every team has answered, so a row no team holds is the person's own; `null`
   // means the teams are unknown.
   mocks.authUser = createAuthenticatedUserFixture(undefined);
+  mocks.fetchAuthenticatedUser.mockClear();
+  mocks.fetchAuthenticatedUser.mockImplementation(() =>
+    Promise.resolve(mocks.authUser),
+  );
   sandboxListState.pending = false;
   sandboxListState.failed = false;
+  sandboxListState.real = false;
+  clearAccountVerifications(hostBinding.auth);
   installLegendListTestClock();
   localStorage.clear();
   environmentListAnswer.role = null;
@@ -1504,8 +1677,19 @@ beforeEach(() => {
   mocks.legacySupported = false;
   mocks.legacyMutate.mockReset();
   mocks.settingsStatus = undefined;
+  clients.clear();
+  mocks.settingsReply = null;
+  mocks.settingsRequests.length = 0;
   mocks.verbState = { isPending: false, error: null };
   mocks.listSandboxes.mockReset();
+  mocks.listSandboxes.mockImplementation(() =>
+    Promise.resolve(listAnswers(mocks.sandboxes)),
+  );
+  mocks.getSandbox.mockReset();
+  mocks.getSandbox.mockResolvedValue({
+    kind: "network-error",
+    detail: "unknown",
+  });
   mocks.findById.mockReset();
   // The task's new-agent composer and the Start Page each pin a host the
   // directory names, so "Use <host>" says whose chip the message goes back to.
@@ -1639,6 +1823,15 @@ export function queueBehindForeignHolder(): () => void {
   Object.defineProperty(navigator, "locks", {
     configurable: true,
     value: {
+      query: () =>
+        Promise.resolve({
+          held: [
+            {
+              name: "traycer:pending-sandbox-send:" + SEND_ID,
+              clientId: "fixture-owner",
+            },
+          ],
+        }),
       request: (
         _name: string,
         options: LockOptions,

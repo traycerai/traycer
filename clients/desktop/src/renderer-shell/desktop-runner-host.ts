@@ -172,6 +172,7 @@ import type {
   SandboxCatalogueFetchResult,
   SandboxCreateFetchResult,
   SandboxListFetchResult,
+  SandboxGetFetchResult,
   TraycerModelsFetchResult,
   SandboxCostsFetchResult,
   SandboxCostFetchResult,
@@ -305,6 +306,11 @@ export interface DesktopPreloadBridge {
     hostId: string,
   ): Promise<DeregisterHostFetchResult>;
   listSandboxes(bearerToken: string): Promise<SandboxListFetchResult>;
+  getSandbox(
+    bearerToken: string,
+    sandboxId: string,
+    teamId: string | null,
+  ): Promise<SandboxGetFetchResult>;
   listEnvironments(bearerToken: string): Promise<EnvironmentDirectoryResult>;
   saveAutoPolicy(
     bearerToken: string,
@@ -1411,6 +1417,14 @@ export class DesktopRunnerHost implements IRunnerHost {
     hostId: string,
   ): Promise<DeregisterHostFetchResult> {
     return this.bridge.deregisterHostFromAccount(bearerToken, hostId);
+  }
+
+  getSandbox(
+    bearerToken: string,
+    sandboxId: string,
+    teamId: string | null,
+  ): Promise<SandboxGetFetchResult> {
+    return this.bridge.getSandbox(bearerToken, sandboxId, teamId);
   }
 
   listSandboxes(bearerToken: string): Promise<SandboxListFetchResult> {

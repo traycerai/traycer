@@ -147,6 +147,10 @@ function buildFakeBridge(
       kind: "network-error" as const,
       detail: "test",
     }),
+    getSandbox: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
     listEnvironments: () => Promise.resolve({ kind: "unauthorized" as const }),
     getTeamChatAutoArchive: () =>
       Promise.resolve({ kind: "unauthorized" as const }),

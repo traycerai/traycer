@@ -26,7 +26,13 @@ export function authUserQueryOptions(auth: AuthService, enabled: boolean) {
  * cache - never the auth store, which keeps only its narrow projections.
  */
 export function useAuthUser(): UseQueryResult<AuthenticatedUser | null> {
+  return useAuthUserWhen(true);
+}
+
+export function useAuthUserWhen(
+  enabled: boolean,
+): UseQueryResult<AuthenticatedUser | null> {
   const auth = useAuthService();
   const signedIn = useAuthStore((s) => s.status === "signed-in");
-  return useQuery(authUserQueryOptions(auth, signedIn));
+  return useQuery(authUserQueryOptions(auth, enabled && signedIn));
 }

@@ -47,13 +47,17 @@ function selectSettingsOperation(mutation: Mutation): {
 }
 
 /** Settings retry was introduced in 1.1; a method name alone proves no version. */
-export function useSandboxRetryApplyingSupported(hostId: string): boolean {
+export function useSandboxRetryApplyingSupported(
+  hostId: string | null,
+): boolean {
   const version = useHostMethodSchemaVersion(hostId, REPAIR_METHOD);
   return version !== null && version.major === 1 && version.minor >= 1;
 }
 
 /** The guest-only fallback is offered only on the known 1.0 contract. */
-export function useSandboxGuestSetupRepairSupported(hostId: string): boolean {
+export function useSandboxGuestSetupRepairSupported(
+  hostId: string | null,
+): boolean {
   const version = useHostMethodSchemaVersion(hostId, REPAIR_METHOD);
   return version !== null && version.major === 1 && version.minor === 0;
 }

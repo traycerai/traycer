@@ -44,6 +44,10 @@ import {
   AUTH_ERROR_SIGN_IN_FAILED,
   AUTH_ERROR_STORE_UNAVAILABLE,
 } from "@/lib/auth/auth-service";
+import {
+  nextAccountRequestOrder,
+  readAccountOrders,
+} from "@/lib/auth/verified-account-orders";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 type FetchHandler = (
@@ -2753,6 +2757,42 @@ describe("AuthService", () => {
       expect(useAuthStore.getState().status).toBe("signed-in");
       expect(service.getCurrentSessionSnapshot().token).toBe("good-token");
       expect(service.getLastError()).toBeNull();
+    });
+
+    it("dispatches fresh verification after an invalidation and records equal verified projections", async () => {
+      const { service, host } = makeService();
+      await service.start();
+      await deviceSignIn(service, host, "good-token");
+      const teams = useAuthStore.getState().shareableTeams;
+      const older = createDeferredResponse();
+      const newer = createDeferredResponse();
+      const fetchIdentity = vi.fn<FetchHandler>();
+      fetchIdentity
+        .mockReturnValueOnce(older.promise)
+        .mockReturnValueOnce(newer.promise);
+      restoreFetch();
+      restoreFetch = installFetch(fetchIdentity);
+      const first = service.revalidateCurrentContext();
+      await vi.waitFor(() => expect(fetchIdentity).toHaveBeenCalledTimes(1));
+      const boundary = nextAccountRequestOrder();
+      const after = service.revalidateCurrentContextAfterInvalidation();
+      expect(readAccountOrders(service).pending).toHaveLength(1);
+      expect(fetchIdentity).toHaveBeenCalledTimes(1);
+      older.resolve(await okWithProfile());
+      expect((await first)?.kind).toBe("valid");
+      await vi.waitFor(() => expect(fetchIdentity).toHaveBeenCalledTimes(2));
+      const earlier = readAccountOrders(service).verdict;
+      expect(earlier?.dispatched).toBeLessThan(boundary);
+      expect(readAccountOrders(service).pending[0]).toBeGreaterThan(boundary);
+      newer.resolve(await okWithProfile());
+      expect((await after)?.kind).toBe("valid");
+      const latest = readAccountOrders(service);
+      expect(latest.verdict?.dispatched).toBeGreaterThan(boundary);
+      expect(latest.verdict?.verified).toBeGreaterThan(
+        earlier?.verified ?? boundary,
+      );
+      expect(latest.pending).toEqual([]);
+      expect(useAuthStore.getState().shareableTeams).toBe(teams);
     });
 
     it("HOLDS the local plane and surfaces SESSION_EXPIRED on rejected", async () => {

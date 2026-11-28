@@ -203,6 +203,8 @@ vi.mock("@/lib/host", () => ({
     auth: {
       createSandbox: mocks.createSandbox,
       listSandboxes: mocks.listSandboxes,
+      captureSandboxReadContext: () => () => true,
+      getSandboxReadEra: () => "staged-fixture-era",
       getSandboxCatalogue: mocks.getSandboxCatalogue,
     },
     directory: { refresh: () => Promise.resolve(), findById: mocks.findById },
@@ -1783,7 +1785,7 @@ describe("useStagedSandboxSend's send after a failed create", () => {
     ],
     ["400 shape_not_offered", refusal(400, "shape_not_offered"), true],
     ["503 provider_unavailable", refusal(503, "provider_unavailable"), true],
-    ["404 sandbox_not_found", refusal(404, "sandbox_not_found"), true],
+    ["404 sandbox_not_found", refusal(404, "sandbox_not_found"), false],
     ["502 provider_failed", refusal(502, "provider_failed"), true],
   ] as const)(
     "uses the right next create key after %s",

@@ -1,4 +1,9 @@
 import {
+  beginAccountVerification,
+  clearAccountVerifications,
+  finishAccountVerification,
+} from "@/lib/auth/verified-account-orders";
+import {
   recordSignInRequestViaHttp,
   type SignInRequestRecordAnswer,
 } from "@traycer-clients/shared/host-client/provider-sign-in-request";
@@ -94,6 +99,7 @@ import type {
   SandboxCostFetchResult,
   SandboxCreateFetchResult,
   SandboxListFetchResult,
+  SandboxGetFetchResult,
   SandboxLifecycleVerbFetchResult,
   SandboxVerbFetchResult,
   TraycerModelsFetchResult,
@@ -704,6 +710,8 @@ export interface RevokedCloudAuthorization {
   readonly revocation: "user-epoch" | null;
 }
 
+let sandboxReadEraServiceCounter = 0;
+
 /**
  * GUI-owned auth service. Drives the sign-in flow through the shell-owned
  * runner host and projects the current authenticated session into:
@@ -857,6 +865,14 @@ export class AuthService
   // newer `signIn()` that lands inside that window - the newer transition
   // always wins over the already-started finalization.
   private identityGeneration: number = 0;
+  private readonly sandboxReadEraService = ++sandboxReadEraServiceCounter;
+  private pendingSandboxSignOuts = 0;
+  private readonly identityGenerationListeners = new Set<() => void>();
+
+  private advanceIdentityGeneration(): void {
+    this.identityGeneration += 1;
+    for (const listener of this.identityGenerationListeners) listener();
+  }
   // The single in-flight sign-in attempt, or null when no attempt is live. Holds
   // the main-process device poll handle so superseding the attempt cancels it.
   // Set before the shell is asked to start the device poll; cleared by a
@@ -2332,7 +2348,8 @@ export class AuthService
     if (this.disposed) {
       return;
     }
-    this.identityGeneration += 1;
+    this.advanceIdentityGeneration();
+    clearAccountVerifications(this);
     // Explicit user intent replaces the automatic loop: a pending recovery
     // tick would only race the attempt (it stands down, but its timer would
     // fire a stale no-op). A failed attempt re-arms recovery (applyFailure);
@@ -2413,7 +2430,9 @@ export class AuthService
     // Invalidate any sign-in finalization that already passed its epoch fence
     // and is now awaiting its token save - the sign-out wins.
     const priorStatus = useAuthStore.getState().status;
-    this.identityGeneration += 1;
+    this.pendingSandboxSignOuts += 1;
+    this.advanceIdentityGeneration();
+    clearAccountVerifications(this);
     // Stop the proactive refresh timer up front so a timer firing during the
     // delete can't race a `rotate` against the credential removal; the
     // recovery loop stands down for the same reason (explicit intent settles
@@ -2433,9 +2452,12 @@ export class AuthService
     );
     // dispose() may have landed during the delete await — re-read fresh.
     if (this.isDisposed()) {
+      this.pendingSandboxSignOuts -= 1;
       return false;
     }
     if (deleteError !== null) {
+      this.pendingSandboxSignOuts -= 1;
+      for (const listener of this.identityGenerationListeners) listener();
       appLogger.warn(
         "[auth] sign-out could not delete the credentials file; staying signed in",
         { error: describeLogError(deleteError) },
@@ -2459,6 +2481,7 @@ export class AuthService
     }
     this.setLastError(null);
     this.applySignedOut("retired");
+    this.pendingSandboxSignOuts -= 1;
     // Published chat bytes do not survive leaving the account.
     //
     // The part store is shared across every viewer on the installation, which
@@ -3374,6 +3397,63 @@ export class AuthService
     return reason === null ? null : { kind: "unavailable", reason };
   }
 
+  /** A read's authority follows its signed-in context, including across a same-user replacement. */
+  captureSandboxReadContext(): () => boolean {
+    const generation = this.identityGeneration;
+    const context = this.contextProvider.current();
+    return () =>
+      this.isIdentityCurrent(generation) &&
+      this.contextProvider.current() === context;
+  }
+
+  getSandboxReadEra(): string | null {
+    return this.pendingSandboxSignOuts === 0 &&
+      this.hasVerifiedSession() &&
+      this.contextProvider.current()?.cloudAuthorized === true
+      ? `${this.sandboxReadEraService}:${this.identityGeneration}:${this.getCredentialGeneration()}`
+      : null;
+  }
+
+  subscribeSandboxReadEra(listener: () => void): () => void {
+    this.identityGenerationListeners.add(listener);
+    const disconnect = this.contextProvider.onChange(listener);
+    const stopRotation = this.contextProvider.onBearerRotated(listener);
+    const stopAuth = useAuthStore.subscribe(listener);
+    return () => {
+      this.identityGenerationListeners.delete(listener);
+      disconnect();
+      stopRotation();
+      stopAuth();
+    };
+  }
+
+  /** One access-only verdict, with no rotation or account state transition. */
+  async readSandboxTeamAccess(
+    userId: string,
+    teamId: string,
+  ): Promise<boolean | undefined> {
+    const token = this.cloudBearer();
+    const era = this.getSandboxReadEra();
+    if (token === null || era === null) return undefined;
+    const result = await this.runnerHost.validateAuthTokenIdentity(token);
+    return result.kind === "valid" &&
+      result.user.user.id === userId &&
+      this.getSandboxReadEra() === era
+      ? result.user.teamSubscriptions.some((entry) => entry.team.id === teamId)
+      : undefined;
+  }
+
+  async getSandbox(
+    sandboxId: string,
+    teamId: string | null,
+  ): Promise<SandboxGetFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.getSandbox(bearer, sandboxId, teamId);
+  }
+
   async listSandboxes(): Promise<SandboxListFetchResult> {
     const refusal = this.sandboxControlRefusal();
     if (refusal !== null) return refusal;
@@ -4098,7 +4178,10 @@ export class AuthService
     const credentialGeneration = this.getCredentialGeneration();
     // Access-only: validate the live bearer without spending. A stale bearer
     // comes back `rejected`, and the spend routes through the locked `rotate`.
-    const outcome = await this.validateToken(currentToken);
+    const outcome = await this.verifyCurrentAccount(
+      currentToken,
+      currentUserId,
+    );
     if (!this.isIdentityCurrent(generation)) {
       return null;
     }
@@ -4207,7 +4290,7 @@ export class AuthService
       "reactive",
     );
     if (result.status === "rotated") {
-      const revalidated = await this.validateToken(result.token);
+      const revalidated = await this.verifyCurrentAccount(result.token, userId);
       if (!this.isIdentityCurrent(generation)) {
         return null;
       }
@@ -5097,7 +5180,8 @@ export class AuthService
     if (this.disposed) {
       return { kind: "superseded" };
     }
-    this.identityGeneration += 1;
+    this.advanceIdentityGeneration();
+    clearAccountVerifications(this);
     this.settleSessionRecovery("interactive-attempt");
     this.setLastError(null);
     const attempt = this.beginAttempt();
@@ -5414,7 +5498,8 @@ export class AuthService
       return;
     }
     this.disposed = true;
-    this.identityGeneration += 1;
+    this.advanceIdentityGeneration();
+    clearAccountVerifications(this);
     this.refreshScheduler.stop();
     if (this.sessionRecoveryTimer !== null) {
       AuthService.cancelTimeout(this.sessionRecoveryTimer);
@@ -5521,6 +5606,35 @@ export class AuthService
     this.pendingTimeoutHandle = AuthService.scheduleTimeout(() => {
       this.handleAttemptTimeout(epoch);
     }, durationMs);
+  }
+
+  /** Capture verification before publishing any deduplicated identity projection. */
+  private async verifyCurrentAccount(
+    token: string,
+    userId: string,
+  ): Promise<ValidationOutcome> {
+    const generation = this.identityGeneration;
+    const credentialGeneration = this.getCredentialGeneration();
+    const dispatched = beginAccountVerification(this);
+    let verdict: { userId: string; teamIds: readonly string[] } | null = null;
+    try {
+      const outcome = await this.validateToken(token);
+      if (
+        outcome.kind === "valid" &&
+        outcome.user.user.id === userId &&
+        this.isIdentityCurrent(generation) &&
+        this.getCredentialGeneration() === credentialGeneration &&
+        !this.isInteractiveAttemptInFlight()
+      ) {
+        verdict = {
+          userId,
+          teamIds: outcome.user.teamSubscriptions.map((entry) => entry.team.id),
+        };
+      }
+      return outcome;
+    } finally {
+      finishAccountVerification(this, dispatched, verdict);
+    }
   }
 
   /**
@@ -5898,6 +6012,11 @@ export class AuthService
     bearer: string | null,
     profile: AuthProfile | null,
   ): void {
+    if (
+      this.currentBearer !== bearer ||
+      this.currentProfile?.userId !== profile?.userId
+    )
+      clearAccountVerifications(this);
     this.currentBearer = bearer;
     this.currentProfile = profile;
   }

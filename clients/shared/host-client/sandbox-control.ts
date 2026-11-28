@@ -1,7 +1,17 @@
-import type { HostSandboxState } from "@traycer/protocol/host/host-status";
 import {
+  hostSandboxStateSchema,
+  type HostSandboxState,
+} from "@traycer/protocol/host/host-status";
+import {
+  SANDBOX_REFUSAL_CODE_ENVIRONMENT_NOT_FOUND,
+  SANDBOX_REFUSAL_CODE_ENVIRONMENT_UNAVAILABLE,
   SANDBOX_REFUSAL_CODE_FROZEN,
   SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
+  SANDBOX_REFUSAL_CODE_NOT_FOUND,
+  SANDBOX_REFUSAL_CODE_PROVIDER_FAILED,
+  SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE,
+  SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED,
+  SANDBOX_REFUSAL_CODE_TRANSITION_CONFLICT,
   SANDBOX_REFUSAL_CODE_VERB_NOT_AVAILABLE,
   sandboxAutomationOpenResponseSchema,
   sandboxAutomationResponseSchema,
@@ -11,6 +21,7 @@ import {
   sandboxLifecycleVerbResponseSchema,
   sandboxListResponseSchema,
   sandboxRefusalBodySchema,
+  sandboxSummarySchema,
   userSandboxCostSchema,
   type SandboxAutomationOpenTarget,
   type SandboxAutomationResponse,
@@ -97,6 +108,12 @@ export type SandboxControlFailure =
       readonly currentAwakeBurnMcPerHour: number | null;
       /** A server-composed sentence for the person, shown verbatim. */
       readonly message: string | null;
+      /** The row left by a failed or refused create, when the server names it. */
+      readonly sandboxId?: string;
+      readonly sandbox?: SandboxSummary;
+      /** A pre-reservation create refusal carried unexpected row fields. */
+      readonly uncertainCreateRow?: true;
+      readonly createRefusal?: SandboxCreateRefusal;
     }
   | { readonly kind: "network-error"; readonly detail: string }
   /**
@@ -109,6 +126,14 @@ export type SandboxControlFailure =
 export type SandboxListFetchResult =
   | { readonly kind: "ok"; readonly response: SandboxListResponse }
   | SandboxControlFailure;
+
+export type SandboxGetFetchResult =
+  | { readonly kind: "ok"; readonly sandbox: SandboxSummary }
+  | Exclude<SandboxControlFailure, { kind: "refused" }>
+  | (Extract<SandboxControlFailure, { kind: "refused" }> & {
+      /** The principal that served the 404 held the team named by this request. */
+      readonly holdsTeam?: boolean;
+    });
 
 export type SandboxCatalogueFetchResult =
   | { readonly kind: "ok"; readonly catalogue: SandboxCatalogue }
@@ -135,8 +160,23 @@ export type SandboxCostFetchResult =
   | SandboxControlFailure;
 
 export type SandboxCreateFetchResult =
-  | { readonly kind: "ok"; readonly accepted: SandboxCreateAccepted }
+  | {
+      readonly kind: "ok";
+      readonly accepted: SandboxCreateAccepted;
+      readonly joined?: true;
+    }
   | SandboxControlFailure;
+
+export type SandboxCreateRefusal =
+  | { readonly kind: "environment-not-found" | "environment-unavailable" }
+  | {
+      readonly kind: "transition-conflict";
+      readonly row: {
+        readonly sandboxId: string;
+        readonly hostId: string;
+        readonly state: HostSandboxState;
+      } | null;
+    };
 
 export type SandboxAutomationFetchResult =
   | { readonly kind: "ok"; readonly automation: SandboxAutomationResponse }
@@ -215,6 +255,7 @@ interface CallInit {
   readonly method: string;
   readonly body: string | null;
   readonly timeoutMs: number;
+  readonly sandboxTeamId?: string;
 }
 
 /**
@@ -258,6 +299,8 @@ function requestHeaders(
   headers.Authorization = `Bearer ${bearerToken}`;
   headers.Accept = "application/json";
   if (init.body !== null) headers["Content-Type"] = "application/json";
+  if (init.sandboxTeamId !== undefined)
+    headers["x-traycer-sandbox-team-id"] = init.sandboxTeamId;
   return headers;
 }
 
@@ -371,6 +414,53 @@ export async function listSandboxesViaHttp(
   }
   return { kind: "ok", response: parsed.data };
 }
+
+/** Read a known row even when the sandbox list omits it. */
+export async function getSandboxViaHttp(
+  serverBaseUrl: string,
+  bearerToken: string,
+  proxyToken: string | null,
+  sandboxId: string,
+  teamId: string | null,
+): Promise<SandboxGetFetchResult> {
+  if (!SANDBOX_ID_PATTERN.test(sandboxId)) return INVALID_SANDBOX_ID;
+  const raw = await call(
+    sandboxesUrl(serverBaseUrl, `/${sandboxId}`),
+    {
+      method: "GET",
+      body: null,
+      timeoutMs: SANDBOX_CONTROL_FETCH_TIMEOUT_MS,
+      ...(teamId === null ? {} : { sandboxTeamId: teamId }),
+    },
+    bearerToken,
+    proxyToken,
+  );
+  if (raw.kind === "network-error") return raw;
+  if (raw.status !== 200) {
+    const failure = failureOf(raw.status, raw.body);
+    if (
+      teamId !== null &&
+      failure.kind === "refused" &&
+      failure.status === 404 &&
+      failure.code === SANDBOX_REFUSAL_CODE_NOT_FOUND
+    ) {
+      const verdict = sandboxGetTeamVerdictSchema.safeParse(raw.body);
+      if (verdict.success)
+        return { ...failure, holdsTeam: verdict.data.holdsTeam };
+    }
+    return failure;
+  }
+  const parsed = sandboxGetBodySchema.safeParse(raw.body);
+  if (parsed.success && parsed.data.sandbox.id === sandboxId)
+    return { kind: "ok", sandbox: parsed.data.sandbox };
+  return {
+    kind: "network-error",
+    detail: "the sandbox row did not match the contract",
+  };
+}
+
+const sandboxGetBodySchema = z.object({ sandbox: sandboxSummarySchema });
+const sandboxGetTeamVerdictSchema = z.object({ holdsTeam: z.boolean() });
 
 /** `GET /api/sandboxes/catalogue`: providers, shapes, regions, prices. */
 export async function fetchSandboxCatalogueViaHttp(
@@ -687,7 +777,33 @@ export async function createSandboxViaHttp(
     proxyToken,
   );
   if (raw.kind === "network-error") return raw;
-  if (!isSuccess(raw.status)) return failureOf(raw.status, raw.body);
+  if (!isSuccess(raw.status)) {
+    const failure = failureOf(raw.status, raw.body);
+    if (failure.kind === "refused") {
+      const createRefusal = decodeCreateRefusal(failure, raw.body);
+      if (createRefusal !== null) return { ...failure, createRefusal };
+    }
+    if (
+      failure.kind === "refused" &&
+      preReservationRefusalNamesRow(failure, raw.body)
+    )
+      return { ...failure, uncertainCreateRow: true };
+    if (
+      failure.kind !== "refused" ||
+      (failure.code !== SANDBOX_REFUSAL_CODE_PROVIDER_FAILED &&
+        !(
+          raw.status === 402 &&
+          failure.code === SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT
+        ))
+    )
+      return failure;
+    const row = createFailureRowSchema.safeParse(raw.body);
+    if (!row.success) return failure;
+    const { sandboxId, sandbox } = row.data;
+    return sandbox?.id === sandboxId
+      ? { ...failure, sandboxId, sandbox }
+      : { ...failure, sandboxId };
+  }
   const parsed = sandboxCreateAcceptedSchema.safeParse(raw.body);
   if (!parsed.success) {
     return {
@@ -695,7 +811,62 @@ export async function createSandboxViaHttp(
       detail: "the create answer did not match the contract",
     };
   }
-  return { kind: "ok", accepted: parsed.data };
+  return {
+    kind: "ok",
+    accepted: parsed.data,
+    ...(raw.status === 200 ? { joined: true } : {}),
+  };
+}
+
+const createConflictRowSchema = z.object({
+  sandboxId: z.string().regex(SANDBOX_ID_PATTERN),
+  hostId: z.string().min(1),
+  state: hostSandboxStateSchema,
+});
+
+function decodeCreateRefusal(
+  failure: Extract<SandboxControlFailure, { kind: "refused" }>,
+  body: unknown,
+): SandboxCreateRefusal | null {
+  if (
+    failure.status === 404 &&
+    failure.code === SANDBOX_REFUSAL_CODE_ENVIRONMENT_NOT_FOUND
+  )
+    return { kind: "environment-not-found" };
+  if (
+    failure.status === 503 &&
+    failure.code === SANDBOX_REFUSAL_CODE_ENVIRONMENT_UNAVAILABLE
+  )
+    return { kind: "environment-unavailable" };
+  if (
+    failure.status === 409 &&
+    failure.code === SANDBOX_REFUSAL_CODE_TRANSITION_CONFLICT
+  ) {
+    const row = createConflictRowSchema.safeParse(body);
+    return { kind: "transition-conflict", row: row.success ? row.data : null };
+  }
+  return null;
+}
+
+const createFailureRowSchema = z.object({
+  sandboxId: z.string().min(1).max(36),
+  sandbox: sandboxSummarySchema.optional().catch(undefined),
+});
+
+function preReservationRefusalNamesRow(
+  failure: Extract<SandboxControlFailure, { kind: "refused" }>,
+  body: unknown,
+): boolean {
+  const { code, status } = failure;
+  const preReservation =
+    (status === 400 && code === SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED) ||
+    (status === 503 && code === SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE);
+  return (
+    preReservation &&
+    body !== null &&
+    typeof body === "object" &&
+    (Object.hasOwn(body, "sandboxId") || Object.hasOwn(body, "sandbox"))
+  );
 }
 
 /**

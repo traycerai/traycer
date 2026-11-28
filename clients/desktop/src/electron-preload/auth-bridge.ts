@@ -63,6 +63,7 @@ import type {
   TeamEnvironmentFetchResult,
   SandboxLifecycleVerb,
   SandboxListFetchResult,
+  SandboxGetFetchResult,
   SandboxLifecycleVerbFetchResult,
   SandboxVerbFetchResult,
   SandboxVerbGesture,
@@ -199,6 +200,11 @@ export interface AuthBridgeSurface {
   ): Promise<DeregisterHostFetchResult>;
   readSoundtrackSet(): Promise<SoundtrackSetReadResult>;
   listSandboxes(bearerToken: string): Promise<SandboxListFetchResult>;
+  getSandbox(
+    bearerToken: string,
+    sandboxId: string,
+    teamId: string | null,
+  ): Promise<SandboxGetFetchResult>;
   listEnvironments(bearerToken: string): Promise<EnvironmentDirectoryResult>;
   saveAutoPolicy(
     bearerToken: string,
@@ -438,6 +444,14 @@ export function buildAuthBridge(): AuthBridgeSurface {
       ipcRenderer.invoke(
         RunnerHostInvoke.readSoundtrackSet,
       ) as Promise<SoundtrackSetReadResult>,
+
+    getSandbox: (bearerToken, sandboxId, teamId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.getSandbox,
+        bearerToken,
+        sandboxId,
+        teamId,
+      ) as Promise<SandboxGetFetchResult>,
 
     listSandboxes: (bearerToken) =>
       ipcRenderer.invoke(

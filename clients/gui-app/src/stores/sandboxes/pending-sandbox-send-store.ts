@@ -1,3 +1,4 @@
+import { claimedSandboxScope } from "@/lib/sandboxes/claimed-sandbox-evidence";
 import { collectAnnotationImageHashes } from "@/lib/browser-view/annotation/browser-annotation-record";
 import {
   decodePendingSandboxObservation,
@@ -43,6 +44,9 @@ import {
   ownsPendingSandboxSend,
   ownsPendingSandboxSendExclusively,
   pendingSandboxSendHandedHere,
+  pendingSandboxSendOwnerStamp,
+  pendingSandboxSendOwnerIsCurrent,
+  type PendingSendOwnerStamp,
 } from "@/lib/sandboxes/pending-sandbox-send-ownership";
 import {
   pendingSendState,
@@ -52,7 +56,10 @@ import {
   type PendingSendEvent,
   type PendingSendTransition,
   type PendingSendBlocker,
+  type PendingSendView,
 } from "@/lib/sandboxes/pending-sandbox-send-transition";
+
+import type { SandboxRowScope } from "@/lib/sandboxes/sandbox-row-read";
 
 /** What a pending send makes on its sandbox once the requested agent is ready. */
 export type PendingSandboxSendRequest =
@@ -105,9 +112,34 @@ export interface PendingSandboxSendDelivery {
 export interface PendingSandboxSendDispatch {
   readonly input: CreateChatRequestV14 & { readonly settings: ChatRunSettings };
   readonly delivery: PendingSandboxSendDelivery;
+  readonly sandboxScope?: SandboxRowScope;
   /** A transport failure cannot say whether the host accepted the request. */
   readonly status: "sending" | "uncertain";
   readonly blocker?: PendingSendBlocker;
+}
+
+export interface PendingDispatchPresentationData {
+  readonly line: PendingSendView["line"];
+  readonly text: string | null;
+  readonly settingsDetail: string | null;
+  readonly remedyText: string | null;
+  readonly setup: boolean;
+}
+
+export interface PendingDispatchView {
+  readonly presentation: PendingDispatchPresentationData;
+  readonly remedy:
+    | { readonly kind: "billing"; readonly href: string }
+    | { readonly kind: "details" }
+    | { readonly kind: "repair"; readonly guestSetupFailed: boolean }
+    | null;
+  readonly retryAvailable: boolean;
+  readonly stamp?: {
+    readonly owner: PendingSendOwnerStamp;
+    readonly era: string;
+    readonly boundary: number;
+    readonly scope: SandboxRowScope | null;
+  };
 }
 
 /**
@@ -152,13 +184,14 @@ export interface PendingSandboxSend {
   };
   /** Absent on legacy records; once claimed, only the original request may retry. */
   readonly dispatch?: PendingSandboxSendDispatch | null;
+  readonly dispatchView?: PendingDispatchView;
   /** An authoritative sandbox or task loss permits recovery of its pending message. */
   readonly ended?: boolean;
   /** Only the lifecycle's hold-stop effect writes this durable intent. */
   readonly stopRequested?: boolean;
   readonly stopRequestedAt?: number;
   readonly observationRequestedAt?: number;
-  /** A create response names a row; only a successful read proves it was listed. */
+  /** A create response names a row, and a current read confirms its presence. */
   readonly createdSandbox?: PendingSandboxPresence;
   /** Original-account observation survives auth clearing the transient stage. */
   readonly stopStage?: StagedSandbox;
@@ -202,7 +235,20 @@ interface PendingSandboxSendStoreState {
     id: string,
     dispatch: PendingSandboxSendDispatch,
   ) => void;
-  readonly requestDispatchRetry: (id: string) => string | null;
+  readonly publishDispatchView: (
+    id: string,
+    dispatch: PendingSandboxSendDispatch,
+    view: PendingDispatchView | null,
+    context: {
+      readonly era: string | null;
+      readonly scope: SandboxRowScope | null;
+    },
+  ) => void;
+  readonly clearDispatchView: (
+    id: string,
+    owner: PendingSendOwnerStamp,
+  ) => void;
+  readonly requestDispatchRetry: (id: string) => Promise<string | null>;
   readonly refuseDispatch: (
     id: string,
     dispatch: PendingSandboxSendDispatch,
@@ -417,7 +463,7 @@ export function pendingSandboxStageObservation(
 ): PendingSendFacts["host"] {
   if (!surfaceKey.startsWith(PENDING_SEND_SURFACE_PREFIX))
     return decodePendingSandboxObservation(
-      observation.kind === "list"
+      observation.kind === "list" || observation.kind === "by-id"
         ? null
         : { createdAt: 0, observationRequestedAt: 0 },
       host,
@@ -523,6 +569,43 @@ function storedSend(id: string): Record<string, unknown> | null {
   }
 }
 
+export function pendingSandboxSendObservationBoundary(
+  id: string,
+): number | undefined {
+  const boundary = storedSend(id)?.observationRequestedAt;
+  return typeof boundary === "number" ? boundary : undefined;
+}
+
+export function pendingSandboxDispatchViewCurrent(
+  id: string,
+  view: PendingDispatchView,
+): boolean {
+  const { sends } = usePendingSandboxSendStore.getState();
+  if (!Object.hasOwn(sends, id)) return false;
+  const send = sends[id];
+  const dispatch = send.dispatch;
+  const stamp = view.stamp;
+  if (
+    dispatch === undefined ||
+    dispatch === null ||
+    stamp === undefined ||
+    !pendingSandboxDispatchCurrent(id, dispatch)
+  )
+    return false;
+  const scope = claimedSandboxScope(
+    dispatch.sandboxScope,
+    readStagedSandbox(pendingSendSurfaceKey(id)) ?? send.stopStage ?? null,
+    dispatch.delivery.sandboxId,
+    dispatch.input.hostId,
+  );
+  const stored = storedSend(id);
+  return (
+    stored?.observationRequestedAt === stamp.boundary &&
+    JSON.stringify(stamp.scope) === JSON.stringify(scope) &&
+    JSON.stringify(stored.dispatchView) === JSON.stringify(view)
+  );
+}
+
 /** An accepted or withdrawn record can never be replaced by a late RPC outcome. */
 export function pendingSandboxDispatchCurrent(
   id: string,
@@ -538,7 +621,9 @@ export function pendingSandboxDispatchCurrent(
     return false;
   }
   return (
-    JSON.stringify(stored.dispatch.input) === JSON.stringify(dispatch.input)
+    JSON.stringify(stored.dispatch.input) === JSON.stringify(dispatch.input) &&
+    JSON.stringify(stored.dispatch.sandboxScope) ===
+      JSON.stringify(dispatch.sandboxScope)
   );
 }
 
@@ -717,8 +802,9 @@ export const usePendingSandboxSendStore =
           if (prior?.sandboxId !== sandboxId) return false;
           if (prior.rowSeen) return true;
           if (
-            observation.kind !== "list" ||
-            observation.missingSandboxId !== undefined ||
+            (observation.kind !== "by-id" &&
+              (observation.kind !== "list" ||
+                observation.missingSandboxId !== undefined)) ||
             pendingSandboxSendFacts(id, {
               ...UNKNOWN_PENDING_SEND_FACTS,
               host: "awake",
@@ -816,6 +902,7 @@ export const usePendingSandboxSendStore =
                 [id]: {
                   ...send,
                   dispatch: captured,
+                  dispatchView: undefined,
                   observationRequestedAt: boundary,
                 },
               },
@@ -861,13 +948,80 @@ export const usePendingSandboxSendStore =
             // request. A storage outage never authorizes another identity.
           }
         },
-        requestDispatchRetry: (id) => {
+        publishDispatchView: (id, dispatch, view, { era, scope }) => {
+          const { sends } = get();
+          if (!Object.hasOwn(sends, id)) return;
+          const send = sends[id];
+          const owner = pendingSandboxSendOwnerStamp(id);
+          const boundary = pendingSandboxSendObservationBoundary(id);
+          if (
+            owner === null ||
+            !pendingSandboxDispatchCurrent(id, dispatch) ||
+            !pendingSandboxSendFacts(id, UNKNOWN_PENDING_SEND_FACTS)
+              .accountActive
+          )
+            return;
+          const dispatchView =
+            view === null ||
+            era === null ||
+            boundary === undefined ||
+            boundary !== send.observationRequestedAt
+              ? undefined
+              : { ...view, stamp: { owner, era, boundary, scope } };
+          const serialized = JSON.stringify(dispatchView);
+          const durable = () => JSON.stringify(storedSend(id)?.dispatchView);
+          if (
+            serialized === JSON.stringify(send.dispatchView) &&
+            serialized === durable()
+          )
+            return;
+          try {
+            set({ sends: { ...sends, [id]: { ...send, dispatchView } } });
+          } catch {
+            // The record may already be written even if the index write failed.
+          }
+          if (durable() === serialized) return;
+          try {
+            set({ sends });
+          } catch {
+            // Restore the last published view in memory as well.
+          }
+        },
+        clearDispatchView: (id, owner) => {
+          const { sends } = get();
+          if (!Object.hasOwn(sends, id)) return;
+          const send = sends[id];
+          const view = send.dispatchView;
+          if (
+            view?.stamp?.owner.episode !== owner.episode ||
+            JSON.stringify(storedSend(id)?.dispatchView) !==
+              JSON.stringify(view)
+          )
+            return;
+          try {
+            set({
+              sends: { ...sends, [id]: { ...send, dispatchView: undefined } },
+            });
+          } catch {
+            // Without a current owner or a matching boundary a view is inert.
+          }
+        },
+        requestDispatchRetry: async (id) => {
           const { sends } = get();
           if (!Object.hasOwn(sends, id)) return null;
           const send = sends[id];
           const dispatch = send.dispatch ?? null;
+          const view = send.dispatchView;
+          const stamp = view?.stamp;
           if (
             dispatch === null ||
+            view?.retryAvailable !== true ||
+            stamp === undefined ||
+            !(await pendingSandboxSendOwnerIsCurrent(id, stamp.owner))
+          )
+            return null;
+          if (
+            !pendingSandboxDispatchViewCurrent(id, view) ||
             !pendingDecision(
               send,
               "request-dispatch-retry",

@@ -3558,7 +3558,7 @@ describe("guard: a stale operation result is ignored; a matching failure stays c
   });
 });
 
-describe("guard: a missing row is no evidence of absence for a create never seen", () => {
+describe("an explicit list omission is not settlement evidence", () => {
   type Request = Parameters<typeof decodePendingSandboxObservation>[0];
   const created = (rowSeen: boolean): Request => ({
     createdAt: 100,
@@ -3574,15 +3574,15 @@ describe("guard: a missing row is no evidence of absence for a create never seen
 
   it.each([
     ["a never-seen create's own absence", created(false), "sbx-1", "unknown"],
-    ["a seen create's absence", created(true), "sbx-1", "resting"],
-    ["another sandbox's absence", created(false), "sbx-2", "resting"],
+    ["a seen create's absence", created(true), "sbx-1", "unknown"],
+    ["another sandbox's absence", created(false), "sbx-2", "unknown"],
     [
       "an absence for a legacy record without metadata",
       { createdAt: 100 },
       "sbx-1",
-      "resting",
+      "unknown",
     ],
-    ["an absence with no request", null, "sbx-1", "resting"],
+    ["an absence with no request", null, "sbx-1", "unknown"],
   ] as const)("%s settles to %s", (_name, request, id, expected) => {
     expect(
       decodePendingSandboxObservation(request, "resting", missing(id)),

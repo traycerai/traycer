@@ -1,7 +1,9 @@
 import { useMemo } from "react";
+import type { UseQueryResult } from "@tanstack/react-query";
+import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import { sandboxCreateTeams } from "@/components/hosts/sandbox-create-model";
-import { useAuthUser } from "@/hooks/auth/use-auth-user-query";
+import { useAuthUser, useAuthUserWhen } from "@/hooks/auth/use-auth-user-query";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import { useTeamEnvironmentIds } from "@/hooks/sandboxes/use-team-environment-query";
@@ -29,8 +31,20 @@ export interface SandboxConfigurations {
  * person's teams, each team with the environment id its sandbox rows carry.
  */
 export function useSandboxConfigurations(): SandboxConfigurations {
-  const userRead = useAuthUser();
-  const user = userRead.data ?? null;
+  return useSandboxConfigurationsFor(useAuthUser(), true);
+}
+
+export function useSandboxConfigurationsWhen(
+  enabled: boolean,
+): SandboxConfigurations {
+  return useSandboxConfigurationsFor(useAuthUserWhen(enabled), enabled);
+}
+
+function useSandboxConfigurationsFor(
+  userRead: UseQueryResult<AuthenticatedUser | null>,
+  enabled: boolean,
+): SandboxConfigurations {
+  const user = enabled ? (userRead.data ?? null) : null;
   // A pending or failed read, or data kept from before a failed refetch, says nothing about the
   // teams.
   const teamsKnown = !userRead.isPending && !userRead.isError && user !== null;

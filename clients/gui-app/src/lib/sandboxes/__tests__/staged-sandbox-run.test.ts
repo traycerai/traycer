@@ -1,3 +1,5 @@
+import type { AuthenticatedUser } from "@traycer/protocol/auth";
+import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import { createPendingStageStorage } from "@/lib/sandboxes/pending-stage-storage";
 import { persistKey, STORE_KEYS } from "@/lib/persist/keys";
 import { budgetCatalogue } from "./sandbox-catalogue-fixture";
@@ -14,12 +16,15 @@ import { environmentStatusResponseSchemaV11 } from "@traycer/protocol/host/envir
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import type {
   SandboxCatalogueFetchResult,
+  SandboxGetFetchResult,
   SandboxListFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
   SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
+  SANDBOX_REFUSAL_CODE_NOT_FOUND,
   SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE,
   SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED,
+  SANDBOX_REFUSAL_CODE_TRANSITION_CONFLICT,
 } from "@traycer/protocol/host/sandbox-control";
 import { SANDBOX_RATE_LIMIT_FIXTURE } from "@traycer/protocol/host/__tests__/sandbox-rate-limit-fixture";
 import {
@@ -38,6 +43,7 @@ import {
   useStagedSandboxStore,
   type StagedSandboxTarget,
 } from "@/stores/composer/staged-sandbox-store";
+import { knownSandboxRowQueryOptions } from "@/lib/sandboxes/sandbox-row-read";
 import { sandboxListQueryOptions } from "@/hooks/sandboxes/use-sandbox-list-query";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { refusal } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
@@ -214,10 +220,8 @@ describe("runStagedSandbox creating", () => {
     useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
     const { auth, deps } = harness(
       {
-        createSandbox: () => ({
-          kind: "network-error",
-          detail: "the request never completed",
-        }),
+        createSandbox: () =>
+          refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT),
       },
       true,
     );
@@ -231,6 +235,78 @@ describe("runStagedSandbox creating", () => {
     );
     expect(second).toBe(first);
     expect(third).not.toBe(first);
+  });
+
+  it("retries an ambiguous sandbox_not_found 404 with the same create key", async () => {
+    useStagedSandboxStore.getState().stage(surfaceKey, TEAM_NEW);
+    let attempts = 0;
+    const { auth, deps } = harness(
+      {
+        createSandbox: () => {
+          attempts += 1;
+          return attempts === 1
+            ? refusal(404, SANDBOX_REFUSAL_CODE_NOT_FOUND)
+            : created;
+        },
+      },
+      true,
+    );
+
+    await run(false, deps);
+    expect(stageOf().failure).toMatchObject({
+      kind: "refused",
+      freshCreateKey: false,
+    });
+    await run(true, deps);
+
+    expect(auth.requests).toHaveLength(2);
+    expect(auth.requests[1].clientRequestId).toBe(
+      auth.requests[0].clientRequestId,
+    );
+    expect(stageOf()).toMatchObject({
+      phase: "handoff",
+      createdSandboxId: SANDBOX_ID,
+      createdHostId: NEW_HOST_ID,
+    });
+  });
+
+  it("Retry uses the sandbox named by a transition-conflict row without creating again", async () => {
+    useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+    const conflict = {
+      sandboxId: SANDBOX_ID,
+      hostId: NEW_HOST_ID,
+      state: "awake" as const,
+    };
+    const { auth, deps } = harness(
+      {
+        createSandbox: () => ({
+          ...refusal(409, SANDBOX_REFUSAL_CODE_TRANSITION_CONFLICT),
+          createRefusal: { kind: "transition-conflict", row: conflict },
+        }),
+        lists: [listOf(row({ state: "awake", guestConfigured: true }))],
+      },
+      true,
+    );
+
+    await run(false, deps);
+
+    expect(stageOf()).toMatchObject({
+      createdSandboxId: conflict.sandboxId,
+      createdHostId: conflict.hostId,
+      failure: {
+        freshCreateKey: false,
+        conflictingSandbox: conflict,
+      },
+    });
+    await run(false, deps);
+
+    expect(auth.requests).toHaveLength(1);
+    expect(stageOf()).toMatchObject({
+      phase: "handoff",
+      createdSandboxId: conflict.sandboxId,
+      createdHostId: conflict.hostId,
+      failure: null,
+    });
   });
 
   it("reports the create's own queued rateLimit onto the stage while still waiting, and a fresh poll with none clears it", async () => {
@@ -364,15 +440,233 @@ describe("runStagedSandbox on a created sandbox the list has not shown yet", () 
     response: { sandboxes: [] },
   };
 
-  it("keeps the old reading for a stage that is no pending send's: no record of an accepted create, so a missing row is gone", async () => {
+  beforeEach(() => {
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "user-1", userName: "U", email: "u@example.com" },
+        { userId: "user-1", username: "U" },
+        [],
+      );
+    onTestFinished(() => useAuthStore.getState().setSignedOut());
     useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
-    const { auth, deps } = harness({ lists: [missing, missing, awake] }, true);
+  });
 
-    await run(false, deps);
+  it("settles a missing created row only after an exact GET proves it not found", async () => {
+    const { auth, deps } = harness(
+      {
+        lists: [missing, missing, awake],
+        sandboxById: refusal(404, "sandbox_not_found"),
+      },
+      true,
+    );
+
+    await run(false, { ...deps, userId: "user-1" });
 
     expect(auth.listReads).toBe(1);
     expect(stageOf().failure).toMatchObject({ kind: "failed", code: "gone" });
   });
+
+  it.each(["exact", "list"] as const)(
+    "settles a witnessed Team absence over an overlapping awake list, %s first",
+    async (first) => {
+      useStagedSandboxStore.getState().stage(surfaceKey, TEAM_NEW);
+      const { auth, deps } = harness({ lists: [missing] }, true);
+      Object.defineProperty(auth, "toJSON", { value: () => "scripted-auth" });
+      const exact = Promise.withResolvers<SandboxGetFetchResult>();
+      const exactStarted = Promise.withResolvers<void>();
+      vi.spyOn(auth, "getSandbox").mockImplementationOnce(() => {
+        exactStarted.resolve();
+        return exact.promise;
+      });
+      const running = run(false, { ...deps, userId: "user-1" });
+      await exactStarted.promise;
+      const list = Promise.withResolvers<SandboxListFetchResult>();
+      vi.spyOn(auth, "listSandboxes").mockReturnValueOnce(list.promise);
+      const reading = deps.queryClient.fetchQuery(
+        sandboxListQueryOptions(auth, "user-1", true),
+      );
+      const held = {
+        ...refusal(404, SANDBOX_REFUSAL_CODE_NOT_FOUND),
+        holdsTeam: true,
+      } as const;
+      if (first === "exact") {
+        exact.resolve(held);
+        await exact.promise;
+      } else {
+        list.resolve(awake);
+        await reading;
+      }
+      expect(stageOf().phase).toBe("creating");
+      expect(stageOf().failure).toBeNull();
+      exact.resolve(held);
+      list.resolve(awake);
+      await running;
+      expect(stageOf().failure).toMatchObject({ kind: "failed", code: "gone" });
+    },
+  );
+
+  it.each(["fresh list", "isolated exact"] as const)(
+    "can settle from its own %s while an older setup exact read is outstanding",
+    async (source) => {
+      const store = useStagedSandboxStore.getState();
+      store.begin(surfaceKey, false, 1_000_000, false);
+      store.report(surfaceKey, {
+        createdSandboxId: SANDBOX_ID,
+        createdHostId: NEW_HOST_ID,
+      });
+      const current = row({ state: "awake", guestConfigured: true });
+      const { auth, deps } = harness(
+        { lists: [source === "fresh list" ? awake : missing] },
+        true,
+      );
+      Object.defineProperty(auth, "toJSON", { value: () => "scripted-auth" });
+      const setupGet = Promise.withResolvers<SandboxGetFetchResult>();
+      const stagedGet = Promise.withResolvers<SandboxGetFetchResult>();
+      const stagedStarted = Promise.withResolvers<void>();
+      const get = vi
+        .spyOn(auth, "getSandbox")
+        .mockReturnValueOnce(setupGet.promise)
+        .mockImplementationOnce(() => {
+          stagedStarted.resolve();
+          return stagedGet.promise;
+        });
+      const setup = deps.queryClient.fetchQuery(
+        knownSandboxRowQueryOptions({
+          auth,
+          userId: "user-1",
+          sandboxId: SANDBOX_ID,
+          hostId: NEW_HOST_ID,
+          sendId: undefined,
+          stageId: stageOf().clientRequestId,
+          observationRequestedAt: undefined,
+          stopRequestedAt: undefined,
+          omitted: true,
+          pollWithoutRow: true,
+          teams: null,
+          canRead: true,
+          scope: { kind: "personal" },
+        }),
+      );
+      expect(get).toHaveBeenCalledTimes(1);
+
+      const running = run(false, { ...deps, userId: "user-1" });
+      if (source === "isolated exact") {
+        await stagedStarted.promise;
+        setupGet.resolve(refusal(404, SANDBOX_REFUSAL_CODE_NOT_FOUND));
+        await setup;
+        expect(stageOf().phase).toBe("creating");
+        stagedGet.resolve({ kind: "ok", sandbox: current });
+      }
+      await running;
+      expect(stageOf()).toMatchObject({ phase: "handoff", failure: null });
+      expect(get).toHaveBeenCalledTimes(source === "isolated exact" ? 2 : 1);
+      setupGet.resolve(refusal(404, SANDBOX_REFUSAL_CODE_NOT_FOUND));
+      await expect(setup).resolves.toMatchObject({ row: null });
+    },
+  );
+
+  it("verifies a legacy team 404 and fences a list dispatched before the loss was verified", async () => {
+    useStagedSandboxStore.getState().stage(surfaceKey, TEAM_NEW);
+    const { auth, deps, clock } = harness(
+      {
+        lists: [missing, awake],
+        sandboxById: refusal(404, "sandbox_not_found"),
+      },
+      true,
+    );
+    Object.defineProperty(auth, "toJSON", { value: () => "scripted-auth" });
+    const verdict = Promise.withResolvers<AuthenticatedUser>();
+    const verifying = Promise.withResolvers<void>();
+    vi.spyOn(auth, "fetchAuthenticatedUser").mockImplementation(() => {
+      verifying.resolve();
+      return verdict.promise;
+    });
+    const running = run(false, {
+      ...deps,
+      userId: "user-1",
+      sleep: () => {
+        clock.now += STAGED_CREATE_BUDGET_MS;
+        return Promise.resolve();
+      },
+    });
+    await verifying.promise;
+    await deps.queryClient.fetchQuery(
+      sandboxListQueryOptions(auth, "user-1", true),
+    );
+    const user = createAuthenticatedUserFixture(undefined);
+    verdict.resolve({ ...user, user: { ...user.user, id: "user-1" } });
+    await running;
+    expect(stageOf().failure).toMatchObject({ kind: "timed-out" });
+    expect(useSurfaceHostSelectionStore.getState().selections).toEqual({});
+  });
+
+  it("ignores a positive list request already in flight when the wait begins", async () => {
+    const { auth, deps } = harness(
+      { sandboxById: refusal(404, "sandbox_not_found") },
+      true,
+    );
+    Object.defineProperty(auth, "toJSON", { value: () => "scripted-auth" });
+    const list = sandboxListQueryOptions(auth, "user-1", true);
+    const earlierList = Promise.withResolvers<SandboxListFetchResult>();
+    vi.spyOn(auth, "listSandboxes").mockReturnValueOnce(earlierList.promise);
+    void deps.queryClient.prefetchQuery(list);
+
+    const fetchQuery = deps.queryClient.fetchQuery.bind(deps.queryClient);
+    vi.spyOn(deps.queryClient, "fetchQuery").mockImplementation((options) => {
+      const answer = fetchQuery(options);
+      if (options.queryKey[2] === "sandboxes") earlierList.resolve(awake);
+      return answer;
+    });
+
+    await run(false, { ...deps, userId: "user-1" });
+
+    expect(stageOf().failure).toMatchObject({ kind: "failed", code: "gone" });
+  });
+
+  it.each([false, true])(
+    "requires a new positive list read when both current reads fail (refreshed: %s)",
+    async (refreshed) => {
+      const unavailable = { kind: "network-error", detail: "offline" } as const;
+      const { auth, clock, deps } = harness(
+        { lists: [awake, unavailable, awake] },
+        true,
+      );
+      // Keep the same query key as the scripted reader records its calls.
+      Object.defineProperty(auth, "toJSON", { value: () => "scripted-auth" });
+      // Both list reads can start in the same millisecond.
+      const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+      onTestFinished(() => now.mockRestore());
+      const list = sandboxListQueryOptions(auth, "user-1", true);
+      await deps.queryClient.fetchQuery(list);
+
+      const exact = Promise.withResolvers<SandboxGetFetchResult>();
+      const exactStarted = Promise.withResolvers<void>();
+      vi.spyOn(auth, "getSandbox").mockImplementationOnce(() => {
+        exactStarted.resolve();
+        return exact.promise;
+      });
+      const running = run(false, {
+        ...deps,
+        userId: "user-1",
+        sleep: () => {
+          clock.now += STAGED_CREATE_BUDGET_MS;
+          return Promise.resolve();
+        },
+      });
+      await exactStarted.promise;
+      if (refreshed) await deps.queryClient.fetchQuery(list);
+      exact.resolve(unavailable);
+      await running;
+
+      if (refreshed) {
+        expect(stageOf()).toMatchObject({ phase: "handoff", failure: null });
+      } else {
+        expect(stageOf().failure).toMatchObject({ kind: "timed-out" });
+        expect(useSurfaceHostSelectionStore.getState().selections).toEqual({});
+      }
+    },
+  );
 });
 
 describe("runStagedSandbox refusals", () => {
@@ -1390,7 +1684,7 @@ describe("runStagedSandbox for a pending send that holds a durable Stop", () => 
     expect(stageOf().failure).toBeNull();
   });
 
-  it("calls the sandbox gone when a fresh read misses a row an earlier read had seen, with rowSeen kept true", async () => {
+  it("calls the sandbox gone when the exact row read returns not-found, with rowSeen kept true", async () => {
     await pendingOwnerWith(false);
     useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
     const { deps } = harness(
@@ -1399,9 +1693,11 @@ describe("runStagedSandbox for a pending send that holds a durable Stop", () => 
           listOf(row({ state: "creating" })),
           { kind: "ok", response: { sandboxes: [] } },
         ],
+        sandboxById: refusal(404, "sandbox_not_found"),
       },
       true,
     );
+    const exactRead = vi.spyOn(deps.auth, "getSandbox");
 
     // Each read is sent strictly after the one before and the request boundary.
     const request = usePendingSandboxSendStore.getState().sends[SEND];
@@ -1414,8 +1710,9 @@ describe("runStagedSandbox for a pending send that holds a durable Stop", () => 
       .mockImplementation(() => (clock += 1_000));
     onTestFinished(() => now.mockRestore());
 
-    await run(false, deps);
+    await run(false, { ...deps, userId: "user-1" });
 
+    expect(exactRead).toHaveBeenCalledWith(SANDBOX_ID, null);
     expect(stageOf().failure).toMatchObject({ kind: "failed", code: "gone" });
     expect(
       usePendingSandboxSendStore.getState().sends[SEND]?.createdSandbox,
@@ -1547,7 +1844,7 @@ describe("runStagedSandbox for a pending send that holds a durable Stop", () => 
 });
 
 describe("settleVerdict", () => {
-  it("fails a row the list no longer holds", () => {
+  it("fails when exact absence is established", () => {
     expect(settleVerdict(null)).toEqual({
       kind: "failure",
       failure: { kind: "failed", code: "gone", step: "booting" },

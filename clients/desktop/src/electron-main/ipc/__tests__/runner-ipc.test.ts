@@ -61,6 +61,7 @@ import type {
   fetchSandboxCostsViaHttp,
   fetchSandboxCostViaHttp,
   getSandboxAutomationViaHttp,
+  getSandboxViaHttp,
   keepSandboxViaHttp,
   listSandboxesViaHttp,
   openSandboxAutomationViaHttp,
@@ -140,6 +141,9 @@ vi.mock("../../auth/iap-proxy-token", () => ({
 const NETWORK_ERROR = { kind: "network-error", detail: "unscripted" } as const;
 const listSandboxesViaHttpMock = vi.hoisted(() =>
   vi.fn<typeof listSandboxesViaHttp>(async () => NETWORK_ERROR),
+);
+const getSandboxViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof getSandboxViaHttp>(async () => NETWORK_ERROR),
 );
 const fetchSandboxCostsViaHttpMock = vi.hoisted(() =>
   vi.fn<typeof fetchSandboxCostsViaHttp>(async () => NETWORK_ERROR),
@@ -261,6 +265,7 @@ vi.mock(
       typeof import("@traycer-clients/shared/host-client/sandbox-control")
     >()),
     listSandboxesViaHttp: listSandboxesViaHttpMock,
+    getSandboxViaHttp: getSandboxViaHttpMock,
     fetchSandboxCostsViaHttp: fetchSandboxCostsViaHttpMock,
     fetchSandboxCostViaHttp: fetchSandboxCostViaHttpMock,
     fetchSandboxCatalogueViaHttp: fetchSandboxCatalogueViaHttpMock,
@@ -948,6 +953,7 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.listRegisteredHosts,
           RunnerHostInvoke.updateHostVersionPolicy,
           // The sandbox control plane, for traycer-server's CORS reason.
+          RunnerHostInvoke.getSandbox,
           RunnerHostInvoke.listSandboxes,
           RunnerHostInvoke.listEnvironments,
           RunnerHostInvoke.saveAutoPolicy,
@@ -1571,6 +1577,11 @@ describe("RunnerIpcBridge", () => {
     };
     const calls: ReadonlyArray<readonly [string, Mock, readonly unknown[]]> = [
       [RunnerHostInvoke.listSandboxes, listSandboxesViaHttpMock, []],
+      [
+        RunnerHostInvoke.getSandbox,
+        getSandboxViaHttpMock,
+        ["sbx_1", "team-acme"],
+      ],
       [RunnerHostInvoke.getSandboxCosts, fetchSandboxCostsViaHttpMock, []],
       [RunnerHostInvoke.getSandboxCost, fetchSandboxCostViaHttpMock, ["sbx_1"]],
       [
@@ -1656,6 +1667,13 @@ describe("RunnerIpcBridge", () => {
         IAP_PROXY_TOKEN,
       ]);
     }
+    expect(getSandboxViaHttpMock).toHaveBeenCalledWith(
+      config.serverBaseUrl,
+      "bearer-1",
+      IAP_PROXY_TOKEN,
+      "sbx_1",
+      "team-acme",
+    );
     bridge.dispose();
   });
 

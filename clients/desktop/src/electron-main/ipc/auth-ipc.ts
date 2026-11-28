@@ -59,6 +59,7 @@ import {
   getSandboxAutomationViaHttp,
   keepSandboxViaHttp,
   listSandboxesViaHttp,
+  getSandboxViaHttp,
   openSandboxAutomationViaHttp,
   patchSandboxViaHttp,
   runSandboxVerbViaHttp,
@@ -510,6 +511,27 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
     now: Date.now,
     warn: (message) => log.warn(message),
   });
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.getSandbox,
+    async (
+      _event,
+      bearerToken: unknown,
+      sandboxId: unknown,
+      teamId: unknown,
+    ) => {
+      assertString(bearerToken, "getSandbox.bearerToken");
+      assertString(sandboxId, "getSandbox.sandboxId");
+      assertNullableString(teamId, "getSandbox.teamId");
+      return getSandboxViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+        sandboxId,
+        teamId,
+      );
+    },
+  );
 
   bridge.handleInvoke(
     RunnerHostInvoke.listSandboxes,
