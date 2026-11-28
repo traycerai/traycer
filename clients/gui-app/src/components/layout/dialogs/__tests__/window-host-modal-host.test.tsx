@@ -98,6 +98,7 @@ import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 import { setMobileApp } from "@/lib/mobile-app";
 import { onHostDoorRetry } from "@/lib/host/host-door-retry";
 import { appStreamDoorObserver } from "@/lib/host/host-door-observer";
+import type { HostDoorStateKind } from "@traycer-clients/shared/host-transport/host-door-state";
 import { appLogger } from "@/lib/logger";
 import { HostRuntimeContext } from "@/lib/host/runtime";
 import { MINIMUM_HOST_VERSION } from "@traycer-clients/shared/host-client/minimum-host-version";
@@ -912,7 +913,178 @@ describe("<WindowHostModalHost />", () => {
     };
   }
 
-  const NOBODY_SIGNED_IN_TITLE = "Nobody is signed in on this computer";
+  interface RemoteDoorCase {
+    readonly doorReason: FatalErrorDetails["doorReason"];
+    readonly code: FatalErrorDetails["code"];
+    readonly state: HostDoorStateKind;
+    readonly coverTitle: string;
+    readonly coverLine: string;
+  }
+
+  const NOBODY_SIGNED_IN_CASE = {
+    doorReason: "not_provisioned",
+    code: "UNAUTHORIZED",
+    state: "nobody-signed-in",
+    coverTitle: "Nobody is signed in on this computer",
+    coverLine: "Sign in on it to use it from here.",
+  } as const satisfies RemoteDoorCase;
+
+  function remoteDoorRefusal(doorCase: RemoteDoorCase): FatalErrorDetails {
+    return {
+      code: doorCase.code,
+      reason: NOT_PROVISIONED_HOST_SENTENCE,
+      retryable: false,
+      doorReason: doorCase.doorReason,
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    };
+  }
+
+  /**
+   * The window targets one remote computer and a tile's stream dials it.
+   * `openRefusals` answer that computer's first opens, in order.
+   */
+  async function startRemoteTileStream(
+    openRefusals: readonly FatalErrorDetails[],
+  ) {
+    const hostId = REMOTE_HOST_ID;
+    const peer = new RemoteMuxTestPeer();
+    const entry: RemoteHostDirectoryEntry = {
+      ...remoteHostEntry(MINIMUM_HOST_VERSION, "current"),
+      publicKey: peer.hostPublicKey,
+      websocketUrl: "wss://relay.test/attach",
+    };
+    const fixture = await createModalHostRuntimeFixture(entry, "normal");
+    fixture.runtime.hostClient.setRequestContext(
+      fixture.auth.getRequestContextProvider().current(),
+    );
+    const { hostTokens } = fixture.runnerHost;
+    await hostTokens.adopt(
+      "user-1",
+      hostId,
+      { token: "host-only-token", expiresAtMs: Date.now() + 3_600_000 },
+      hostTokens.era("user-1"),
+      () => true,
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              grant: "relay-pass",
+              role: "client",
+              expires_in: 300,
+              session_grant: "relay-session-grant",
+              session_grant_expires_in: 300,
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        ),
+      ),
+    );
+    const dialed = milestones();
+    const dialedAt: number[] = [];
+    remoteSocketFactoryHarness.delegate = {
+      create: (url, priority) => {
+        dialedAt.push(Date.now());
+        dialed.reach();
+        return peer.factory.create(url, priority);
+      },
+    };
+    const signInRecovery = vi.fn(() => Promise.resolve("rotated" as const));
+    const log: StreamOwnerLog = {
+      builtAt: [],
+      closedAt: [],
+      closeReasons: [],
+      opened: milestones(),
+      closed: milestones(),
+    };
+    const ended = new AbortController();
+    onTestFinished(() => {
+      ended.abort();
+      cleanup();
+      resetHostStreamClientCacheForTest();
+      retireAllRemoteSessions();
+      clearHostDoorState(hostId);
+      vi.useRealTimers();
+    });
+    // `setImmediate` stays real: `reachedOnThisInstant` takes its turns on it.
+    vi.useFakeTimers({
+      toFake: [
+        "setTimeout",
+        "clearTimeout",
+        "setInterval",
+        "clearInterval",
+        "Date",
+      ],
+    });
+
+    peer.refuseNextOpens(openRefusals);
+    applySnapshot({ targetHostId: hostId });
+    renderHostWithRuntime(
+      fixture,
+      {
+        ...EMPTY_PRESENTATION,
+        targetKind: "remote",
+        canManageHost: true,
+        provisioningError: new Error("install failed"),
+      },
+      false,
+      GATE_OPEN,
+    );
+    render(
+      <RunnerHostProvider runnerHost={fixture.runnerHost}>
+        <HostRuntimeContext.Provider value={fixture.binding}>
+          <StreamOwner
+            target={entry}
+            auth={{ revalidateForReconnect: signInRecovery }}
+            log={log}
+          />
+        </HostRuntimeContext.Provider>
+      </RunnerHostProvider>,
+    );
+    const surface = (): HTMLElement => screen.getByTestId("window-host-modal");
+    const expectRefusedCover = (doorCase: RemoteDoorCase): void => {
+      expect(hostDoorStateFor(hostId)?.kind).toBe(doorCase.state);
+      expect(
+        within(surface()).getByTestId("window-host-modal-title").textContent,
+      ).toBe(doorCase.coverTitle);
+      expect(within(surface()).getByText(doorCase.coverLine)).toBeTruthy();
+      expect(document.body.textContent).not.toContain("traycer login");
+    };
+
+    const reached = (event: Promise<unknown>): Promise<void> =>
+      reachedOnThisInstant(event, ended.signal);
+
+    return {
+      hostId,
+      peer,
+      dialed,
+      dialedAt,
+      signInRecovery,
+      log,
+      reached,
+      surface,
+      expectRefusedCover,
+    };
+  }
+
+  it("records nobody-signed-in from a refused first open alone and draws its cover", async () => {
+    const { peer, signInRecovery, log, reached, surface, expectRefusedCover } =
+      await startRemoteTileStream([remoteDoorRefusal(NOBODY_SIGNED_IN_CASE)]);
+
+    await reached(log.closed.nth(1));
+
+    // The computer has answered one open, with the refusal, and admitted none.
+    expect(peer.openCount).toBe(1);
+    expect(log.opened.count()).toBe(0);
+    expectRefusedCover(NOBODY_SIGNED_IN_CASE);
+    // No Retry, though this presentation has one to offer.
+    expect(buttonsOf(surface())).toEqual(["Open settings"]);
+    expect(signInRecovery).not.toHaveBeenCalled();
+    expect(peer.errors).toEqual([]);
+  });
 
   /*
    * The same dials, at the same pace, whichever reason ends them: the host
@@ -920,13 +1092,7 @@ describe("<WindowHostModalHost />", () => {
    * opens, then admits one. Nobody presses anything.
    */
   it.each([
-    {
-      doorReason: "not_provisioned",
-      code: "UNAUTHORIZED",
-      state: "nobody-signed-in",
-      coverTitle: NOBODY_SIGNED_IN_TITLE,
-      coverLine: "Sign in on it to use it from here.",
-    },
+    NOBODY_SIGNED_IN_CASE,
     {
       doorReason: "host_claimed",
       code: "UNAUTHORIZED",
@@ -946,131 +1112,29 @@ describe("<WindowHostModalHost />", () => {
   ] as const)(
     "rebuilds a remote stream ended by $doorReason at once, then after 1s, 2s and 4s, and drops the state when an open is admitted",
     async (testCase) => {
-      const refusal: FatalErrorDetails = {
-        code: testCase.code,
-        reason: NOT_PROVISIONED_HOST_SENTENCE,
-        retryable: false,
-        doorReason: testCase.doorReason,
-        incompatibleMethods: null,
-        upgradeGuidance: null,
-      };
-      const hostId = REMOTE_HOST_ID;
-      const peer = new RemoteMuxTestPeer();
-      const entry: RemoteHostDirectoryEntry = {
-        ...remoteHostEntry(MINIMUM_HOST_VERSION, "current"),
-        publicKey: peer.hostPublicKey,
-        websocketUrl: "wss://relay.test/attach",
-      };
-      const fixture = await createModalHostRuntimeFixture(entry, "normal");
-      fixture.runtime.hostClient.setRequestContext(
-        fixture.auth.getRequestContextProvider().current(),
-      );
-      const { hostTokens } = fixture.runnerHost;
-      await hostTokens.adopt(
-        "user-1",
+      const refusal = remoteDoorRefusal(testCase);
+      const {
         hostId,
-        { token: "host-only-token", expiresAtMs: Date.now() + 3_600_000 },
-        hostTokens.era("user-1"),
-        () => true,
-      );
-      vi.stubGlobal(
-        "fetch",
-        vi.fn<typeof fetch>(() =>
-          Promise.resolve(
-            new Response(
-              JSON.stringify({
-                grant: "relay-pass",
-                role: "client",
-                expires_in: 300,
-                session_grant: "relay-session-grant",
-                session_grant_expires_in: 300,
-              }),
-              { status: 200, headers: { "Content-Type": "application/json" } },
-            ),
-          ),
-        ),
-      );
-      const dialed = milestones();
-      const dialedAt: number[] = [];
-      remoteSocketFactoryHarness.delegate = {
-        create: (url, priority) => {
-          dialedAt.push(Date.now());
-          dialed.reach();
-          return peer.factory.create(url, priority);
-        },
-      };
-      const signInRecovery = vi.fn(() => Promise.resolve("rotated" as const));
-      const log: StreamOwnerLog = {
-        builtAt: [],
-        closedAt: [],
-        closeReasons: [],
-        opened: milestones(),
-        closed: milestones(),
-      };
-      const ended = new AbortController();
-      onTestFinished(() => {
-        ended.abort();
-        cleanup();
-        resetHostStreamClientCacheForTest();
-        retireAllRemoteSessions();
-        clearHostDoorState(hostId);
-        vi.useRealTimers();
-      });
-      // `setImmediate` stays real: `reachedOnThisInstant` takes its turns on it.
-      vi.useFakeTimers({
-        toFake: [
-          "setTimeout",
-          "clearTimeout",
-          "setInterval",
-          "clearInterval",
-          "Date",
-        ],
-      });
-
-      applySnapshot({ targetHostId: hostId });
-      renderHostWithRuntime(
-        fixture,
-        {
-          ...EMPTY_PRESENTATION,
-          targetKind: "remote",
-          canManageHost: true,
-          provisioningError: new Error("install failed"),
-        },
-        false,
-        GATE_OPEN,
-      );
-      render(
-        <RunnerHostProvider runnerHost={fixture.runnerHost}>
-          <HostRuntimeContext.Provider value={fixture.binding}>
-            <StreamOwner
-              target={entry}
-              auth={{ revalidateForReconnect: signInRecovery }}
-              log={log}
-            />
-          </HostRuntimeContext.Provider>
-        </RunnerHostProvider>,
-      );
-      const surface = (): HTMLElement =>
-        screen.getByTestId("window-host-modal");
-      const expectRefusedCover = (): void => {
-        expect(hostDoorStateFor(hostId)?.kind).toBe(testCase.state);
-        expect(
-          within(surface()).getByTestId("window-host-modal-title").textContent,
-        ).toBe(testCase.coverTitle);
-        expect(within(surface()).getByText(testCase.coverLine)).toBeTruthy();
-        expect(document.body.textContent).not.toContain("traycer login");
-      };
-
-      const reached = (event: Promise<unknown>): Promise<void> =>
-        reachedOnThisInstant(event, ended.signal);
+        peer,
+        dialed,
+        dialedAt,
+        signInRecovery,
+        log,
+        reached,
+        surface,
+        expectRefusedCover,
+      } = await startRemoteTileStream([]);
 
       await reached(log.opened.nth(1));
       expect(hostDoorStateFor(hostId)).toBeNull();
+      const titleBeforeRefusal = within(surface()).getByTestId(
+        "window-host-modal-title",
+      ).textContent;
 
       peer.refuseNextOpens([refusal, refusal, refusal]);
       await peer.sendSessionFatal(refusal);
       await reached(log.closed.nth(1));
-      expectRefusedCover();
+      expectRefusedCover(testCase);
       if (testCase.state === "nobody-signed-in") {
         // No Retry, though this presentation has one to offer.
         expect(buttonsOf(surface())).toEqual(["Open settings"]);
@@ -1093,13 +1157,16 @@ describe("<WindowHostModalHost />", () => {
         await reached(dialed.nth(rebuilds + 1));
         if (rebuilds < delaysMs.length) {
           await reached(log.closed.nth(rebuilds + 1));
-          expectRefusedCover();
+          expectRefusedCover(testCase);
         }
       }
       await reached(log.opened.nth(2));
 
       expect(hostDoorStateFor(hostId)).toBeNull();
-      expect(screen.queryByText(NOBODY_SIGNED_IN_TITLE)).toBeNull();
+      // For host_claimed the title alone cannot tell cleared from not cleared: the store assertion above does.
+      expect(
+        within(surface()).getByTestId("window-host-modal-title").textContent,
+      ).toBe(titleBeforeRefusal);
       const waitedSinceClose = (instants: readonly number[]): number[] =>
         instants.slice(1).map((at, index) => at - log.closedAt[index]);
       expect(waitedSinceClose(log.builtAt)).toEqual(delaysMs);

@@ -346,7 +346,8 @@ describe("a unary call's reports to the app's door", () => {
     );
     expect(hostDoorStateFor(hostId)).toBeNull();
 
-    // The same messenger's door, so the empty store above is not a silent one.
+    // Another messenger built the same way: its door records this refusal, so
+    // the empty store above is the local filter's decision.
     const second = begin(personal(hostId), tokens, null);
     expect(await answerDial(1, membershipRemovedRefusal())).toBe(HOST_TOKEN);
     expect(await second.call).toMatchObject({ kind: "rejected" });
