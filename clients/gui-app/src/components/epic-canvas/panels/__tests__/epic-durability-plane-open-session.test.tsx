@@ -1323,11 +1323,10 @@ describe("open-session durability status in the connection pill", () => {
         STALE_AGENT_MESSAGE,
       );
 
+      vi.useRealTimers();
       fireEvent.focus(pill());
-      advanceClock(500);
-      expect(screen.getByRole("tooltip").textContent).toContain(
-        STALE_AGENT_MESSAGE,
-      );
+      const tooltip = await screen.findByRole("tooltip");
+      expect(tooltip.textContent).toContain(STALE_AGENT_MESSAGE);
     } finally {
       control.handle.dispose();
       artifactSync.handle.dispose();

@@ -498,7 +498,24 @@ interface PillSignals {
 interface PillCandidate {
   readonly source: PillSource;
   readonly indicator: PillIndicator;
-  readonly reportOnly?: boolean;
+}
+
+function outranksIndicator(
+  candidate: PillCandidate,
+  selected: PillCandidate,
+): boolean {
+  const candidateRank = SEVERITY_RANK[candidate.indicator.severity];
+  const selectedRank = SEVERITY_RANK[selected.indicator.severity];
+  // Rooms still retrying share ordinary saving's activity rank. They take
+  // that unlabeled light so the hover says what is waiting. A warning or
+  // danger artifact leg keeps the row, and so does every real warning.
+  const retryingTakesSavingLight =
+    candidate.source === "artifact-sync" &&
+    candidate.indicator.severity === "activity" &&
+    selected.source === "artifact" &&
+    selected.indicator.severity === "activity" &&
+    selected.indicator.label === null;
+  return candidateRank > selectedRank || retryingTakesSavingLight;
 }
 
 function highestSeverityIndicator(signals: PillSignals): SelectedIndicator {
@@ -560,24 +577,13 @@ function highestSeverityIndicator(signals: PillSignals): SelectedIndicator {
     secondary.push({
       source: "agent-activity",
       indicator: indicatorForPresenceDegraded(signals.presenceDegraded),
-      reportOnly: !signals.presenceMayLead,
     });
   }
   let selected = artifact;
   for (const candidate of secondary) {
-    if (candidate.reportOnly === true) continue;
-    const candidateRank = SEVERITY_RANK[candidate.indicator.severity];
-    const selectedRank = SEVERITY_RANK[selected.indicator.severity];
-    // Rooms still retrying share ordinary saving's activity rank. They take
-    // that unlabeled light so the hover says what is waiting. A warning or
-    // danger artifact leg keeps the row, and so does every real warning.
-    const retryingTakesSavingLight =
-      candidate.source === "artifact-sync" &&
-      candidate.indicator.severity === "activity" &&
-      selected.source === "artifact" &&
-      selected.indicator.severity === "activity" &&
-      selected.indicator.label === null;
-    if (candidateRank > selectedRank || retryingTakesSavingLight) {
+    if (candidate.source === "agent-activity" && !signals.presenceMayLead)
+      continue;
+    if (outranksIndicator(candidate, selected)) {
       selected = candidate;
     }
   }
