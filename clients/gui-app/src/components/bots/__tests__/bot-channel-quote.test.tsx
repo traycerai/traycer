@@ -69,6 +69,7 @@ import {
   textOf,
   typeInto,
 } from "@/components/bots/__tests__/bot-box-test-support";
+import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
 
 const mocks = vi.hoisted(() => ({
   client: null as HostRequester<HostRpcRegistry> | null,
@@ -291,7 +292,7 @@ async function mountChannel(): Promise<void> {
 async function mountChannelWithThread(): Promise<void> {
   useBotOpenThreadStore
     .getState()
-    .setRail(BOT_ID, { kind: "thread", ...THREAD_OPEN });
+    .setRail(BOT_ID, { kind: "thread", ...THREAD_OPEN }, currentBotLifetime());
   await mountChannel();
 }
 
@@ -308,7 +309,11 @@ async function mountChannelWithUnopenedThread(): Promise<void> {
   mocks.threads = [];
   useBotOpenThreadStore
     .getState()
-    .setRail(BOT_ID, { kind: "thread", ...UNOPENED_THREAD_OPEN });
+    .setRail(
+      BOT_ID,
+      { kind: "thread", ...UNOPENED_THREAD_OPEN },
+      currentBotLifetime(),
+    );
   await mountChannel();
 }
 
@@ -322,6 +327,7 @@ const POSTED_THREAD_OPEN: BotOpenThread = {
     senderUserId: VIEWER_USER_ID,
     sentAt: 1_000,
     delivery: "written",
+    provisional: false,
   },
 };
 
@@ -331,7 +337,9 @@ function unrepliedPostThread(): BotThreadSummary {
 }
 
 async function mountChannelOpenOn(open: BotOpenThread): Promise<void> {
-  useBotOpenThreadStore.getState().setRail(BOT_ID, { kind: "thread", ...open });
+  useBotOpenThreadStore
+    .getState()
+    .setRail(BOT_ID, { kind: "thread", ...open }, currentBotLifetime());
   await mountChannel();
 }
 

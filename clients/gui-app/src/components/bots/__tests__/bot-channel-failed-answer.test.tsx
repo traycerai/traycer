@@ -441,7 +441,16 @@ function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
     messenger,
   });
   spine.setRequestContext(
-    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+    createRequestContextFixture({
+      origin: "renderer",
+      bearerToken: "tok-1",
+      // The send leaves as the signed-in viewer.
+      identity: {
+        userId: VIEWER_USER_ID,
+        username: "olive",
+        providerHandle: null,
+      },
+    }),
   );
   return spine.createRequester(mockRemoteHostEntry);
 }
@@ -473,7 +482,16 @@ function boundHostClientRecordingUpdates(): HostRequester<HostRpcRegistry> {
     messenger,
   });
   spine.setRequestContext(
-    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+    createRequestContextFixture({
+      origin: "renderer",
+      bearerToken: "tok-1",
+      // The send leaves as the signed-in viewer.
+      identity: {
+        userId: VIEWER_USER_ID,
+        username: "olive",
+        providerHandle: null,
+      },
+    }),
   );
   return spine.createRequester(mockRemoteHostEntry);
 }
@@ -499,11 +517,13 @@ function mountChannelWith(
           <TooltipProvider>
             <ChatExpansionTestProviders tileInstanceId="tile-1">
               <BotChannelView
+                replyMode="direct"
                 tiles={null}
                 botId={BOT_ID}
                 hostId={HOST_ID}
                 boundHostId={boundHostId}
                 boundHostEpoch={1}
+                onBindingMoved={vi.fn()}
                 botTitle="Release Bot"
                 directive={null}
                 appConversationChatId={namedConversationId}

@@ -425,6 +425,12 @@ export function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
   const context = createRequestContextFixture({
     origin: "renderer",
     bearerToken: "tok-1",
+    // The send leaves as the signed-in viewer.
+    identity: {
+      userId: VIEWER_USER_ID,
+      username: "olive",
+      providerHandle: null,
+    },
   });
   // The recovery the auth layer waits on rotates this context's lease in
   // place, as the request context provider does, so the call is sent again.
@@ -454,8 +460,12 @@ export function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
     messenger,
   });
   spine.setRequestContext(context);
+  hostSpine = spine;
   return spine.createRequester(mockRemoteHostEntry);
 }
+
+/** The host client's spine the case sends through, whose request context follows the signed-in account. */
+export let hostSpine: HostClient<HostRpcRegistry> | null = null;
 
 /** The host refuses the oldest send held. */
 export async function refuse(): Promise<void> {
@@ -489,11 +499,13 @@ export function mountChannel(openThread: BotOpenThread | null): {
           <TooltipProvider>
             <ChatExpansionTestProviders tileInstanceId="tile-1">
               <BotChannelView
+                replyMode="direct"
                 tiles={null}
                 botId={BOT_ID}
                 hostId={HOST_ID}
                 boundHostId={HOST_ID}
                 boundHostEpoch={1}
+                onBindingMoved={vi.fn()}
                 botTitle="Release Bot"
                 directive={null}
                 appConversationChatId={CHANNEL_ID}

@@ -7,6 +7,7 @@
  * box is a bystander. The same cases on a Threads card are in
  * `bot-box-reading-card.test.tsx`.
  */
+import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
 import {
   botMentionHostClientMock,
   emptyBotMentionHostListsMock,
@@ -287,7 +288,7 @@ async function mountThreadReading(): Promise<{ readonly hash: string }> {
   storeDraftWithImages(accounts.a, POST_ID, hash, 1);
   useBotOpenThreadStore
     .getState()
-    .setRail(BOT_ID, { kind: "thread", ...THREAD_OPEN });
+    .setRail(BOT_ID, { kind: "thread", ...THREAD_OPEN }, currentBotLifetime());
   render(
     <QueryClientProvider client={new QueryClient()}>
       <BotDraftsPersistLifecycleBridge>

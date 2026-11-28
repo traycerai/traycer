@@ -37,12 +37,18 @@ import {
   BOT_CONVERSATION_ANSWER_SET_VERSION,
   BOT_CONVERSATION_ANSWER_VERSION,
   BOT_CONVERSATION_CALL_VERSION,
+  BOT_CONVERSATION_NONCE_VERSION,
   BOT_CONVERSATION_REPLY_VERSION,
   BOT_CONVERSATION_RETRY_VERSION,
 } from "@/hooks/bots/use-bot-send-version";
 import { botMutationKeys, hostQueryKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { isFollowReadOf } from "@/hooks/bots/use-bot-thread-follow";
+import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
+import {
+  BotSendAccountMovedError,
+  type BotSentAs,
+} from "@/lib/bots/bot-sent-as";
 import { applyBotSettingsToViews } from "@/hooks/bots/use-bot-subscription";
 import { botSetupError } from "@/hooks/bots/bot-setup-error";
 import {
@@ -267,6 +273,40 @@ interface BotConversationSendContext {
 }
 
 /**
+ * What every `bot.conversation.send` mutation carries in its variables, a
+ * member's box's and a call's: the request it sends.
+ */
+export interface BotConversationSendMutationVariables {
+  readonly request: BotConversationSendRequest;
+}
+
+/**
+ * The chat a `bot.conversation.send` mutation sent to, read off the mutation
+ * cache's untyped variables; `null` for any other shape. Its return type
+ * follows the shared variables, so renaming `request` or its `conversationId`
+ * fails to compile here; a send hook that stops extending them, or a third
+ * shape, does not, and the transcript's tests through both real send hooks
+ * catch that.
+ */
+export function conversationSendChatOf(
+  variables: unknown,
+): BotConversationSendMutationVariables["request"]["conversationId"] | null {
+  if (typeof variables !== "object" || variables === null) return null;
+  if (!("request" in variables)) return null;
+  const { request } = variables;
+  if (typeof request !== "object" || request === null) return null;
+  if (!("conversationId" in request)) return null;
+  return typeof request.conversationId === "string"
+    ? request.conversationId
+    : null;
+}
+
+/** A member's message and who it goes out as, fixed at the press. */
+interface BotConversationSendVariables extends BotConversationSendMutationVariables {
+  readonly sentAs: BotSentAs;
+}
+
+/**
  * One member's message: a post on the channel (`threadId: null`) or a reply
  * in a thread. Accepted whether or not the bound
  * host is reachable: `delivery: "queued"` means the message waits in the
@@ -276,8 +316,17 @@ interface BotConversationSendContext {
  * below {@link BOT_CONVERSATION_RETRY_VERSION}, a question card's answer by
  * one below {@link BOT_CONVERSATION_ANSWER_VERSION}, a card's answers sent
  * together by one below {@link BOT_CONVERSATION_ANSWER_SET_VERSION}, a
- * call's words by one below {@link BOT_CONVERSATION_CALL_VERSION}, and a
- * reply to a chosen message by one below {@link BOT_CONVERSATION_REPLY_VERSION}.
+ * call's words by one below {@link BOT_CONVERSATION_CALL_VERSION}, a
+ * reply to a chosen message by one below {@link BOT_CONVERSATION_REPLY_VERSION},
+ * and a send that carries its nonce by one below
+ * {@link BOT_CONVERSATION_NONCE_VERSION}: the check is on the connection that
+ * dispatches it, so the nonce is never dropped for an older host.
+ *
+ * A send leaves only as it was pressed (`BotSentAs`): in the bot lifetime it
+ * was pressed in, through a client whose request context is the account that
+ * pressed it. The check runs in the client resolver, in the same synchronous
+ * step as the dispatch, as a call's words do; a send refused there wrote
+ * nothing (`BotSendAccountMovedError`).
  *
  * A send may change a thread, so the channel's thread list is read again on
  * the host the send went through. So is a card's answers sent together, or a
@@ -291,26 +340,38 @@ export function useBotConversationSendMutation(
 ): UseMutationResult<
   BotConversationSendResponse,
   HostRpcError,
-  BotConversationSendRequest,
+  BotConversationSendVariables,
   BotConversationSendContext
 > {
   const queryClient = useQueryClient();
   return useHostMutation<
     HostRpcRegistry,
     "bot.conversation.send",
-    BotConversationSendContext
+    BotConversationSendContext,
+    BotConversationSendVariables
   >({
-    client,
+    client: ({ sentAs }) => {
+      if (
+        client !== null &&
+        (sentAs.lifetime !== currentBotLifetime() ||
+          sentAs.account === null ||
+          client.getRequestContextUserId() !== sentAs.account)
+      ) {
+        throw new BotSendAccountMovedError();
+      }
+      return client;
+    },
     method: "bot.conversation.send",
-    requiredHostMethodVersion: conversationSendVersion,
-    mapVariables: (variables) => variables,
+    requiredHostMethodVersion: (variables) =>
+      conversationSendVersion(variables.request),
+    mapVariables: (variables) => variables.request,
     options: {
       mutationKey: botMutationKeys.conversationSend(),
       onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
       onSuccess: (_response, variables, context) => {
         invalidateAfterConversationSend(
           queryClient,
-          variables.botId,
+          variables.request.botId,
           context.hostId,
         );
       },
@@ -333,7 +394,7 @@ export function useBotConversationSendMutation(
 }
 
 /** A call's send, the host it goes to and the account whose call it is. */
-export interface BotCallSendVariables {
+export interface BotCallSendVariables extends BotConversationSendMutationVariables {
   readonly hostId: string;
   /** The account signed in when the call started; `null` owns no call. */
   readonly account: string | null;
@@ -343,7 +404,6 @@ export interface BotCallSendVariables {
    * session.
    */
   readonly authority: VoiceCallAuthority | null;
-  readonly request: BotConversationSendRequest;
 }
 
 /**
@@ -409,10 +469,16 @@ export function useBotCallSendMutation(): UseMutationResult<
   });
 }
 
-/** The send line a request needs: a retry, an answer, a call's words, a card's answers together and a reply came later. */
+/** The send line a request needs: a retry, an answer, a call's words, a card's answers together, a reply and a nonce came later. */
 function conversationSendVersion(
   variables: BotConversationSendRequest,
 ): RequiredHostMethodVersion | null {
+  if (variables.sendNonce !== undefined) {
+    return {
+      method: "bot.conversation.send",
+      version: BOT_CONVERSATION_NONCE_VERSION,
+    };
+  }
   if (variables.replyTo !== undefined) {
     return {
       method: "bot.conversation.send",

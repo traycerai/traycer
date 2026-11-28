@@ -30,7 +30,11 @@ import type {
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { OpenMessage } from "@traycer/protocol/persistence/epic/open-harness-records";
-import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
+import { threadOpenOf } from "@/lib/bots/bot-trunk-model";
+import type {
+  BotRecord,
+  BotReplyMode,
+} from "@traycer/protocol/host/bot/schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import {
   answerEntries,
@@ -106,6 +110,8 @@ import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useBotConversationListQuery } from "@/hooks/bots/use-bot-conversation-list-query";
 import { useBotThreadListQuery } from "@/hooks/bots/use-bot-thread-list-query";
 import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
+import { currentBotLifetime, useBotLifetime } from "@/lib/bots/bot-lifetime";
+import { useBotSentAs } from "@/lib/bots/bot-sent-as";
 import { useBotSurfaceCards } from "@/hooks/bots/use-bot-surface-cards";
 import { BotSurfaceCardsContext } from "@/components/bots/bot-surface-card-context";
 import { threadParticipants } from "@/components/bots/bot-thread-participants";
@@ -135,8 +141,11 @@ import {
   type BotMemberResolver,
 } from "@/lib/bots/bot-member-names";
 import { useKeptBoxDraft } from "@/hooks/bots/use-kept-box-draft";
+import { useBotComposerPending } from "@/hooks/bots/use-bot-composer-pending";
+import type { BotPendingSendStart } from "@/lib/bots/bot-pending-send";
 import { useBotDraftActions } from "@/stores/bots/bot-drafts-store";
 import {
+  settleSentThread,
   useBotOpenThreadStore,
   useBotRail,
   type BotExchangeRail,
@@ -339,7 +348,19 @@ export function BotChannelView(props: {
    * anchors the list names hold for this binding only.
    */
   readonly boundHostEpoch: number;
+  /**
+   * Reads the bot again: a host refused a member's send because the bot is no
+   * longer bound where this view read it, and the next send is made for the
+   * binding read then.
+   */
+  readonly onBindingMoved: () => void;
   readonly botTitle: string;
+  /**
+   * Where the bot answers a post, as its record says: in the post's thread,
+   * which opens beside the channel as the post is sent, or in the channel.
+   * The host's answer to each send is what holds.
+   */
+  readonly replyMode: BotReplyMode;
   /** What the bot does, for the top of a channel nobody has written in. */
   readonly directive: string | null;
   /**
@@ -394,7 +415,9 @@ export function BotChannelView(props: {
     hostId,
     boundHostId,
     boundHostEpoch,
+    onBindingMoved,
     botTitle,
+    replyMode,
     directive,
     appConversationChatId,
     trunkChatId,
@@ -481,6 +504,7 @@ export function BotChannelView(props: {
     mutateAsync: sendAsync,
     isPending: sending,
   } = useBotConversationSendMutation(client);
+  const sentAs = useBotSentAs();
   const sendFailure = useBotSendFailure();
   const { fail: failSend, clear: clearSendFailure } = sendFailure;
   // Whether a send here can reply to a message. A pick replies to the
@@ -496,22 +520,30 @@ export function BotChannelView(props: {
       clearSendFailure();
       send(
         {
-          botId,
-          conversationId: channelId,
-          text: choice,
-          threadId: null,
-          announcementId: null,
-          redeliver: null,
-          supersedes: null,
-          answer: null,
-          ...(replyReach === "delivered" && messageId !== null
-            ? { replyTo: messageId }
-            : {}),
+          request: {
+            botId,
+            conversationId: channelId,
+            text: choice,
+            threadId: null,
+            announcementId: null,
+            redeliver: null,
+            supersedes: null,
+            answer: null,
+            ...(replyReach === "delivered" && messageId !== null
+              ? { replyTo: messageId }
+              : {}),
+          },
+          sentAs,
         },
-        { onError: () => failSend(null) },
+        {
+          onError: () => {
+            if (sentAs.lifetime !== currentBotLifetime()) return;
+            failSend(null);
+          },
+        },
       );
     },
-    [botId, channelId, clearSendFailure, failSend, replyReach, send],
+    [botId, channelId, clearSendFailure, failSend, replyReach, send, sentAs],
   );
   // A question card's answer or Skip, on a question the bot asked at the
   // channel's top level: the person's message goes to the bot itself and
@@ -530,39 +562,45 @@ export function BotChannelView(props: {
       if (channelId === null) return;
       clearSendFailure();
       await sendAsync({
-        botId,
-        conversationId: channelId,
-        text: given.text,
-        threadId: null,
-        announcementId: null,
-        redeliver: null,
-        supersedes: null,
-        answer: {
-          questionMessageId,
-          questionIndex: given.questionIndex,
-          skipped: given.skipped,
+        request: {
+          botId,
+          conversationId: channelId,
+          text: given.text,
+          threadId: null,
+          announcementId: null,
+          redeliver: null,
+          supersedes: null,
+          answer: {
+            questionMessageId,
+            questionIndex: given.questionIndex,
+            skipped: given.skipped,
+          },
         },
+        sentAs,
       });
     },
-    [botId, channelId, clearSendFailure, sendAsync],
+    [botId, channelId, clearSendFailure, sendAsync, sentAs],
   );
   const answerQuestions = useCallback<QuestionAnswersSend>(
     async (questionMessageId, given) => {
       if (channelId === null) return;
       clearSendFailure();
       await sendAsync({
-        botId,
-        conversationId: channelId,
-        text: given.text,
-        threadId: null,
-        announcementId: null,
-        redeliver: null,
-        supersedes: null,
-        answer: null,
-        answers: { questionMessageId, entries: answerEntries(given) },
+        request: {
+          botId,
+          conversationId: channelId,
+          text: given.text,
+          threadId: null,
+          announcementId: null,
+          redeliver: null,
+          supersedes: null,
+          answer: null,
+          answers: { questionMessageId, entries: answerEntries(given) },
+        },
+        sentAs,
       });
     },
-    [botId, channelId, clearSendFailure, sendAsync],
+    [botId, channelId, clearSendFailure, sendAsync, sentAs],
   );
 
   // A post the bot failed to answer, in a thread or at the top level, is
@@ -620,16 +658,86 @@ export function BotChannelView(props: {
       }),
     [onOpenThread],
   );
+  // A post drawn at Send to a bot that answers in threads opens its thread
+  // then, in place of any thread open now, drawn as the post was sent, and
+  // the host's answer settles it (T249). The sends whose thread opened so.
+  const openedAtSend = useRef(new Set<string>());
+  const openThreadAtSend = useCallback(
+    (start: BotPendingSendStart) => {
+      if (
+        replyMode !== "thread" ||
+        !threadListSupported ||
+        start.threadId === null
+      ) {
+        return;
+      }
+      openedAtSend.current.add(start.requestId);
+      onOpenThread({
+        anchorMessageId: start.messageId,
+        announcement: false,
+        anchorKind: null,
+        sent: {
+          threadId: start.threadId,
+          requestId: start.requestId,
+          text: start.text,
+          content: start.content,
+          senderUserId: start.senderUserId,
+          sentAt: start.sentAt,
+          // Nothing is said under the post until the host answers.
+          delivery: "written",
+          provisional: true,
+        },
+      });
+    },
+    [onOpenThread, replyMode, threadListSupported],
+  );
+  const closeThreadOpenedAtSend = useCallback(
+    (start: BotPendingSendStart) => {
+      if (!openedAtSend.current.delete(start.requestId)) return;
+      settleSentThread(
+        botId,
+        start.requestId,
+        { kind: "refused" },
+        start.sentAs.lifetime,
+      );
+    },
+    [botId],
+  );
+  // What a member's send from the channel is made for, and a held one is
+  // offered again under.
+  const sendBinding = useMemo(
+    () => ({ hostId, boundHostId, boundHostEpoch, onMoved: onBindingMoved }),
+    [boundHostEpoch, boundHostId, hostId, onBindingMoved],
+  );
+  const channelPending = useBotComposerPending({
+    binding: sendBinding,
+    onStart: openThreadAtSend,
+    onRefused: closeThreadOpenedAtSend,
+  });
   // A post whose answer lands in a thread (reply mode `threaded`) opens that
   // thread as the send is accepted, in place of any thread open now, and the
   // thread's panel says the send's delivery; one the bot answers in the
-  // channel opens nothing, and the channel's box says it.
+  // channel opens nothing, and the channel's box says it. A thread opened at
+  // Send is settled instead: one the person closed or left since stays so.
   const openPostedThread = useCallback(
     (
       response: BotConversationSendResponse,
       text: string,
       content: JsonContent,
+      lifetime: number,
     ): boolean => {
+      if (openedAtSend.current.delete(response.requestId)) {
+        return settleSentThread(
+          botId,
+          response.requestId,
+          {
+            kind: "answered",
+            threadId: response.threadId,
+            delivery: response.delivery,
+          },
+          lifetime,
+        );
+      }
       if (response.threadId === null || !threadListSupported) return false;
       onOpenThread({
         anchorMessageId: response.messageId,
@@ -643,11 +751,12 @@ export function BotChannelView(props: {
           senderUserId: viewer?.userId ?? null,
           sentAt: Date.now(),
           delivery: response.delivery,
+          provisional: false,
         },
       });
       return true;
     },
-    [onOpenThread, threadListSupported, viewer],
+    [botId, onOpenThread, threadListSupported, viewer],
   );
 
   // A memory's link to the post it was learned from shows the channel there,
@@ -828,6 +937,9 @@ export function BotChannelView(props: {
     conversationId: channel?.conversationId ?? null,
     messageId: railThreadPostId,
   });
+  // The whole thread list (`bot.thread.list`, unpaged) is there: read, or
+  // kept through a failed read.
+  const listLoaded = listed !== undefined;
   const panelThread = useMemo((): BotThreadPanelThread => {
     const noticeOf = (view: BotReadFailing): BotReadNotice => ({
       view,
@@ -857,7 +969,10 @@ export function BotChannelView(props: {
     if (open !== null && open.sent !== null) {
       return { kind: "posted", threadId: open.sent.threadId, retry, sendable };
     }
-    if (open?.announcement === true) {
+    if (
+      open?.announcement === true ||
+      startsItsThread(anchorRow, listLoaded, sendable)
+    ) {
       return { kind: "unopened", retry, sendable };
     }
     // No thread to show: any failure of the list is drawn in its place.
@@ -875,6 +990,7 @@ export function BotChannelView(props: {
   }, [
     anchorRow,
     channelStale,
+    listLoaded,
     open,
     openThread,
     refetchThreads,
@@ -1010,6 +1126,7 @@ export function BotChannelView(props: {
                             header={null}
                             landOn={landing}
                             flow={null}
+                            sendBinding={sendBinding}
                           />
                         </BotExchangeLinesContext>
                       </BotReadPresenceContext>
@@ -1052,6 +1169,7 @@ export function BotChannelView(props: {
                       notice={channelNotice}
                       hold={channelHold}
                       onSent={openPostedThread}
+                      pending={channelPending}
                     />
                   ) : (
                     <BotMessageComposerReading
@@ -1129,13 +1247,22 @@ export function BotChannelView(props: {
                             botId={botId}
                             hostId={hostId}
                             boundHostId={boundHostId}
+                            boundHostEpoch={boundHostEpoch}
+                            onBindingMoved={onBindingMoved}
                             botTitle={botTitle}
                             imageReach={imageReach}
                             answerReach={answerReach}
                             replyReach={replyReach}
                             conversationId={channel.conversationId}
                             originMessageId={postId}
-                            sent={open?.sent ?? null}
+                            // An announcement's thread opens on the bot's row: the
+                            // first reply that opened it is drawn in the thread,
+                            // never as its post (T249).
+                            sent={
+                              open?.announcement === true
+                                ? null
+                                : (open?.sent ?? null)
+                            }
                             thread={panelThread}
                             tasks={tasks}
                             anchorSenderLabel={anchorSenderLabel}
@@ -1442,6 +1569,7 @@ function useChannelSearch(args: {
   const threadsFailed = args.threadList.isError;
   const rail = useBotRail(botId);
   const open = rail?.kind === "search" ? rail : null;
+  const lifetime = useBotLifetime();
   const jump = useBotSearchStore((state) =>
     state.jump?.botId === botId ? state.jump : null,
   );
@@ -1462,11 +1590,11 @@ function useChannelSearch(args: {
         visit: (previous?.visit ?? 0) + 1,
       }));
       if (channelHiddenBesideRail(section, tiles)) {
-        setRail(botId, {
-          kind: "search",
-          back: open.back,
-          showing: { kind: "channel" },
-        });
+        setRail(
+          botId,
+          { kind: "search", back: open.back, showing: { kind: "channel" } },
+          lifetime,
+        );
       }
       return;
     }
@@ -1478,20 +1606,34 @@ function useChannelSearch(args: {
       return;
     }
     search.landThread(anchor.messageId, jump);
-    setRail(botId, {
-      kind: "search",
-      back: open.back,
-      showing: {
-        kind: "thread",
-        thread: {
-          anchorMessageId: anchor.messageId,
-          announcement: false,
-          anchorKind: null,
-          sent: null,
+    setRail(
+      botId,
+      {
+        kind: "search",
+        back: open.back,
+        showing: {
+          kind: "thread",
+          thread: {
+            anchorMessageId: anchor.messageId,
+            announcement: false,
+            anchorKind: null,
+            sent: null,
+          },
         },
       },
-    });
-  }, [botId, jump, open, section, setLanding, threads, threadsFailed, tiles]);
+      lifetime,
+    );
+  }, [
+    botId,
+    jump,
+    lifetime,
+    open,
+    section,
+    setLanding,
+    threads,
+    threadsFailed,
+    tiles,
+  ]);
   const showing = open?.showing.kind ?? null;
   return {
     railOpen: args.railHeld || showing === "results",
@@ -1654,6 +1796,27 @@ function followedUnwritten(
 ): boolean {
   const follow = followingOf(follows, threadId);
   return follow !== null && follow.reason !== "participated";
+}
+
+/**
+ * Whether a thread with no post sent from here opens on `anchorRow` as the
+ * box whose first reply starts it, as the row's Create thread does
+ * (`threadOpenOf`): a post the bot answered in the channel, or a row of the
+ * bot, once the whole thread list is there without its thread, and only
+ * where it takes a send. Until then, and for a row the binding takes no
+ * reply under, it waits for the list.
+ */
+function startsItsThread(
+  anchorRow: OpenMessage | null,
+  listLoaded: boolean,
+  sendable: boolean,
+): boolean {
+  return (
+    listLoaded &&
+    sendable &&
+    anchorRow !== null &&
+    threadOpenOf(anchorRow).announcement
+  );
 }
 
 /**

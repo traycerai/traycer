@@ -5,6 +5,7 @@
  * the send through the callbacks the box handed it, as the host's answer or
  * refusal would land.
  */
+import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
 import {
   botMentionHostClientMock,
   emptyBotMentionHostListsMock,
@@ -76,7 +77,11 @@ vi.mock("@/hooks/bots/use-bot-mutations", () => ({
   // The box settles its send through the promise; the case settles it
   // through the callbacks the promise is built on.
   useBotConversationSendMutation: () => ({
-    mutateAsync: (variables: BotConversationSendRequest) => {
+    mutateAsync: ({
+      request,
+    }: {
+      readonly request: BotConversationSendRequest;
+    }) => {
       mocks.pending = true;
       const { promise, resolve, reject } =
         Promise.withResolvers<BotConversationSendResponse>();
@@ -88,7 +93,7 @@ vi.mock("@/hooks/bots/use-bot-mutations", () => ({
           () => undefined,
         ),
       );
-      mocks.send(variables, callbacks);
+      mocks.send(request, callbacks);
       return promise;
     },
     isPending: mocks.pending,
@@ -133,6 +138,7 @@ const onSent =
       response: BotConversationSendResponse,
       text: string,
       content: JsonContent,
+      lifetime: number,
     ) => boolean
   >();
 const SENT_CONTENT: JsonContent = {
@@ -151,6 +157,7 @@ function composer(
   return (
     <BotTestRunnerHost>
       <BotMessageComposer
+        pending={null}
         botId="bot-1"
         botTitle="Tracy"
         conversationId="conversation-channel"
@@ -202,6 +209,7 @@ function Harness(props: {
         Reopen
       </button>
       <BotMessageComposer
+        pending={null}
         key={boxGeneration}
         botId="bot-1"
         botTitle="Tracy"
@@ -380,7 +388,12 @@ describe("<BotMessageComposer /> reporting a send", () => {
     );
 
     expect(onSent).toHaveBeenCalledTimes(1);
-    expect(onSent).toHaveBeenCalledWith(RESPONSE, "Is CI green?", SENT_CONTENT);
+    expect(onSent).toHaveBeenCalledWith(
+      RESPONSE,
+      "Is CI green?",
+      SENT_CONTENT,
+      currentBotLifetime(),
+    );
     expect(boxText(LABEL)).toBe("");
   });
 
@@ -404,7 +417,12 @@ describe("<BotMessageComposer /> reporting a send", () => {
     );
 
     expect(onEditEnd).toHaveBeenCalledTimes(1);
-    expect(onSent).toHaveBeenCalledWith(RESPONSE, "Is CI green?", SENT_CONTENT);
+    expect(onSent).toHaveBeenCalledWith(
+      RESPONSE,
+      "Is CI green?",
+      SENT_CONTENT,
+      currentBotLifetime(),
+    );
   });
 
   it("reports an edit's send the person moved on from, and keeps the edit they opened since", async () => {
@@ -436,7 +454,12 @@ describe("<BotMessageComposer /> reporting a send", () => {
 
     await settleSend(callbacks, (sent) => sent.onSuccess?.(RESPONSE));
 
-    expect(onSent).toHaveBeenCalledWith(RESPONSE, "Is CI green?", SENT_CONTENT);
+    expect(onSent).toHaveBeenCalledWith(
+      RESPONSE,
+      "Is CI green?",
+      SENT_CONTENT,
+      currentBotLifetime(),
+    );
     expect(onEditEnd).toHaveBeenCalledTimes(1);
     expect(boxText(LABEL)).toBe("Is the nightly green?");
   });
@@ -672,6 +695,7 @@ describe("<BotMessageComposer /> clearing at the send", () => {
       { ...RESPONSE, delivery: "queued" },
       "Is CI green?",
       SENT_CONTENT,
+      currentBotLifetime(),
     );
     expect(screen.queryByTestId("bot-channel-composer-queued")).toBeNull();
     expect(boxText(LABEL)).toBe("And the nightly?");
@@ -697,7 +721,12 @@ describe("<BotMessageComposer /> quoting", () => {
     await settleSend(callbacks, (sent) => sent.onSuccess?.(RESPONSE));
 
     expect(boxText(LABEL)).toBe("> quoted");
-    expect(onSent).toHaveBeenCalledWith(RESPONSE, "Is CI green?", SENT_CONTENT);
+    expect(onSent).toHaveBeenCalledWith(
+      RESPONSE,
+      "Is CI green?",
+      SENT_CONTENT,
+      currentBotLifetime(),
+    );
   });
 });
 

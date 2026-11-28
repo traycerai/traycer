@@ -24,9 +24,15 @@ type ChannelPostProps = {
    * Renders with the post's row, `null` while the channel has none for it;
    * `missing` once a cold fetch has ended without it (the host has no such
    * row, or could not be asked), after which nothing more arrives, and while
-   * the channel's stream has ended, until a reconnect.
+   * the channel's stream has ended, until a reconnect. `absent` only once
+   * the host answered, over the open stream, that it holds no such row: the
+   * one ending that says the post does not exist.
    */
-  readonly children: (post: OpenMessage | null, missing: boolean) => ReactNode;
+  readonly children: (
+    post: OpenMessage | null,
+    missing: boolean,
+    absent: boolean,
+  ) => ReactNode;
 };
 
 /**
@@ -42,7 +48,7 @@ export function ChannelPost(props: ChannelPostProps): ReactNode {
     props.hostId,
     true,
   );
-  if (handle === null) return props.children(null, false);
+  if (handle === null) return props.children(null, false, false);
   return <ChannelPostFromStore store={handle.store} {...props} />;
 }
 
@@ -87,5 +93,9 @@ function ChannelPostFromStore(
   return props.children(
     post,
     post === null && (answer.status === "missing" || (cold && closed)),
+    post === null &&
+      !closed &&
+      answer.status === "missing" &&
+      answer.cause === "absent",
   );
 }

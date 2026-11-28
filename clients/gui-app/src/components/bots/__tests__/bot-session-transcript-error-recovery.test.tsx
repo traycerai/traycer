@@ -100,6 +100,7 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostSupportsMethod: () => true,
   useHostMethodSupport: () => true,
+  useHostMethodSchemaVersion: () => null,
 }));
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersListForClient: () => ({ data: undefined }),

@@ -7,6 +7,7 @@
  * the hook's own effect does. What a render drew is read from records taken in
  * the render and at each commit, never only from the DOM at the end.
  */
+import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
 import {
   botMentionHostClientMock,
   emptyBotMentionHostListsMock,
@@ -311,10 +312,12 @@ function mount(extra: ReactNode): void {
 
 /** The pane open, account A signed in and its client bound. */
 function mountAsAccountA(extra: ReactNode): void {
+  // Signing in crosses the bot-lifetime edge, which empties the rail, so the
+  // rail is set after it.
+  signInAs("account-a");
   useBotOpenThreadStore
     .getState()
-    .setRail(BOT_ID, { kind: "memory", back: null });
-  signInAs("account-a");
+    .setRail(BOT_ID, { kind: "memory", back: null }, currentBotLifetime());
   holdBinding(clientA, "account-a");
   mount(extra);
 }
@@ -336,6 +339,16 @@ function emit(
 /** The context swaps, then the store projects: one synchronous step in `AuthService`, so one act. */
 function switchAccountTo(userId: string | null): void {
   act(() => signInAs(userId));
+}
+
+/** An account change empties every rail: the rail is empty, and the new account opens the memory again. */
+function expectRailEmptyThenReopenMemory(): void {
+  expect(useBotOpenThreadStore.getState().byBotId[BOT_ID]).toBeUndefined();
+  act(() =>
+    useBotOpenThreadStore
+      .getState()
+      .setRail(BOT_ID, { kind: "memory", back: null }, currentBotLifetime()),
+  );
 }
 
 function pageHolds(text: string): boolean {
@@ -416,6 +429,7 @@ describe("the bot's memory when the account changes", () => {
     await screen.findByText(ALPHA_TEXT);
     switchAccountTo("account-b");
     act(() => holdBinding(clientB, "account-b"));
+    expectRailEmptyThenReopenMemory();
 
     emit(clientB, 0, BRAVO);
 
@@ -482,6 +496,7 @@ describe("the bot's memory when the account changes", () => {
     expect(clientA.memorySessions()).toHaveLength(opened + 1);
     expect(pageHolds(ALPHA_TEXT)).toBe(false);
     expect(records.readings.at(-1)).toBe("loading");
+    expectRailEmptyThenReopenMemory();
     emit(clientA, opened, ALPHA_AGAIN);
     expect(await screen.findByText(ALPHA_AGAIN_TEXT)).toBeTruthy();
     expect(pageHolds(ALPHA_TEXT)).toBe(false);
@@ -563,6 +578,7 @@ describe("the bot's memory when the account changes", () => {
 
     expect(clientA.memorySessions()).toHaveLength(2);
     expect(drawnSince({ readings: [], commits: [] }, "Alpha")).toBe(false);
+    expectRailEmptyThenReopenMemory();
     emit(clientA, 1, ALPHA_AGAIN);
     expect(await screen.findByText(ALPHA_AGAIN_TEXT)).toBeTruthy();
   });

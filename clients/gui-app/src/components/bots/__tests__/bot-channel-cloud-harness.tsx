@@ -42,11 +42,13 @@ export function renderRealChannel(args: {
         <TooltipProvider>
           <ChatExpansionTestProviders tileInstanceId="tile-1">
             <BotChannelView
+              replyMode="direct"
               tiles={args.tiles}
               botId={BOT_ID}
               hostId={TAB_HOST_ID}
               boundHostId={TAB_HOST_ID}
               boundHostEpoch={1}
+              onBindingMoved={vi.fn()}
               botTitle="Release Bot"
               directive={null}
               appConversationChatId={CHANNEL_ID}

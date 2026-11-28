@@ -75,6 +75,7 @@ export {
   staleWriteForCode,
   staleWriteWireFieldSchema,
 } from "./environment-stale-write";
+export { notWrittenWireFieldSchema } from "./not-written";
 export {
   HOLDERS_REVISION_DIGEST_PATTERN,
   holdersRevisionWireFieldSchema,

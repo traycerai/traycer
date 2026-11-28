@@ -31,6 +31,7 @@ import {
   useBotOpenThreadStore,
   useBotRail,
 } from "@/stores/bots/bot-open-thread-store";
+import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
 
 const resolveMember: BotMemberResolver = () => null;
 
@@ -54,11 +55,13 @@ function Channel(props: {
   const openMemory = rail?.kind === "memory" ? rail : null;
   return (
     <BotChannelView
+      replyMode="direct"
       tiles={null}
       botId={BOT_ID}
       hostId={HOST_ID}
       boundHostId="host-runs-bot"
       boundHostEpoch={1}
+      onBindingMoved={() => undefined}
       botTitle="Release Bot"
       directive={null}
       appConversationChatId={CHANNEL_ID}
@@ -68,7 +71,11 @@ function Channel(props: {
       surfaceActions={null}
       openThread={openThread}
       onOpenThread={(open) =>
-        setRail(BOT_ID, open === null ? null : { kind: "thread", ...open })
+        setRail(
+          BOT_ID,
+          open === null ? null : { kind: "thread", ...open },
+          currentBotLifetime(),
+        )
       }
       onOpenTurn={(ref, sendPostId) => {
         openedSessions.push(sessionTargetOfTurn(ref, sendPostId));
@@ -76,7 +83,11 @@ function Channel(props: {
       landOn={props.landOn}
       openMemory={openMemory}
       onOpenMemory={(open) =>
-        setRail(BOT_ID, open === null ? null : { kind: "memory", ...open })
+        setRail(
+          BOT_ID,
+          open === null ? null : { kind: "memory", ...open },
+          currentBotLifetime(),
+        )
       }
       environmentId={ENVIRONMENT_ID}
       botNameOf={(botId) => (botId === OTHER_BOT_ID ? OTHER_BOT_TITLE : null)}
@@ -101,7 +112,7 @@ export function KnowingChannel(): ReactNode {
       hostId: HOST_ID,
       botId: BOT_ID,
       environmentId: ENVIRONMENT_ID,
-      open: () => setRail(BOT_ID, memoryRailOver(rail)),
+      open: () => setRail(BOT_ID, memoryRailOver(rail), currentBotLifetime()),
     }),
     [rail, setRail],
   );

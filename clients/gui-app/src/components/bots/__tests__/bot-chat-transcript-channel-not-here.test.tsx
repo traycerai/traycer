@@ -22,14 +22,6 @@ import {
   QueryClient,
   QueryClientProvider,
 } from "@tanstack/react-query";
-import { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
-import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
-import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import {
-  recordNegotiatedHostManifest,
-  resetNegotiatedManifests,
-} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
 import {
   afterEach,
@@ -42,16 +34,23 @@ import {
 } from "vitest";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
-import type { BotConversationSendRequest } from "@traycer/protocol/host/bot/conversation-schemas";
 import type {
   ChatSessionState,
   ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
 import { emptyTranscriptWindow } from "@/stores/chats/transcript-window";
-import { botMutationKeys } from "@/lib/query-keys/bot-mutation-keys";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import type { BotConversationSendRequest } from "@traycer/protocol/host/bot/conversation-schemas";
+import {
+  useBotCallSendMutation,
+  useBotConversationSendMutation,
+} from "@/hooks/bots/use-bot-mutations";
+import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
-import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
 
 type TranscriptState = Pick<
   ChatSessionState,
@@ -84,6 +83,24 @@ type TranscriptState = Pick<
 
 const mocks = vi.hoisted(() => ({
   handle: null as ChatSessionStoreHandle | null,
+  /** The app's binding, which a call's send resolves its named host through. */
+  binding: null as { readonly hostClient: HostClient<HostRpcRegistry> } | null,
+}));
+vi.mock("@/lib/host/runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
+  useHostBinding: () => mocks.binding,
+}));
+vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
+  useReactiveHostReadiness: (client: { getActiveHostId(): string } | null) => {
+    const hostId = client === null ? null : client.getActiveHostId();
+    return {
+      hostId,
+      requestContextUserId: SENDER,
+      isReady: hostId !== null,
+      hasRpcEndpoint: hostId !== null,
+      canExecute: hostId !== null,
+    };
+  },
 }));
 
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
@@ -131,6 +148,8 @@ import { UNRESOLVED_BOT_MEMBERS } from "@/lib/bots/bot-member-names";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const CHAT_ID = "conversation-app";
+/** The signed-in account the host client's request context names. */
+const SENDER = "user-alice";
 
 const NOT_ON_HOST: FatalErrorDetails = {
   code: "CHAT_NOT_VISIBLE",
@@ -214,6 +233,7 @@ function mountTranscript(surface: BotTranscriptSurface): {
         header={null}
         landOn={null}
         flow={null}
+        sendBinding={null}
       />
     </QueryClientProvider>
   );
@@ -226,58 +246,42 @@ function mountTranscript(surface: BotTranscriptSurface): {
   };
 }
 
-/** A `bot.conversation.send` to `conversationId` that succeeds, through the mutation cache. */
-async function sendSucceeded(
-  conversationId: string,
-): Promise<{ readonly evict: () => void }> {
-  const mutation = queryClient.getMutationCache().build(queryClient, {
-    mutationKey: botMutationKeys.conversationSend(),
-    mutationFn: () => Promise.resolve({ messageId: "m-1" }),
+/** A host client signed in as `SENDER` whose host answers every `bot.conversation.send`. */
+function answeringHost(): HostClient<HostRpcRegistry> {
+  const messenger = new MockHostMessenger<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => "request-1",
+    handlers: {
+      "bot.conversation.send": () => ({
+        messageId: "m-1",
+        requestId: "r-1",
+        delivery: "written",
+        threadId: null,
+      }),
+    },
   });
-  await act(async () => {
-    await mutation.execute({ botId: BOT_ID, conversationId, text: "hi" });
-  });
-  // The cache dropping it, as its garbage collection does once unobserved.
-  return { evict: () => queryClient.getMutationCache().remove(mutation) };
-}
-
-function mountRealSend(): { readonly send: () => Promise<void> } {
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
     findHostById: (hostId) =>
-      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
-    messenger: new MockHostMessenger<HostRpcRegistry>({
-      registry: hostRpcRegistry,
-      requestId: () => "req-real-conversation-send",
-      handlers: {
-        "bot.conversation.send": () => ({
-          messageId: "message-real-send",
-          requestId: "request-real-send",
-          delivery: "written",
-          threadId: "thread-real-send",
-        }),
-      },
-    }),
+      hostId === mockRemoteHostEntry.hostId ? mockRemoteHostEntry : null,
+    messenger,
   });
   spine.setRequestContext(
     createRequestContextFixture({
       origin: "renderer",
-      bearerToken: "tok-real-conversation-send",
+      bearerToken: "tok-1",
+      identity: { userId: SENDER, username: "alice", providerHandle: null },
     }),
   );
-  const client = spine.createRequester(mockLocalHostEntry);
-  const wrapper = (props: { readonly children: ReactNode }): ReactNode => (
-    <QueryClientProvider client={queryClient}>
-      {props.children}
-    </QueryClientProvider>
-  );
-  const mutation = renderHook(() => useBotConversationSendMutation(client), {
-    wrapper,
-  });
-  const variables: BotConversationSendRequest = {
+  return spine;
+}
+
+/** The request a send to `conversationId` carries. */
+function sendTo(conversationId: string): BotConversationSendRequest {
+  return {
     botId: BOT_ID,
-    conversationId: CHAT_ID,
+    conversationId,
     text: "hi",
     threadId: null,
     announcementId: null,
@@ -285,30 +289,78 @@ function mountRealSend(): { readonly send: () => Promise<void> } {
     supersedes: null,
     answer: null,
   };
-  return {
-    send: async () => {
-      await mutation.result.current.mutateAsync(variables);
-    },
-  };
+}
+
+function queryWrapper(props: { readonly children: ReactNode }): ReactNode {
+  return (
+    <QueryClientProvider client={queryClient}>
+      {props.children}
+    </QueryClientProvider>
+  );
+}
+
+/** The cache entry a send added, which dropping it evicts as garbage collection does once unobserved. */
+function evictionOf(before: number): { readonly evict: () => void } {
+  const cache = queryClient.getMutationCache();
+  const mutation = cache.getAll().at(before);
+  if (mutation === undefined) throw new Error("the send left no cache entry");
+  return { evict: () => cache.remove(mutation) };
+}
+
+/**
+ * A `bot.conversation.send` to `conversationId` that succeeds, through the
+ * real mutation the composer's box sends with and its variables
+ * (`{ request, sentAs }`), over a host that answers it.
+ */
+async function sendSucceeded(
+  conversationId: string,
+): Promise<{ readonly evict: () => void }> {
+  const client = answeringHost().createRequester(mockRemoteHostEntry);
+  const before = queryClient.getMutationCache().getAll().length;
+  const { result } = renderHook(() => useBotConversationSendMutation(client), {
+    wrapper: queryWrapper,
+  });
+  await act(async () => {
+    await result.current.mutateAsync({
+      request: sendTo(conversationId),
+      sentAs: {
+        lifetime: currentBotLifetime(),
+        account: client.getRequestContextUserId(),
+      },
+    });
+  });
+  return evictionOf(before);
+}
+
+/** A call's words to `conversationId` that succeed, through the real call mutation and its variables. */
+async function callSendSucceeded(conversationId: string): Promise<void> {
+  mocks.binding = { hostClient: answeringHost() };
+  const { result } = renderHook(() => useBotCallSendMutation(), {
+    wrapper: queryWrapper,
+  });
+  await act(async () => {
+    await result.current.mutateAsync({
+      hostId: mockRemoteHostEntry.hostId,
+      account: SENDER,
+      authority: null,
+      request: sendTo(conversationId),
+    });
+  });
 }
 
 beforeEach(() => {
   // The mutation cache tells its observers on a timer by default; synchronous
   // here, so a send has reached the transcript when its `act` returns.
   notifyManager.setScheduler((notify) => notify());
-  resetNegotiatedManifests();
-  recordNegotiatedHostManifest(mockLocalHostEntry.hostId, {
-    "bot.conversation.send": { major: 1, minor: 0 },
-  });
   retry = vi.fn<() => void>();
   queryClient = new QueryClient();
 });
 
 afterEach(() => {
   cleanup();
+  mocks.binding = null;
   queryClient.clear();
   notifyManager.setScheduler(defaultScheduler);
-  resetNegotiatedManifests();
   mocks.handle = null;
 });
 
@@ -344,6 +396,19 @@ describe("<BotChatTranscript /> on a channel the host has not created yet", () =
         "bot-channel-intro",
       ),
     ).toBeTruthy();
+  });
+
+  // A call's sends were not counted before (main's ledger read a top-level
+  // `conversationId` its variables never had): a call's first words into a
+  // channel the host has not created yet now re-subscribe it too.
+  it("re-subscribes once a call's send to the channel succeeds", async () => {
+    mountTranscript(CHANNEL_SURFACE);
+
+    await callSendSucceeded("another-conversation");
+    expect(retry).not.toHaveBeenCalled();
+
+    await callSendSucceeded(CHAT_ID);
+    expect(retry).toHaveBeenCalledTimes(1);
   });
 
   it("re-subscribes again on a later send when the first re-subscribe still found no chat", async () => {
@@ -424,18 +489,6 @@ describe("<BotChatTranscript /> on a channel the host has not created yet", () =
     const sent = await sendSucceeded(CHAT_ID);
     act(() => sent.evict());
 
-    act(() => view.remount());
-    expect(retry).toHaveBeenCalledTimes(1);
-  });
-
-  it("re-subscribes on return for a real send that succeeded while the transcript was away", async () => {
-    const view = mountTranscript(CHANNEL_SURFACE);
-    const sending = mountRealSend();
-    act(() => view.unmount());
-
-    await act(async () => sending.send());
-
-    expect(retry).not.toHaveBeenCalled();
     act(() => view.remount());
     expect(retry).toHaveBeenCalledTimes(1);
   });

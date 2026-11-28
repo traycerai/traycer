@@ -86,7 +86,11 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
 }));
 vi.mock("@/hooks/bots/use-bot-mutations", () => ({
   useBotConversationSendMutation: () => ({
-    mutateAsync: (request: BotConversationSendRequest) => {
+    mutateAsync: ({
+      request,
+    }: {
+      readonly request: BotConversationSendRequest;
+    }) => {
       mocks.pending = true;
       const { promise, resolve, reject } =
         Promise.withResolvers<BotConversationSendResponse>();
@@ -179,6 +183,7 @@ function Box(props: {
   return (
     <RunnerHostContext value={RUNNER_HOST}>
       <BotMessageComposer
+        pending={null}
         botId="bot-1"
         botTitle="Tracy"
         conversationId={CHANNEL}

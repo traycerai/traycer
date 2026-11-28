@@ -136,6 +136,7 @@ export function Dock(props: {
         testId={`strip-${props.id}`}
       />
       <BotMessageComposer
+        pending={null}
         botId={BOT_ID}
         botTitle="Tracy"
         conversationId="channel-1"

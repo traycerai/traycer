@@ -22,6 +22,8 @@ import {
 import { transcriptListRows } from "@/stores/chats/transcript-list-rows";
 import { makeMessageAt } from "./chat-message-fixtures";
 
+const NO_PENDING_ROWS: ReadonlySet<string> = new Set();
+
 function user(id: string, createdAt: number): ChatMessageModel {
   return {
     ...makeMessageAt(0, "user", createdAt),
@@ -80,6 +82,7 @@ function a2aUser(id: string, createdAt: number): ChatMessageModel {
 
 function rowsOf(messages: ReadonlyArray<ChatMessageModel>) {
   return transcriptListRows({
+    pendingOwnedRowIds: NO_PENDING_ROWS,
     window: null,
     rendered: messages,
     splitLongTurns: true,

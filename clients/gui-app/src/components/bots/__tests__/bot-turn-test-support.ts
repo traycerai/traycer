@@ -412,6 +412,39 @@ export function scriptedSession(
   readonly handle: ChatSessionStoreHandle;
   readonly store: SessionStore;
 } {
+  return buildScriptedSession(chatId, messages, () => undefined);
+}
+
+/**
+ * {@link scriptedSession}, counting the stream clients the real store builds
+ * after it was created: each `retry()` closes the stream and builds a new one,
+ * which is the session subscribing again.
+ */
+export function countedScriptedSession(
+  chatId: string,
+  messages: ReadonlyArray<Message>,
+): {
+  readonly handle: ChatSessionStoreHandle;
+  readonly store: SessionStore;
+  /** The streams opened again since the session was created. */
+  readonly resubscribes: () => number;
+} {
+  let built = 0;
+  const session = buildScriptedSession(chatId, messages, () => {
+    built += 1;
+  });
+  const builtAtStart = built;
+  return { ...session, resubscribes: () => built - builtAtStart };
+}
+
+function buildScriptedSession(
+  chatId: string,
+  messages: ReadonlyArray<Message>,
+  onStreamClientBuilt: () => void,
+): {
+  readonly handle: ChatSessionStoreHandle;
+  readonly store: SessionStore;
+} {
   const handle = createChatSessionStore({
     environment: CHAT_STORE_TEST_ENVIRONMENT,
     hostId: HOST_ID,
@@ -422,14 +455,17 @@ export function scriptedSession(
     onProviderAuthError: null,
     wakeTransport: null,
     streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
-    streamClientFactory: () => ({
-      sendAction: () => undefined,
-      sameTurnSteeringProtocolSupported: () => true,
-      draftBlobBridgeSupported: () => true,
-      requestTranscriptRange: () => undefined,
-      requestResnapshot: () => undefined,
-      close: () => undefined,
-    }),
+    streamClientFactory: () => {
+      onStreamClientBuilt();
+      return {
+        sendAction: () => undefined,
+        sameTurnSteeringProtocolSupported: () => true,
+        draftBlobBridgeSupported: () => true,
+        requestTranscriptRange: () => undefined,
+        requestResnapshot: () => undefined,
+        close: () => undefined,
+      };
+    },
   });
   handle.store.setState({
     snapshotLoaded: true,

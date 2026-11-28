@@ -534,11 +534,13 @@ function mountChannel(input: {
           <TooltipProvider>
             <ChatExpansionTestProviders tileInstanceId="tile-1">
               <BotChannelView
+                replyMode="direct"
                 tiles={null}
                 botId={BOT_ID}
                 hostId={HOST_ID}
                 boundHostId={HOST_ID}
                 boundHostEpoch={1}
+                onBindingMoved={vi.fn()}
                 botTitle="Release Bot"
                 directive={null}
                 appConversationChatId={CHANNEL_ID}

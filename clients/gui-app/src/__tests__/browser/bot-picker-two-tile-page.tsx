@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { BotTabSurface } from "@/components/bots/bot-tab-surface";
+import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 import { FixtureApp } from "./bot-compact-actions-menu-frame";
 import { HOST_ID, useSelectedBotId } from "./bot-compact-actions-menu-host";
@@ -15,7 +16,7 @@ function TwoTileSurface() {
   useEffect(() => {
     useBotOpenThreadStore
       .getState()
-      .setRail(botId, { kind: "memory", back: null });
+      .setRail(botId, { kind: "memory", back: null }, currentBotLifetime());
   }, [botId]);
   return <BotTabSurface botId={botId} hostId={HOST_ID} />;
 }

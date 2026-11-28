@@ -314,3 +314,35 @@ export interface ChatBotThreadOpening {
 }
 
 export const ChatBotRepliesContext = createContext<ChatBotReplies | null>(null);
+
+/**
+ * A member's own message drawn as they sent it, before the host's row of it
+ * (Tracy Bots T249): `sending` until that row takes its place, `unconfirmed`
+ * once an attempt ended without saying whether the host has it.
+ */
+export interface ChatBotPendingSend {
+  readonly state: "sending" | "unconfirmed";
+  /** Sends it again exactly as it was; `null` while an attempt is out. */
+  readonly retry: (() => void) | null;
+}
+
+/**
+ * The message drawn as `messageId` while it is a pending send, else `null`.
+ * A bot's channel and thread lists provide it; a pending row offers nothing
+ * a stored row does until it is stored: no Reply, no thread, no Retry or Edit
+ * of a failed message.
+ */
+export const ChatBotPendingSendsContext = createContext<
+  ((messageId: string) => ChatBotPendingSend | null) | null
+>(null);
+
+const NO_PENDING_ROW_IDS: ReadonlySet<string> = new Set();
+
+/**
+ * The rows a bot's list draws from its member's own sends rather than from
+ * the host's rows (Tracy Bots T249), by row id. The list seats each at the
+ * ordinal the index names for it until the host's row of it arrives
+ * (`transcriptListRows`); every other list draws none.
+ */
+export const ChatBotPendingRowIdsContext =
+  createContext<ReadonlySet<string>>(NO_PENDING_ROW_IDS);

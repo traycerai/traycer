@@ -6,6 +6,7 @@ import {
   type NavigateOptions,
 } from "@tanstack/react-router";
 import { isTracyPath, readBotIdFromPath } from "@/lib/routes";
+import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
 import {
   railOfTracyPlace,
   tracyPlaceKey,
@@ -143,7 +144,7 @@ function applyTracyPlace(botId: string | null, place: TracyPlace): void {
   if (tracyPlaceRailKey(tracyPlaceRailOf(rail)) === tracyPlaceRailKey(place)) {
     return;
   }
-  rails.setRail(botId, railOfTracyPlace(place, rail));
+  rails.setRail(botId, railOfTracyPlace(place, rail), currentBotLifetime());
 }
 
 /**

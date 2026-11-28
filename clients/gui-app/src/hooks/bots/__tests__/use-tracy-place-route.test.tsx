@@ -46,6 +46,11 @@ import {
 } from "@/stores/bots/tracy-place-store";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
+import {
+  resetBotFailedRequestSupport,
+  signInViewer,
+} from "@/components/bots/__tests__/bot-failed-request-test-support";
 
 /**
  * The Tracy surface's place (view, Threads, a session, the rail's thread,
@@ -164,7 +169,9 @@ function establish(botId: string, surface: Surface): void {
     place.setView(botId, surface.view);
     place.setThreadsShown(surface.threadsShown);
     place.setSession(botId, surface.session);
-    useBotOpenThreadStore.getState().setRail(botId, surface.rail);
+    useBotOpenThreadStore
+      .getState()
+      .setRail(botId, surface.rail, currentBotLifetime());
   });
 }
 
@@ -305,7 +312,7 @@ const STEP_ROWS: ReadonlyArray<StepRow> = [
   {
     name: "opening a thread panel",
     start: NOTHING,
-    move: () => rails().setRail(BOT_A, T1),
+    move: () => rails().setRail(BOT_A, T1, currentBotLifetime()),
     moved: { ...NOTHING, rail: T1 },
     afterBack: NOTHING,
     restored: { ...NOTHING, rail: T1 },
@@ -313,7 +320,7 @@ const STEP_ROWS: ReadonlyArray<StepRow> = [
   {
     name: "switching to another thread",
     start: { ...NOTHING, rail: T1 },
-    move: () => rails().setRail(BOT_A, T2),
+    move: () => rails().setRail(BOT_A, T2, currentBotLifetime()),
     moved: { ...NOTHING, rail: T2 },
     afterBack: { ...NOTHING, rail: T1 },
     restored: { ...NOTHING, rail: T2 },
@@ -321,7 +328,7 @@ const STEP_ROWS: ReadonlyArray<StepRow> = [
   {
     name: "closing a thread panel",
     start: { ...NOTHING, rail: T1_ANSWER },
-    move: () => rails().setRail(BOT_A, null),
+    move: () => rails().setRail(BOT_A, null, currentBotLifetime()),
     moved: NOTHING,
     afterBack: { ...NOTHING, rail: T1_ANSWER },
     restored: NOTHING,
@@ -329,7 +336,12 @@ const STEP_ROWS: ReadonlyArray<StepRow> = [
   {
     name: "opening the memory over a thread",
     start: { ...NOTHING, rail: T1 },
-    move: () => rails().setRail(BOT_A, memoryRailOver(railOf(BOT_A))),
+    move: () =>
+      rails().setRail(
+        BOT_A,
+        memoryRailOver(railOf(BOT_A)),
+        currentBotLifetime(),
+      ),
     moved: { ...NOTHING, rail: MEMORY_OVER_T1 },
     afterBack: { ...NOTHING, rail: T1 },
     restored: { ...NOTHING, rail: MEMORY_OVER_T1 },
@@ -337,7 +349,7 @@ const STEP_ROWS: ReadonlyArray<StepRow> = [
   {
     name: "closing the memory back to its thread",
     start: { ...NOTHING, rail: MEMORY_OVER_T1 },
-    move: () => rails().setRail(BOT_A, T1),
+    move: () => rails().setRail(BOT_A, T1, currentBotLifetime()),
     moved: { ...NOTHING, rail: T1 },
     afterBack: { ...NOTHING, rail: MEMORY_OVER_T1 },
     restored: { ...NOTHING, rail: T1 },
@@ -346,7 +358,11 @@ const STEP_ROWS: ReadonlyArray<StepRow> = [
     name: "opening a pair's log over the thread",
     start: { ...NOTHING, rail: T1 },
     move: () =>
-      rails().setRail(BOT_A, exchangeRailOver(railOf(BOT_A), "bot-peer")),
+      rails().setRail(
+        BOT_A,
+        exchangeRailOver(railOf(BOT_A), "bot-peer"),
+        currentBotLifetime(),
+      ),
     moved: { ...NOTHING, rail: EXCHANGE_OVER_T1 },
     afterBack: { ...NOTHING, rail: T1 },
     restored: { ...NOTHING, rail: EXCHANGE_OVER_T1 },
@@ -355,7 +371,11 @@ const STEP_ROWS: ReadonlyArray<StepRow> = [
     name: "opening a pair's log over the memory over a thread",
     start: { ...NOTHING, rail: MEMORY_OVER_T1 },
     move: () =>
-      rails().setRail(BOT_A, exchangeRailOver(railOf(BOT_A), "bot-peer")),
+      rails().setRail(
+        BOT_A,
+        exchangeRailOver(railOf(BOT_A), "bot-peer"),
+        currentBotLifetime(),
+      ),
     moved: { ...NOTHING, rail: EXCHANGE_OVER_MEMORY },
     afterBack: { ...NOTHING, rail: MEMORY_OVER_T1 },
     restored: { ...NOTHING, rail: EXCHANGE_OVER_MEMORY },
@@ -363,7 +383,7 @@ const STEP_ROWS: ReadonlyArray<StepRow> = [
   {
     name: "closing a pair's log back to the memory",
     start: { ...NOTHING, rail: EXCHANGE_OVER_MEMORY },
-    move: () => rails().setRail(BOT_A, MEMORY_OVER_T1),
+    move: () => rails().setRail(BOT_A, MEMORY_OVER_T1, currentBotLifetime()),
     moved: { ...NOTHING, rail: MEMORY_OVER_T1 },
     afterBack: { ...NOTHING, rail: EXCHANGE_OVER_MEMORY },
     restored: { ...NOTHING, rail: MEMORY_OVER_T1 },
@@ -387,7 +407,7 @@ const STEP_ROWS: ReadonlyArray<StepRow> = [
   {
     name: "opening a thread from a search hit",
     start: { ...NOTHING, rail: SEARCH_OVER_T1 },
-    move: () => rails().setRail(BOT_A, SEARCH_HIT),
+    move: () => rails().setRail(BOT_A, SEARCH_HIT, currentBotLifetime()),
     moved: { ...NOTHING, rail: SEARCH_HIT },
     afterBack: { ...NOTHING, rail: T1 },
     restored: { ...NOTHING, rail: T2 },
@@ -475,6 +495,7 @@ describe("the Tracy surface's place on the route", () => {
       rails().setRail(
         BOT_A,
         threadRail("m-1", { announcement: true, anchorKind: "answer" }),
+        currentBotLifetime(),
       );
     });
     await waitFor(() => {
@@ -496,7 +517,13 @@ describe("the Tracy surface's place on the route", () => {
         writes.push(action.type);
       });
 
-      act(() => rails().setRail(BOT_A, searchRailOver(railOf(BOT_A))));
+      act(() =>
+        rails().setRail(
+          BOT_A,
+          searchRailOver(railOf(BOT_A)),
+          currentBotLifetime(),
+        ),
+      );
       // A later move of the person's is the barrier: the results' own move
       // had its turn before it, and left nothing.
       act(() => place().setView(BOT_A, "activity"));
@@ -878,8 +905,14 @@ describe("the Tracy surface's place on the route", () => {
       const index = harness.location().index;
 
       act(() => place().setView(BOT_A, "activity"));
-      act(() => rails().setRail(BOT_A, T1));
-      act(() => rails().setRail(BOT_A, memoryRailOver(railOf(BOT_A))));
+      act(() => rails().setRail(BOT_A, T1, currentBotLifetime()));
+      act(() =>
+        rails().setRail(
+          BOT_A,
+          memoryRailOver(railOf(BOT_A)),
+          currentBotLifetime(),
+        ),
+      );
       act(() => place().setSession(BOT_A, CHAT));
       act(() => place().setThreadsShown(true));
       await waitFor(() => {
@@ -953,5 +986,45 @@ describe("the Tracy surface's place on the route", () => {
       expect(isHistoryEntryDead(ENTRIES[1])).toBe(false);
       expect(isHistoryEntryEligible(ENTRIES[1], canvas)).toBe(true);
     });
+  });
+  describe("an account change", () => {
+    afterEach(() => {
+      resetBotFailedRequestSupport();
+    });
+
+    it.each([
+      { name: "to another account", cross: () => signInViewer("user-b") },
+      { name: "to signed out", cross: resetBotFailedRequestSupport },
+    ])(
+      "empties the rail over the entry that named it, so Back does not reopen the previous account's thread $name",
+      async ({ cross }) => {
+        signInViewer("user-a");
+        const harness = await mountOnChannel(BOT_A);
+        const opened: Surface = { ...NOTHING, rail: T1 };
+        establish(BOT_A, opened);
+        await waitForUrl(harness, `/bot/${BOT_A}`, placeOf(opened));
+        const length = harness.history.length;
+        const index = harness.location().index;
+
+        act(cross);
+        expect(surfaceOf(BOT_A)).toEqual(NOTHING);
+        await waitForUrl(harness, `/bot/${BOT_A}`, placeOf(NOTHING));
+
+        expect(
+          harness.history.length,
+          "the account change pushed a history entry",
+        ).toBe(length);
+        expect(harness.location().index).toBe(index);
+
+        stepBack(harness);
+        await waitFor(() => {
+          expect(harness.location().index).toBe(index - 1);
+        });
+        expect(
+          surfaceOf(BOT_A).rail,
+          "Back reopened the previous account's thread",
+        ).toBeNull();
+      },
+    );
   });
 });

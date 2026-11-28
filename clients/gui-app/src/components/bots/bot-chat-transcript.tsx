@@ -22,6 +22,7 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 import { botMutationKeys } from "@/lib/query-keys/bot-mutation-keys";
+import { conversationSendChatOf } from "@/hooks/bots/use-bot-mutations";
 import type { TranscriptRowLocator } from "@traycer/protocol/persistence/chat-transcript/locate-row";
 import {
   useChatLocateRowAnswer,
@@ -40,6 +41,13 @@ import { useBotSearchWordMarks } from "@/hooks/bots/use-bot-search-word-marks";
 import { useBotTurnLocateQuery } from "@/hooks/bots/use-bot-turn-locate-query";
 import { useBotFailedRecovery } from "@/components/bots/bot-failed-recovery";
 import type { BotTurnOpen } from "@/stores/bots/bot-open-thread-store";
+import {
+  consumeOwedResubscribe,
+  useHeldPendingSends,
+  type BotPendingSend,
+} from "@/stores/bots/bot-pending-sends-store";
+import { usePendingSendRows } from "@/hooks/bots/use-pending-send-rows";
+import type { BotSendBinding } from "@/lib/bots/bot-pending-send";
 import type { ChatMessage } from "@/stores/composer/chat-store";
 import {
   botMemberName,
@@ -57,9 +65,12 @@ import {
   type ChatMessageScrollRequest,
 } from "@/components/chat/chat-messages";
 import {
+  ChatBotPendingRowIdsContext,
+  ChatBotPendingSendsContext,
   ChatBotPresentationContext,
   ChatBotRepliesContext,
   type ChatBotFailedRequest,
+  type ChatBotPendingSend,
   type ChatBotPresentation,
   type ChatBotQuestionAnswers,
   type ChatBotReplies,
@@ -210,14 +221,6 @@ const newestSendByClient = new WeakMap<QueryClient, Map<string, number>>();
 const sendLedgerListeners = new Set<() => void>();
 const CONVERSATION_SEND_KEY = hashKey(botMutationKeys.conversationSend());
 
-function conversationIdOf(variables: unknown): string | null {
-  if (typeof variables !== "object" || variables === null) return null;
-  if (!("conversationId" in variables)) return null;
-  return typeof variables.conversationId === "string"
-    ? variables.conversationId
-    : null;
-}
-
 /** The ledger of `queryClient`, which listens to its mutation cache from its first read. */
 function sendLedgerOf(queryClient: QueryClient): Map<string, number> {
   const existing = newestSendByClient.get(queryClient);
@@ -231,7 +234,7 @@ function sendLedgerOf(queryClient: QueryClient): Map<string, number> {
     if (hashKey(mutation.options.mutationKey ?? []) !== CONVERSATION_SEND_KEY) {
       return;
     }
-    const chatId = conversationIdOf(mutation.state.variables);
+    const chatId = conversationSendChatOf(mutation.state.variables);
     if (chatId === null) return;
     if ((ledger.get(chatId) ?? -1) >= mutation.mutationId) return;
     ledger.set(chatId, mutation.mutationId);
@@ -308,6 +311,41 @@ function useResubscribeOnNextSend(input: {
 }
 
 /**
+ * Re-subscribes once for each uncertain attempt of a member's send drawn in
+ * this chat (T249) while the view waits on a chat the host had not created:
+ * that attempt may have been the write that creates it. The debt is the
+ * pending store's, taken in an effect (`consumeOwedResubscribe`), so neither
+ * a render, a remount nor another close of the same kind owes a second one.
+ * A view that has caught up is owed nothing; one still connecting keeps the
+ * debt for the first close after it.
+ */
+function useResubscribeOnUncertainSend(input: {
+  readonly held: ReadonlyArray<BotPendingSend>;
+  readonly waiting: boolean;
+  readonly caughtUp: boolean;
+  readonly retry: () => void;
+}): void {
+  const { held, waiting, caughtUp, retry } = input;
+  const owed = useMemo(
+    () =>
+      held.flatMap((send) =>
+        send.owedResubscribe === null
+          ? []
+          : [{ messageId: send.row.messageId, attempt: send.owedResubscribe }],
+      ),
+    [held],
+  );
+  useEffect(() => {
+    if (owed.length === 0 || (!waiting && !caughtUp)) return;
+    let taken = false;
+    for (const { messageId, attempt } of owed) {
+      if (consumeOwedResubscribe(messageId, attempt)) taken = true;
+    }
+    if (taken && waiting) retry();
+  }, [caughtUp, owed, retry, waiting]);
+}
+
+/**
  * A bot chat's transcript (Tracy Bots): the conversation a person has with
  * the bot, or the bot's own trunk, read through the chat session the tab host
  * serves. The container is the BOT - its id is the `epicId` every bot chat
@@ -365,6 +403,11 @@ export function BotChatTranscript(props: {
   readonly landOn: BotTranscriptLanding | null;
   /** The rows in the page's flow; `null` for a list of their own. */
   readonly flow: BotTranscriptFlow | null;
+  /**
+   * The bot's binding, under which the member's own sends drawn here are
+   * offered again; `null` where none is.
+   */
+  readonly sendBinding: BotSendBinding | null;
 }): ReactNode {
   const {
     botId,
@@ -424,6 +467,7 @@ export function BotChatTranscript(props: {
             header={header}
             landOn={props.landOn}
             flow={props.flow}
+            sendBinding={props.sendBinding}
           />
           {statusSlot?.(handle)}
         </TracyTranscriptOriginScope>
@@ -536,6 +580,78 @@ function useUnreadOrdinal(
   return { ordinal: current ? pending.ordinal : null, seek };
 }
 
+/**
+ * The channel's first screen while the host has not created its chat, as a
+ * created channel nobody has written in opens: the next post re-subscribes
+ * on its own, so nothing more is said. The member's own posts still on
+ * their way are drawn under it (T249), as rows of the page's flow that no
+ * read position, range or row action reads: the host holds none of them
+ * yet.
+ */
+function BotChannelNotHereYet(props: {
+  readonly history: ReactNode;
+  readonly intro: ChannelIntro;
+  readonly held: ReadonlyArray<BotPendingSend>;
+  readonly botId: string;
+  readonly instanceId: string;
+  readonly hostId: string;
+  readonly presentation: ChatBotPresentation | null;
+  readonly pendingSendOf:
+    | ((messageId: string) => ChatBotPendingSend | null)
+    | null;
+  readonly messages: ReadonlyArray<ChatMessage>;
+  readonly reportVisibleRange: (range: OrdinalRange | null) => void;
+}): ReactNode {
+  const {
+    history,
+    intro,
+    held,
+    botId,
+    instanceId,
+    hostId,
+    presentation,
+    pendingSendOf,
+    messages,
+    reportVisibleRange,
+  } = props;
+  const opening = <BotChannelOpening history={history} intro={intro} />;
+  return (
+    <div
+      data-testid="bot-channel-not-here-yet"
+      className={cn(
+        "flex min-h-0 flex-1 flex-col",
+        held.length > 0 && "overflow-y-auto",
+      )}
+    >
+      {held.length === 0 ? (
+        opening
+      ) : (
+        <ChatContainerContext.Provider value={botId}>
+          <ChatBotPresentationContext.Provider value={presentation}>
+            <ChatBotPendingSendsContext value={pendingSendOf}>
+              <TasklessMarkdownLinkProvider
+                tabId={instanceId}
+                tabHostId={hostId}
+              >
+                <BotTranscriptFlowRows
+                  header={opening}
+                  replies={null}
+                  messages={messages}
+                  transcriptWindow={null}
+                  reportVisibleRange={reportVisibleRange}
+                  fold={null}
+                  unreadVisit={0}
+                  readingEnabled={false}
+                />
+              </TasklessMarkdownLinkProvider>
+            </ChatBotPendingSendsContext>
+          </ChatBotPresentationContext.Provider>
+        </ChatContainerContext.Provider>
+      )}
+    </div>
+  );
+}
+
 function BotChatTranscriptBody(props: {
   readonly minimapEnabled: boolean;
   readonly handle: ChatSessionStoreHandle;
@@ -550,6 +666,7 @@ function BotChatTranscriptBody(props: {
   readonly header: ReactNode;
   readonly landOn: BotTranscriptLanding | null;
   readonly flow: BotTranscriptFlow | null;
+  readonly sendBinding: BotSendBinding | null;
 }): ReactNode {
   const {
     handle,
@@ -563,13 +680,16 @@ function BotChatTranscriptBody(props: {
     header,
     landOn,
     flow,
+    sendBinding,
   } = props;
-  const { state, messages } = useBotSessionMessages({
+  const held = useHeldPendingSends(botId, chatId);
+  const { state, messages, pendingRowIds } = useBotSessionMessages({
     handle,
     botId,
     chatId,
     viewTabId: instanceId,
     resolveMember,
+    held,
   });
   // A host that creates the channel chat only on its first post answers a
   // subscribe before it with CHAT_NOT_VISIBLE: the channel is empty, not
@@ -578,16 +698,24 @@ function BotChatTranscriptBody(props: {
     surface,
     state,
   );
+  const caughtUp = state.snapshotLoaded && state.fatalClose === null;
   useResubscribeOnNextSend({
     handle,
     chatId,
     waiting: openingChannel !== null,
-    caughtUp: state.snapshotLoaded && state.fatalClose === null,
+    caughtUp,
+    retry: state.retry,
+  });
+  useResubscribeOnUncertainSend({
+    held,
+    waiting: openingChannel !== null,
+    caughtUp,
     retry: state.retry,
   });
   const profile = useAuthStore((s) => s.profile);
   const readViewerId = useCloudChatViewerId();
   const tabClient = useTabHostClient();
+  const pendingSendOf = usePendingSendRows(botId, held, tabClient, sendBinding);
   const subagentDrillIn = useSubagentDrillIn(state.snapshotLoaded);
 
   // A landing names a MESSAGE id; the list lands by RENDERED ROW key, so the
@@ -859,6 +987,7 @@ function BotChatTranscriptBody(props: {
         window: transcriptWindow,
         rendered: messages,
         splitLongTurns: false,
+        pendingOwnedRowIds: pendingRowIds,
       }),
       repliesBase.opening?.messageId ?? null,
     );
@@ -874,6 +1003,7 @@ function BotChatTranscriptBody(props: {
     flow,
     jumpTo,
     messages,
+    pendingRowIds,
     repliesBase,
     transcriptWindow,
     writeJumpOutsideRender,
@@ -892,12 +1022,13 @@ function BotChatTranscriptBody(props: {
         window: transcriptWindow,
         rendered: messages,
         splitLongTurns: false,
+        pendingOwnedRowIds: pendingRowIds,
       }).filter(
         (row) =>
           row.kind === "placeholder" ||
           (row.model.role !== "system" && !rowPaintsNothing(row.model)),
       ),
-    [messages, transcriptWindow],
+    [messages, pendingRowIds, transcriptWindow],
   );
   const navigateUnread = useCallback(
     (landing: BotUnreadLanding): void => {
@@ -919,86 +1050,92 @@ function BotChatTranscriptBody(props: {
     [setSeekOrdinal, writeJumpOutsideRender],
   );
 
-  // The channel's first screen, as a created channel nobody has written in
-  // opens: the next post re-subscribes on its own, so nothing more is said.
   if (openingChannel !== null) {
     return (
-      <div
-        data-testid="bot-channel-not-here-yet"
-        className="flex min-h-0 flex-1 flex-col"
-      >
-        <BotChannelOpening
-          history={openingChannel.history}
-          intro={openingChannel.intro}
-        />
-      </div>
+      <BotChannelNotHereYet
+        history={openingChannel.history}
+        intro={openingChannel.intro}
+        held={held}
+        botId={botId}
+        instanceId={instanceId}
+        hostId={hostId}
+        presentation={presentation}
+        pendingSendOf={pendingSendOf}
+        messages={messages}
+        reportVisibleRange={state.reportVisibleTranscriptRange}
+      />
     );
   }
 
   return (
     <ChatContainerContext.Provider value={botId}>
       <ChatBotPresentationContext.Provider value={presentation}>
-        <ChatBotRepliesContext.Provider value={listReplies}>
-          <BotTranscriptReading
-            key={`${botId}:${chatId}:${readViewerId}`}
-            {...reading}
-            botId={botId}
-            conversationId={chatId}
-            hostId={hostId}
-            rows={readRows}
-            records={state.messages}
-            windowEpoch={state.transcriptWindow.epoch}
-            unread={flow === null ? undefined : flow.unread}
-            automaticBoundary={
-              flow === null && surface?.kind === "thread" && landOn === null
-            }
-            onNavigate={navigateUnread}
-          >
-            <BotTranscriptRows
-              ref={transcriptRef}
-              flow={flow}
-              readingEnabled={reading.enabled}
-              replies={repliesBase}
-              intro={intro}
-              header={listHeader}
-              instanceId={instanceId}
+        <ChatBotPendingSendsContext value={pendingSendOf}>
+          <ChatBotRepliesContext.Provider value={listReplies}>
+            <BotTranscriptReading
+              key={`${botId}:${chatId}:${readViewerId}`}
+              {...reading}
+              botId={botId}
+              conversationId={chatId}
               hostId={hostId}
-              messages={messages}
-              transcriptWindow={transcriptWindow}
-              reportVisibleRange={state.reportVisibleTranscriptRange}
-              list={
-                <ChatMessages
-                  minimapEnabled={props.minimapEnabled}
-                  taskTitle={title}
-                  taskId={chatId}
-                  epicId={botId}
-                  hostId={hostId}
-                  payerHostId={props.boundHostId}
-                  messages={messages}
-                  transcriptWindow={transcriptWindow}
-                  onVisibleOrdinalRangeChange={
-                    state.reportVisibleTranscriptRange
-                  }
-                  onFindReadOrdinalChange={state.requestFindReadOrdinal}
-                  baselineEpoch={state.transcriptBaselineEpoch}
-                  hydrationSequence={state.transcriptHydrationSequence}
-                  coldRewrittenMessageIds={state.coldRewrittenMessageIds}
-                  backgroundItems={state.backgroundItems}
-                  getMessageActions={getMessageActions}
-                  nextStepActions={null}
-                  instanceId={instanceId}
-                  visible
-                  systemOverlayActive={false}
-                  scrollRequest={scrollRequest}
-                  onScrollRequestSettled={onScrollRequestSettled}
-                  onReaderMoved={pendingJump === null ? null : dropPendingJump}
-                  composerOverlayHeight={0}
-                  subagentDrillIn={subagentDrillIn}
-                />
+              rows={readRows}
+              records={state.messages}
+              windowEpoch={state.transcriptWindow.epoch}
+              unread={flow === null ? undefined : flow.unread}
+              automaticBoundary={
+                flow === null && surface?.kind === "thread" && landOn === null
               }
-            />
-          </BotTranscriptReading>
-        </ChatBotRepliesContext.Provider>
+              onNavigate={navigateUnread}
+            >
+              <BotTranscriptRows
+                ref={transcriptRef}
+                flow={flow}
+                pendingRowIds={pendingRowIds}
+                readingEnabled={reading.enabled}
+                replies={repliesBase}
+                intro={intro}
+                header={listHeader}
+                instanceId={instanceId}
+                hostId={hostId}
+                messages={messages}
+                transcriptWindow={transcriptWindow}
+                reportVisibleRange={state.reportVisibleTranscriptRange}
+                list={
+                  <ChatMessages
+                    minimapEnabled={props.minimapEnabled}
+                    taskTitle={title}
+                    taskId={chatId}
+                    epicId={botId}
+                    hostId={hostId}
+                    payerHostId={props.boundHostId}
+                    messages={messages}
+                    transcriptWindow={transcriptWindow}
+                    onVisibleOrdinalRangeChange={
+                      state.reportVisibleTranscriptRange
+                    }
+                    onFindReadOrdinalChange={state.requestFindReadOrdinal}
+                    baselineEpoch={state.transcriptBaselineEpoch}
+                    hydrationSequence={state.transcriptHydrationSequence}
+                    coldRewrittenMessageIds={state.coldRewrittenMessageIds}
+                    backgroundItems={state.backgroundItems}
+                    getMessageActions={getMessageActions}
+                    nextStepActions={null}
+                    instanceId={instanceId}
+                    visible
+                    systemOverlayActive={false}
+                    scrollRequest={scrollRequest}
+                    onScrollRequestSettled={onScrollRequestSettled}
+                    onReaderMoved={
+                      pendingJump === null ? null : dropPendingJump
+                    }
+                    composerOverlayHeight={0}
+                    subagentDrillIn={subagentDrillIn}
+                  />
+                }
+              />
+            </BotTranscriptReading>
+          </ChatBotRepliesContext.Provider>
+        </ChatBotPendingSendsContext>
       </ChatBotPresentationContext.Provider>
     </ChatContainerContext.Provider>
   );
@@ -1023,6 +1160,8 @@ function BotTranscriptRows(props: {
   readonly transcriptWindow: TranscriptWindow | null;
   readonly reportVisibleRange: (range: OrdinalRange | null) => void;
   readonly list: ReactNode;
+  /** The rows drawn from the member's own sends, for either list to seat. */
+  readonly pendingRowIds: ReadonlySet<string>;
 }): ReactNode {
   const { ref, flow, intro, header, instanceId, hostId } = props;
   let rows: ReactNode;
@@ -1060,7 +1199,9 @@ function BotTranscriptRows(props: {
       data-testid="bot-chat-transcript"
       className={cn("flex flex-col", flow === null && "min-h-0 flex-1")}
     >
-      {rows}
+      <ChatBotPendingRowIdsContext value={props.pendingRowIds}>
+        {rows}
+      </ChatBotPendingRowIdsContext>
     </div>
   );
 }
@@ -1109,16 +1250,18 @@ function BotTranscriptFlowRows(props: {
 }): ReactNode {
   const { header, messages, transcriptWindow, reportVisibleRange, fold } =
     props;
+  const pendingRowIds = useContext(ChatBotPendingRowIdsContext);
   const rows = useMemo(
     () =>
       transcriptListRows({
         window: transcriptWindow,
         rendered: messages,
         splitLongTurns: false,
+        pendingOwnedRowIds: pendingRowIds,
       }).filter(
         (row) => row.kind === "placeholder" || !rowPaintsNothing(row.model),
       ),
-    [messages, transcriptWindow],
+    [messages, pendingRowIds, transcriptWindow],
   );
   const folded = fold !== null && rows.length > fold.maxRows;
   const shown = useMemo(

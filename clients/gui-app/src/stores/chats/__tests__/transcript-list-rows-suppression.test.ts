@@ -9,6 +9,8 @@ import type {
 import { transcriptListRows } from "@/stores/chats/transcript-list-rows";
 import { buildPinnedTodoRenderState } from "@/components/chat/chat-pinned-todos";
 
+const NO_PENDING_ROWS: ReadonlySet<string> = new Set();
+
 function model(id: string): ChatMessageModel {
   return {
     id,
@@ -148,6 +150,7 @@ describe("transcriptListRows renderer-policy suppression", () => {
     expect(rendered).toEqual([]);
 
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf(
         3,
@@ -165,6 +168,7 @@ describe("transcriptListRows renderer-policy suppression", () => {
 
   it("emits the hydrated row when the renderer includes its model", () => {
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf(
         3,
@@ -193,6 +197,7 @@ describe("transcriptListRows renderer-policy suppression", () => {
    */
   it("seats a live record at the ordinal the index has started naming", () => {
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       // Only ordinal 0 is spanned; the index names r-1 and r-2 but no range
       // has delivered either body yet. r-1 is one this client HOLDS, pushed as
@@ -229,6 +234,7 @@ describe("transcriptListRows renderer-policy suppression", () => {
    */
   it("leaves a projected row - one no live record backs - as a placeholder", () => {
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf(
         3,

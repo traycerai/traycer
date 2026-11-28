@@ -4,6 +4,7 @@ import {
   botConversationSendV14,
   botConversationSendV15,
   botConversationSendV16,
+  botConversationSendV17,
 } from "@traycer/protocol/host/bot/contracts";
 import {
   BOT_HOST_TAKES_ANSWER_SETS,
@@ -59,6 +60,15 @@ export const BOT_CONVERSATION_ANSWER_SET_VERSION =
  */
 export const BOT_CONVERSATION_REPLY_VERSION =
   botConversationSendV16.schemaVersion;
+
+/**
+ * The `bot.conversation.send` line that takes a send's nonce (`sendNonce`,
+ * T249), from which the app and the host derive the stored row's id: the
+ * app draws the row at Send only where the host takes it, and a send that
+ * carries one never goes to an older host, which would mint another id.
+ */
+export const BOT_CONVERSATION_NONCE_VERSION =
+  botConversationSendV17.schemaVersion;
 
 /** Whether a host that negotiated `negotiated` for `bot.conversation.send` takes a send that needs `required`. */
 export function botSendTakes(
