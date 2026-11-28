@@ -2358,6 +2358,9 @@ describe("RemoteSession host-leg resume", () => {
           const bearer = opensRead === 1 ? SIGN_IN_BEARER : HOST_ONLY_BEARER;
           return { bearer, authz: null, fingerprint: bearer };
         },
+        // The credential the next open presents.
+        currentFingerprint: () =>
+          opensRead === 0 ? SIGN_IN_BEARER : HOST_ONLY_BEARER,
         // The row stops allowing the sign-in after the first open is sealed.
         sealedStillWritable: () => {
           sendsAsked += 1;
@@ -2445,6 +2448,7 @@ describe("RemoteSession host-leg resume", () => {
               fingerprint: HOST_ONLY_BEARER,
             };
           },
+          currentFingerprint: () => HOST_ONLY_BEARER,
           readCredentialUpdateBearer: read,
           sealedStillWritable: (bearer) =>
             bearer !== SIGN_IN_BEARER || rowAllows(),

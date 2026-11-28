@@ -1,5 +1,5 @@
 /**
- * What a Tracy pane says about a file dropped or attached on it (T386). The
+ * What a Tracy pane says about a file dropped or attached on it. The
  * wording of each line is Tanveer's; tests assert these constants, not
  * copies of them.
  */

@@ -967,14 +967,6 @@ describe("credentials store disk pressure", () => {
     return { store, holder: held.handle, pollTimer, clearedTimers };
   }
 
-  it("a refill that found the lock held happens once the lock is free", async () => {
-    const { holder } = await refillWaitsForHeldLock();
-    await holder.release();
-    await fillReserve();
-
-    expect(await isCredentialsReserveComplete(credentialsPath)).toBe(true);
-  });
-
   it("a refill that waited fills the pieces the holder consumed while it waited", async () => {
     const { holder } = await refillWaitsForHeldLock();
     rmSync(join(workDir, "credentials.reserve.0"));

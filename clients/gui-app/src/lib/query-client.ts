@@ -182,7 +182,13 @@ function describeRequestError(error: unknown): AppLogFields {
 }
 
 function summarizeQueryKey(queryKey: QueryKey): AppLogValue {
-  return queryKey.slice(0, 4).map((part) => {
+  // Cost keys carry an account identity. Keep only the query family in logs.
+  const length =
+    queryKey[0] === "auth" &&
+    (queryKey[1] === "sandbox-costs" || queryKey[1] === "sandbox-cost")
+      ? 2
+      : 4;
+  return queryKey.slice(0, length).map((part) => {
     if (typeof part === "string") {
       return safeQueryKeyString(part);
     }

@@ -221,6 +221,7 @@ import {
   listChatRecordsResponseV13Schema,
   listChatRecordsResponseV14Schema,
   listChatRecordsResponseV15Schema,
+  listChatRecordsResponseV16Schema,
   getChatRunSettingsRequestSchema,
   getChatRunSettingsResponseSchema,
   getChatRunSettingsResponseSchemaV10,
@@ -2167,6 +2168,29 @@ export const epicListChatRecordsUpgradeV14ToV15 = defineUpgradePath<
   to: epicListChatRecordsV15.schemaVersion,
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
+});
+
+// `@1.6` carries the publication redirect revision on either answer arm:
+// redirect freshness is independent of whether the record rows changed.
+export const epicListChatRecordsV16 = defineRpcContract({
+  method: "epic.listChatRecords",
+  schemaVersion: { major: 1, minor: 6 } as const,
+  requestSchema: listChatRecordsRequestV13Schema,
+  responseSchema: listChatRecordsResponseV16Schema,
+});
+
+/** An older host carries no redirect revision; request shape is unchanged. */
+export const epicListChatRecordsUpgradeV15ToV16 = defineUpgradePath<
+  typeof epicListChatRecordsV15,
+  typeof epicListChatRecordsV16
+>({
+  from: epicListChatRecordsV15.schemaVersion,
+  to: epicListChatRecordsV16.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    publicationRedirectRevision: null,
+  }),
 });
 
 // Brings an evicted chat's records back onto its host before a message is

@@ -1,3 +1,4 @@
+import { sectionsOf } from "./strip-sections-fixture";
 /**
  * A folded Activity-view section draws the current task's row and a row that
  * is waiting in it for the pointer to leave the list, and nothing else. The
@@ -12,11 +13,7 @@ import type { TabStripController } from "@/components/layout/tabs/tab-strip-cont
 import { SideStripSections } from "../side-strip-sections";
 import type { SideStripHandlers } from "../side-strip-item-input";
 import type { HeaderTab } from "@/stores/tabs/types";
-import {
-  groupEntriesBySection,
-  type StripSection,
-  type StripSectionGroup,
-} from "../strip-sections";
+import { type StripSection, type StripSectionGroup } from "../strip-sections";
 import { StripSectionsContext } from "../strip-sections-context";
 import { StripSectionsScope } from "../strip-sections-scope";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
@@ -92,21 +89,6 @@ function controllerOf(activeItemId: string): TabStripController {
     onCloseGroup: vi.fn(),
     dialogs: null,
   };
-}
-
-function sectionsOf(
-  rows: ReadonlyArray<readonly [string, StripSection]>,
-): ReadonlyArray<StripSectionGroup> {
-  return groupEntriesBySection(
-    rows.map(([itemId, section], stripIndex) => ({
-      kind: "tabs",
-      itemId,
-      stripIndex,
-      section,
-      group: null,
-      members: [],
-    })),
-  );
 }
 
 function Strip(props: {

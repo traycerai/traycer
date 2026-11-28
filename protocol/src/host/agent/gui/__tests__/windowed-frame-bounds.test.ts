@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   ACCUMULATED_CHANGE_CHUNK_MAX_BYTES,
@@ -9,11 +9,22 @@ import {
   chunkByEncodedBytes,
   chunkRowSkeleton,
   indexChangeFits,
+  windowedSnapshotEncodedBytes,
   windowedSnapshotFitsFrame,
   type ChatAccumulatedFileChangeSummary,
   type ChatIndexChange,
 } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
+import {
+  RecordFingerprintMemo,
+  recordByteLength,
+} from "@traycer/protocol/persistence/chat-transcript/record-bytes";
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
+import {
+  openChatEventSchema,
+  openMessageSchema,
+  type OpenChatEvent,
+  type OpenMessage,
+} from "@traycer/protocol/persistence/epic/open-harness-records";
 import { utf8ByteLength } from "@traycer/protocol/utils/text/utf8";
 
 /**
@@ -312,7 +323,10 @@ describe("the bounded snapshot is actually bounded", () => {
   it("accepts a snapshot carrying only state-scaled aux fields", () => {
     expect(
       windowedSnapshotFitsFrame(
-        { accumulatedFileChangeCount: 5_000, rowCount: 40_000, tail: {} },
+        windowedSnapshotEncodedBytes(
+          { accumulatedFileChangeCount: 5_000, rowCount: 40_000, tail: {} },
+          null,
+        ),
         WINDOWED_SNAPSHOT_MAX_BYTES,
       ),
     ).toBe(true);
@@ -324,7 +338,10 @@ describe("the bounded snapshot is actually bounded", () => {
     // check rather than by a new one nobody remembers to add.
     expect(
       windowedSnapshotFitsFrame(
-        { somethingAddedLater: "x".repeat(WINDOWED_SNAPSHOT_MAX_BYTES) },
+        windowedSnapshotEncodedBytes(
+          { somethingAddedLater: "x".repeat(WINDOWED_SNAPSHOT_MAX_BYTES) },
+          null,
+        ),
         WINDOWED_SNAPSHOT_MAX_BYTES,
       ),
     ).toBe(false);
@@ -333,7 +350,10 @@ describe("the bounded snapshot is actually bounded", () => {
   it("clamps a caller asking for more than the frame budget", () => {
     expect(
       windowedSnapshotFitsFrame(
-        { padding: "x".repeat(WINDOWED_SNAPSHOT_MAX_BYTES) },
+        windowedSnapshotEncodedBytes(
+          { padding: "x".repeat(WINDOWED_SNAPSHOT_MAX_BYTES) },
+          null,
+        ),
         64 * 1024 * 1024,
       ),
     ).toBe(false);
@@ -359,7 +379,10 @@ describe("the bounded snapshot is actually bounded", () => {
       WINDOWED_SNAPSHOT_MAX_BYTES,
     );
     expect(
-      windowedSnapshotFitsFrame(insideTheReserve, WINDOWED_SNAPSHOT_MAX_BYTES),
+      windowedSnapshotFitsFrame(
+        windowedSnapshotEncodedBytes(insideTheReserve, null),
+        WINDOWED_SNAPSHOT_MAX_BYTES,
+      ),
     ).toBe(false);
   });
 
@@ -372,8 +395,282 @@ describe("the bounded snapshot is actually bounded", () => {
           WINDOWED_SNAPSHOT_FRAME_OVERHEAD_BYTES * 2,
       ),
     };
-    expect(windowedSnapshotFitsFrame(clear, WINDOWED_SNAPSHOT_MAX_BYTES)).toBe(
-      true,
+    expect(
+      windowedSnapshotFitsFrame(
+        windowedSnapshotEncodedBytes(clear, null),
+        WINDOWED_SNAPSHOT_MAX_BYTES,
+      ),
+    ).toBe(true);
+  });
+});
+
+/**
+ * `windowedSnapshotEncodedBytes` with `tailRecords` replaces a whole-snapshot
+ * stringify with one over the snapshot minus its records, plus each record's
+ * memoised size. These pin that the substitution is EXACT - the ceiling it
+ * feeds is a hard one - and that it really does not encode a record again.
+ */
+describe("windowedSnapshotEncodedBytes with the tail's record sizes", () => {
+  function userMessage(messageId: string, text: string): OpenMessage {
+    return openMessageSchema.parse({
+      role: "user",
+      messageId,
+      sender: { type: "user", userId: "u-1" },
+      message: { kind: "user", content: { type: "text", text } },
+      timestamp: 1_000,
+      sessionAnchor: null,
+    });
+  }
+
+  function assistantMessage(messageId: string, text: string): OpenMessage {
+    return openMessageSchema.parse({
+      role: "assistant",
+      messageId,
+      sender: {
+        type: "agent",
+        harnessId: "claude",
+        agentId: "agent-1",
+        displayName: null,
+        reply: { expectsReply: false },
+        inReplyTo: null,
+      },
+      blocks: [
+        {
+          blockId: `b-${messageId}`,
+          status: "completed",
+          timestamp: 1_001,
+          type: "text",
+          text,
+          providerNotice: null,
+        },
+      ],
+      startedAt: null,
+      timestamp: 1_001,
+      turnId: null,
+      usage: null,
+      reasoningEffort: null,
+      serviceTier: null,
+      imageResolutions: [],
+    });
+  }
+
+  function chatEvent(eventId: string, message: string): OpenChatEvent {
+    return openChatEventSchema.parse({
+      eventId,
+      type: "turn.started",
+      timestamp: 1_002,
+      clientActionId: null,
+      actor: null,
+      message,
+      turnId: null,
+      messageId: null,
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "info",
+      metadata: null,
+    });
+  }
+
+  interface Records {
+    readonly messages: OpenMessage[];
+    readonly events: OpenChatEvent[];
+  }
+
+  /** `count` messages (alternating roles) and `count` events carrying `text`. */
+  function recordsCarrying(text: string, count: number): Records {
+    return {
+      messages: Array.from({ length: count }, (unused, index) =>
+        index % 2 === 0
+          ? userMessage(`m-${index}`, `${text} ${index}`)
+          : assistantMessage(`m-${index}`, `${text} ${index}`),
+      ),
+      events: Array.from({ length: count }, (unused, index) =>
+        chatEvent(`e-${index}`, `${text} ${index}`),
+      ),
+    };
+  }
+
+  /** The snapshot, with the tail's arrays being the very arrays in `records`. */
+  function snapshotOf(records: Records, padding: string) {
+    return {
+      rowCount: 40_000,
+      accumulatedFileChangeCount: 5_000,
+      padding,
+      tail: {
+        epoch: 3,
+        fromOrdinal: 10,
+        messages: records.messages,
+        events: records.events,
+        hasMore: true,
+      },
+      queue: [{ text: "é中😀" }],
+    };
+  }
+
+  const TEXTS = [
+    ["ASCII", "plain ascii text"],
+    ["multi-byte", "caf\u00e9 \u4e2d\u6587 \u00e9\u00e9"],
+    ["astral", "\u{1F600} \u{1F680} done \u{1F600}"],
+    [
+      "escape-heavy",
+      'she said "hi" \\ C:\\dir\\file\nline\ttab \u0001\u001f end \uD800',
+    ],
+  ] as const;
+
+  const SHAPES = [
+    ["empty arrays", 0],
+    ["one record per array", 1],
+    ["many records per array", 40],
+  ] as const;
+
+  describe.each(TEXTS)("%s text", (unusedName, text) => {
+    describe.each(SHAPES)("%s", (unusedShape, count) => {
+      it("matches the bytes of the whole snapshot with recordByteLength", () => {
+        const records = recordsCarrying(text, count);
+        const snapshot = snapshotOf(records, "pad");
+
+        expect(
+          windowedSnapshotEncodedBytes(snapshot, {
+            messages: records.messages,
+            events: records.events,
+            recordBytes: recordByteLength,
+          }),
+        ).toBe(utf8ByteLength(JSON.stringify(snapshot)));
+      });
+
+      it("matches the bytes of the whole snapshot with a fingerprint memo", () => {
+        const records = recordsCarrying(text, count);
+        const snapshot = snapshotOf(records, "pad");
+        const memo = new RecordFingerprintMemo();
+
+        expect(
+          windowedSnapshotEncodedBytes(snapshot, {
+            messages: records.messages,
+            events: records.events,
+            recordBytes: (record) => memo.lookup(record).byteLength,
+          }),
+        ).toBe(utf8ByteLength(JSON.stringify(snapshot)));
+      });
+    });
+  });
+
+  it("matches the whole snapshot when only one of the two arrays is empty", () => {
+    const full = recordsCarrying("only messages \u00e9", 5);
+    const messagesOnly = { messages: full.messages, events: [] };
+    const eventsOnly = { messages: [], events: full.events };
+
+    for (const records of [messagesOnly, eventsOnly]) {
+      const snapshot = snapshotOf(records, "pad");
+      expect(
+        windowedSnapshotEncodedBytes(snapshot, {
+          ...records,
+          recordBytes: recordByteLength,
+        }),
+      ).toBe(utf8ByteLength(JSON.stringify(snapshot)));
+    }
+  });
+
+  describe("at the edge of the frame bound", () => {
+    const LIMIT = WINDOWED_SNAPSHOT_MAX_BYTES;
+
+    /**
+     * A snapshot whose exact encoded size plus the frame overhead is
+     * `target`. Its padding is ASCII, so each character is one byte.
+     */
+    function snapshotWithOverheadTotalling(records: Records, target: number) {
+      const baseline = utf8ByteLength(JSON.stringify(snapshotOf(records, "")));
+      const snapshot = snapshotOf(
+        records,
+        "x".repeat(target - WINDOWED_SNAPSHOT_FRAME_OVERHEAD_BYTES - baseline),
+      );
+      expect(
+        utf8ByteLength(JSON.stringify(snapshot)) +
+          WINDOWED_SNAPSHOT_FRAME_OVERHEAD_BYTES,
+      ).toBe(target);
+      return snapshot;
+    }
+
+    it.each([
+      ["one byte under the limit fits", LIMIT - 1, true],
+      ["exactly at the limit does not fit", LIMIT, false],
+    ])(
+      "%s, by the record sizes and by the whole measure alike",
+      (unused, target, fits) => {
+        const records = recordsCarrying(
+          'multi-byte \u00e9\u4e2d\u{1F600} "q"\n',
+          300,
+        );
+        const snapshot = snapshotWithOverheadTotalling(records, target);
+        const memo = new RecordFingerprintMemo();
+
+        const byRecords = windowedSnapshotEncodedBytes(snapshot, {
+          messages: records.messages,
+          events: records.events,
+          recordBytes: (record) => memo.lookup(record).byteLength,
+        });
+        const whole = windowedSnapshotEncodedBytes(snapshot, null);
+
+        expect(byRecords).toBe(whole);
+        expect(windowedSnapshotFitsFrame(byRecords, LIMIT)).toBe(fits);
+        expect(windowedSnapshotFitsFrame(whole, LIMIT)).toBe(fits);
+      },
     );
+  });
+
+  it("measures whole, exactly, when the named arrays are copies of the snapshot's own", () => {
+    const records = recordsCarrying('copy \u00e9 \u{1F600} "', 6);
+    const copiedMessages = { ...snapshotOf(records, "pad") };
+    copiedMessages.tail = {
+      ...copiedMessages.tail,
+      messages: [...records.messages],
+    };
+    const copiedEvents = { ...snapshotOf(records, "pad") };
+    copiedEvents.tail = { ...copiedEvents.tail, events: [...records.events] };
+
+    for (const snapshot of [copiedMessages, copiedEvents]) {
+      const recordBytes = vi.fn(recordByteLength);
+
+      expect(
+        windowedSnapshotEncodedBytes(snapshot, {
+          messages: records.messages,
+          events: records.events,
+          recordBytes,
+        }),
+      ).toBe(utf8ByteLength(JSON.stringify(snapshot)));
+      expect(recordBytes).not.toHaveBeenCalled();
+    }
+  });
+
+  it("stringifies once, and never a record or a snapshot still carrying its tail", () => {
+    const records = recordsCarrying('stringify \u00e9 \u{1F600} "q"', 20);
+    const snapshot = snapshotOf(records, "pad");
+    const memo = new RecordFingerprintMemo();
+    // Warmed before the spy: a memo miss encodes the record, which is the
+    // producer's one encoding and not this function's.
+    for (const record of [...records.messages, ...records.events]) {
+      memo.lookup(record);
+    }
+    const stringify = vi.spyOn(JSON, "stringify");
+    let measured: number;
+    let stringified: unknown[];
+    try {
+      measured = windowedSnapshotEncodedBytes(snapshot, {
+        messages: records.messages,
+        events: records.events,
+        recordBytes: (record) => memo.lookup(record).byteLength,
+      });
+      stringified = stringify.mock.calls.map((call) => call[0]);
+    } finally {
+      stringify.mockRestore();
+    }
+
+    expect(stringified).toHaveLength(1);
+    const argument: unknown = stringified[0];
+    expect(argument).not.toBe(snapshot);
+    expect(records.messages).not.toContain(argument);
+    expect(records.events).not.toContain(argument);
+    expect(argument).toMatchObject({ tail: { messages: [], events: [] } });
+    expect(measured).toBe(utf8ByteLength(JSON.stringify(snapshot)));
   });
 });

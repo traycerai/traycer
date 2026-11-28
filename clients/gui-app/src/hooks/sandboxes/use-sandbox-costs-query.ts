@@ -4,15 +4,15 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 import type { UserSandboxCost } from "@traycer/protocol/host/sandbox-control";
-import type { AuthService } from "@/lib/auth/auth-service";
+import {
+  SupersededAuthEraError,
+  type AuthService,
+} from "@/lib/auth/auth-service";
 import { useHostBinding } from "@/lib/host";
 import { sandboxQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { sandboxFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
+import { SANDBOX_COST_REFRESH_MS } from "@/hooks/sandboxes/refresh-sandbox-cost-queries";
 import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
-
-/** How often the balance and the cost view refresh while something accrues. */
-const ACCRUING_REFRESH_MS = 60_000;
 
 /**
  * What the user's sandboxes accrue now, all rows together: compute while
@@ -44,10 +44,38 @@ export function sandboxCostsRefetchInterval(
   costs: UserSandboxCost | null,
   failed: boolean,
 ): number | false {
-  if (failed) return ACCRUING_REFRESH_MS;
+  if (failed) return SANDBOX_COST_REFRESH_MS;
   return costs !== null && accruingMillicreditsPerHour(costs) > 0
-    ? ACCRUING_REFRESH_MS
+    ? SANDBOX_COST_REFRESH_MS
     : false;
+}
+
+class SandboxCostsReadError extends Error {
+  constructor(readonly retryAtMs: number | undefined) {
+    super("Sandbox cost list read failed");
+  }
+}
+
+function isCurrentCostAccount(userId: string | null): boolean {
+  const session = useAuthStore.getState();
+  return (
+    session.status === "signed-in" &&
+    (session.contextMetadata?.userId ?? null) === userId
+  );
+}
+
+async function readSandboxCosts(
+  auth: AuthService,
+  userId: string | null,
+): Promise<UserSandboxCost> {
+  if (!isCurrentCostAccount(userId)) throw new SupersededAuthEraError();
+  const result = await auth.getSandboxCosts().catch(() => {
+    throw new SandboxCostsReadError(undefined);
+  });
+  if (!isCurrentCostAccount(userId)) throw new SupersededAuthEraError();
+  if (result.kind === "ok") return result.costs;
+  // An error must never read as zero burn and hide a runway warning.
+  throw new SandboxCostsReadError(result.retryAtMs);
 }
 
 function sandboxCostsQueryOptions(
@@ -64,27 +92,31 @@ function sandboxCostsQueryOptions(
   }
   return queryOptions<UserSandboxCost | null>({
     queryKey: sandboxQueryKeys.costs(auth, userId),
-    queryFn: async () => {
-      const result = await auth.getSandboxCosts();
-      if (result.kind === "ok") {
-        return result.costs;
-      }
-      // Thrown, never a zero burn: a burn of 0 reads as "nothing is running",
-      // which would hide the balance warnings exactly when they matter.
-      throw new Error(sandboxFailureMessage(result));
-    },
+    queryFn: () => readSandboxCosts(auth, userId),
     enabled,
+    retry: false,
+    retryOnMount: false,
     // On focus, on the events `useRefreshSandboxCosts` invalidates on, and
     // every minute while its own answer says a sandbox accrues (the balance
     // it is divided into polls on the same rule there).
     refetchOnWindowFocus: true,
     // A disabled query (no control plane) never polls, so an error here is
     // always one with the control plane available.
-    refetchInterval: (query) =>
-      sandboxCostsRefetchInterval(
+    refetchInterval: (query) => {
+      if (query.state.fetchStatus !== "idle") return false;
+      const error = query.state.error;
+      // The shared HTTP boundary owns this instant, even across windows.
+      if (
+        error instanceof SandboxCostsReadError &&
+        error.retryAtMs !== undefined
+      ) {
+        return Math.max(1, error.retryAtMs - Date.now());
+      }
+      return sandboxCostsRefetchInterval(
         query.state.data ?? null,
         query.state.status === "error",
-      ),
+      );
+    },
     refetchIntervalInBackground: false,
   });
 }

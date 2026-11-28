@@ -59,6 +59,7 @@ import type {
   fetchSandboxCatalogueViaHttp,
   fetchTraycerModelsViaHttp,
   fetchSandboxCostsViaHttp,
+  fetchSandboxCostViaHttp,
   getSandboxAutomationViaHttp,
   keepSandboxViaHttp,
   listSandboxesViaHttp,
@@ -135,13 +136,16 @@ vi.mock("../../auth/iap-proxy-token", () => ({
   createCachedIapTokenProvider: () => async () => IAP_PROXY_TOKEN,
   resolveIapKeyFilePath: () => null,
 }));
-/** The seven control-plane calls with no scripted behaviour of their own, observed. */
+/** The control-plane calls with no scripted behaviour of their own, observed. */
 const NETWORK_ERROR = { kind: "network-error", detail: "unscripted" } as const;
 const listSandboxesViaHttpMock = vi.hoisted(() =>
   vi.fn<typeof listSandboxesViaHttp>(async () => NETWORK_ERROR),
 );
 const fetchSandboxCostsViaHttpMock = vi.hoisted(() =>
   vi.fn<typeof fetchSandboxCostsViaHttp>(async () => NETWORK_ERROR),
+);
+const fetchSandboxCostViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof fetchSandboxCostViaHttp>(async () => NETWORK_ERROR),
 );
 const fetchSandboxCatalogueViaHttpMock = vi.hoisted(() =>
   vi.fn<typeof fetchSandboxCatalogueViaHttp>(async () => NETWORK_ERROR),
@@ -258,6 +262,7 @@ vi.mock(
     >()),
     listSandboxesViaHttp: listSandboxesViaHttpMock,
     fetchSandboxCostsViaHttp: fetchSandboxCostsViaHttpMock,
+    fetchSandboxCostViaHttp: fetchSandboxCostViaHttpMock,
     fetchSandboxCatalogueViaHttp: fetchSandboxCatalogueViaHttpMock,
     fetchTraycerModelsViaHttp: fetchTraycerModelsViaHttpMock,
     createSandboxViaHttp: createSandboxViaHttpMock,
@@ -948,6 +953,7 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.saveAutoPolicy,
           RunnerHostInvoke.attachTaskEnvironment,
           RunnerHostInvoke.getSandboxCosts,
+          RunnerHostInvoke.getSandboxCost,
           RunnerHostInvoke.getSandboxCatalogue,
           RunnerHostInvoke.getTraycerModels,
           RunnerHostInvoke.getTeamChatAutoArchive,
@@ -1522,6 +1528,26 @@ describe("RunnerIpcBridge", () => {
       window: buildWindow(),
     });
     bridge.install();
+    const readCosts = ipcMainState.handlers.get(
+      RunnerHostInvoke.getSandboxCosts,
+    );
+    if (readCosts === undefined) throw new Error("cost handler missing");
+    await expect(readCosts(bareEvent(), "bearer-1")).resolves.toEqual({
+      kind: "unauthorized",
+    });
+    expect(fetchSandboxCostsViaHttpMock).not.toHaveBeenCalled();
+    bridge.authSession.setVerified(
+      {
+        status: "signed-in",
+        token: "bearer-1",
+        profile: {
+          userId: "account-a",
+          userName: "test",
+          email: "test@example.invalid",
+        },
+      },
+      bridge.authSession.beginSet(),
+    );
     const createRequest = {
       os: "linux",
       cpus: 2,
@@ -1546,6 +1572,7 @@ describe("RunnerIpcBridge", () => {
     const calls: ReadonlyArray<readonly [string, Mock, readonly unknown[]]> = [
       [RunnerHostInvoke.listSandboxes, listSandboxesViaHttpMock, []],
       [RunnerHostInvoke.getSandboxCosts, fetchSandboxCostsViaHttpMock, []],
+      [RunnerHostInvoke.getSandboxCost, fetchSandboxCostViaHttpMock, ["sbx_1"]],
       [
         RunnerHostInvoke.getSandboxCatalogue,
         fetchSandboxCatalogueViaHttpMock,

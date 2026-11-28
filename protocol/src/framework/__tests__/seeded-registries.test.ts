@@ -9,6 +9,8 @@ import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import {
   chatHeadRecordV1150,
   chatShardRecordV1150,
+  draftComposerHeadRecordV110,
+  draftHeadRecordV100,
   type Epic,
   persistenceRecordRegistry,
 } from "@traycer/protocol/persistence/registry";
@@ -175,6 +177,7 @@ describe("seeded protocol registries", () => {
     expect(Object.keys(persistenceRecordRegistry).sort()).toEqual([
       "chat-head",
       "chat-shard",
+      "draft-composer-head",
       "draft-head",
       "epic",
       "room-metadata",
@@ -196,6 +199,32 @@ describe("seeded protocol registries", () => {
     expect(Object.keys(persistenceRecordRegistry["draft-head"]).sort()).toEqual(
       ["1"],
     );
+    expect(
+      Object.keys(persistenceRecordRegistry["draft-composer-head"]).sort(),
+    ).toEqual(["1"]);
+    expect(
+      Object.keys(
+        persistenceRecordRegistry["draft-composer-head"][1].versions,
+      ).sort(),
+    ).toEqual(["1"]);
+  });
+
+  it("keeps the legacy draft head at 1.0 and resolves the composer head at 1.1", () => {
+    expect(draftHeadRecordV100.schemaVersion).toEqual({ major: 1, minor: 0 });
+    expect(draftComposerHeadRecordV110.schemaVersion).toEqual({
+      major: 1,
+      minor: 1,
+    });
+    expect(
+      getRecordSchema(persistenceRecordRegistry, "draft-head", "latest"),
+    ).toBe(draftHeadRecordV100.schema);
+    expect(
+      getRecordSchema(
+        persistenceRecordRegistry,
+        "draft-composer-head",
+        "latest",
+      ),
+    ).toBe(draftComposerHeadRecordV110.schema);
   });
 
   it("registers both chat-sync records on one version line", () => {

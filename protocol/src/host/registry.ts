@@ -658,8 +658,12 @@ import {
   configShellSetUpgradeV10ToV11,
   configShellSetV12,
   configShellSetUpgradeV11ToV12,
+  configWorktreesGetUpgradeV10ToV11,
   configWorktreesGetV10,
+  configWorktreesGetV11,
+  configWorktreesSetUpgradeV10ToV11,
   configWorktreesSetV10,
+  configWorktreesSetV11,
   configVisualizationGetV10,
   configVisualizationSetV10,
   configSessionNamesGetV10,
@@ -973,12 +977,14 @@ import {
   epicListChatRecordsUpgradeV12ToV13,
   epicListChatRecordsUpgradeV13ToV14,
   epicListChatRecordsUpgradeV14ToV15,
+  epicListChatRecordsUpgradeV15ToV16,
   epicListChatRecordsV10,
   epicListChatRecordsV11,
   epicListChatRecordsV12,
   epicListChatRecordsV13,
   epicListChatRecordsV14,
   epicListChatRecordsV15,
+  epicListChatRecordsV16,
   epicGetChatRunSettingsDowngradeV20ToV10,
   epicGetChatRunSettingsDowngradeV30ToV10,
   epicGetChatRunSettingsDowngradeV30ToV20,
@@ -7589,11 +7595,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "config.worktrees.get": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: configWorktreesGetV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: configWorktreesGetV11,
+          upgradeFromPreviousVersion: configWorktreesGetUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -7602,11 +7612,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "config.worktrees.set": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: configWorktreesSetV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: configWorktreesSetV11,
+          upgradeFromPreviousVersion: configWorktreesSetUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -11241,9 +11255,11 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   // rows upgrade with `false`, which is what every older host's chats are.
   // @1.5 says on each row who started the chat (`starterUserId`), an optional
   // added key; a @1.4 peer's rows upgrade unchanged.
+  // @1.6 carries the session host's publication redirect revision on both
+  // answer arms; a @1.5 peer's answers upgrade with `null`.
   "epic.listChatRecords": {
     1: {
-      latestMinor: 5,
+      latestMinor: 6,
       versions: {
         0: {
           contract: epicListChatRecordsV10,
@@ -11323,6 +11339,11 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
           contract: epicListChatRecordsV15,
           upgradeFromPreviousVersion: epicListChatRecordsUpgradeV14ToV15,
           // No `responseGrowthProjectionGated`: zod strips the optional `starterUserId` for a 1.4 peer.
+        },
+        6: {
+          contract: epicListChatRecordsV16,
+          upgradeFromPreviousVersion: epicListChatRecordsUpgradeV15ToV16,
+          // Both existing arms gain a key that older schemas strip.
         },
       },
       downgradePathsFromLatest: {},

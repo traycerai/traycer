@@ -1,6 +1,6 @@
 /**
- * A legacy stash entry's conversion while the image roots cannot be read
- * (Tracy Bots T186): its images go through the importer, whose reservation
+ * A legacy stash entry's conversion while the image roots cannot be read:
+ * its images go through the importer, whose reservation
  * needs the roots. It rejects, so its caller leaves the source where it is;
  * nothing is installed or written, and no reservation is left.
  */

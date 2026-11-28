@@ -1,3 +1,4 @@
+import { withDraftTestRequestMethods } from "@/lib/drafts/__tests__/draft-test-request-methods";
 /**
  * `stash-entry` documents a host still lists (the kind stays on the
  * wire) convert into a closed start-page draft exactly once, reserve the
@@ -122,7 +123,7 @@ describe("stash-entry conversion", () => {
     const deletes: string[] = [];
     acquireDraftMirrorSession({
       hostId: HOST_ID,
-      client: {
+      client: withDraftTestRequestMethods({
         request: (method: string, params: unknown) => {
           if (method === "drafts.list") {
             return Promise.resolve({
@@ -138,7 +139,7 @@ describe("stash-entry conversion", () => {
           }
           return Promise.reject(new Error(`unexpected ${String(method)}`));
         },
-      } as never,
+      }) as never,
       streamClient: fakeDraftStreamClient(),
       timing: undefined,
     });
@@ -181,7 +182,7 @@ describe("stash-entry conversion", () => {
     let switchOnNextRead = true;
     acquireDraftMirrorSession({
       hostId: HOST_ID,
-      client: {
+      client: withDraftTestRequestMethods({
         request: (method: string, params: unknown) => {
           if (method === "drafts.list") {
             return Promise.resolve({
@@ -206,7 +207,7 @@ describe("stash-entry conversion", () => {
           }
           return Promise.reject(new Error(`unexpected ${String(method)}`));
         },
-      } as never,
+      }) as never,
       streamClient: fakeDraftStreamClient(),
       timing: undefined,
     });

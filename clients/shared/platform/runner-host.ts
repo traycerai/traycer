@@ -53,6 +53,7 @@ import type {
   SandboxCatalogueFetchResult,
   TraycerModelsFetchResult,
   SandboxCostsFetchResult,
+  SandboxCostFetchResult,
   SandboxCreateFetchResult,
   SandboxListFetchResult,
   SandboxLifecycleVerbFetchResult,
@@ -539,6 +540,10 @@ export interface IRunnerHost {
     request: TaskEnvironmentAttachmentRequest,
   ): Promise<TaskEnvironmentAttachmentResult>;
   getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult>;
+  getSandboxCost(
+    bearerToken: string,
+    sandboxId: string,
+  ): Promise<SandboxCostFetchResult>;
   getSandboxCatalogue(
     bearerToken: string,
     context: SandboxCatalogueReadinessRequest | null,

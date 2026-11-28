@@ -1166,7 +1166,7 @@ describe("a full budget does not delete an image the draft already holds", () =>
   });
 });
 
-describe("the budget's admission while the image roots cannot be read (Tracy Bots T186)", () => {
+describe("the budget's admission while the image roots cannot be read", () => {
   beforeEach(() => {
     const passthrough = landingImageStoreMocks.actualPutImage;
     if (passthrough !== null) {

@@ -1,5 +1,5 @@
 /**
- * The Tracy surface and the signed-in account (T186), for what the tree shows
+ * The Tracy surface and the signed-in account, for what the tree shows
  * at the commit an identity change lands in and for the account's stored
  * drafts. The tree, the host client and the per-case lifecycle are in
  * `bot-tab-surface-identity-harness.tsx`.
@@ -345,7 +345,7 @@ describe("<BotTabSurface /> what the tree shows at the commit an identity change
   });
 });
 
-describe("<BotTabSurface /> the account's stored drafts and the bot tab (T186)", () => {
+describe("<BotTabSurface /> the account's stored drafts and the bot tab", () => {
   /** A's stored draft of the channel box. */
   function storedChannelDraft(
     text: string,

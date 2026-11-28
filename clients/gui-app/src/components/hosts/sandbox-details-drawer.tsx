@@ -24,6 +24,7 @@ import {
   useSandboxConfigurations,
   useSandboxWakeString,
 } from "@/hooks/sandboxes/use-sandbox-configurations";
+import { useSandboxCost } from "@/hooks/sandboxes/use-sandbox-cost-query";
 import { useSandboxCosts } from "@/hooks/sandboxes/use-sandbox-costs-query";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
 import {
@@ -172,7 +173,14 @@ function SandboxDetailsSections(props: {
 }): ReactNode {
   const { summary } = props;
   const operation = useSandboxOperation(summary.id);
-  const costs = useSandboxCosts();
+  const listCost =
+    useSandboxCosts().data?.sandboxes.find(
+      (cost) => cost.sandboxId === summary.id,
+    ) ?? null;
+  const detailCost = useSandboxCost(
+    summary,
+    (listCost?.currentRateMillicreditsPerHour ?? 0) > 0,
+  );
   const wake = useSandboxWakeString(summary);
   const viewerUserId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
   const configurations = useSandboxConfigurations();
@@ -181,9 +189,7 @@ function SandboxDetailsSections(props: {
   const now = useSampledNow();
   const entry = sandboxDetailsEntry({
     summary,
-    cost:
-      costs.data?.sandboxes.find((cost) => cost.sandboxId === summary.id) ??
-      null,
+    cost: detailCost.data ?? listCost,
     wakeString: wake,
     viewerUserId,
     // Personal only once every team answered: a team row from a server
